@@ -155,12 +155,22 @@ const INIT_SQL = `
     last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
+  CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
   CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
   CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
   CREATE INDEX IF NOT EXISTS idx_extractions_user_id ON extractions(user_id);
   CREATE INDEX IF NOT EXISTS idx_extractions_created_at ON extractions(created_at);
   CREATE INDEX IF NOT EXISTS idx_video_cache_last_used_at ON video_cache(last_used_at);
+  CREATE INDEX IF NOT EXISTS idx_reset_tokens_token_hash ON password_reset_tokens(token_hash);
+  CREATE INDEX IF NOT EXISTS idx_reset_tokens_user_id ON password_reset_tokens(user_id);
 `
 
 function getDbReadyPromise() {
@@ -469,6 +479,62 @@ export async function upsertVideoCache(input: {
   )
 
   return mapVideoCacheRow(rows[0])
+}
+
+export async function createPasswordResetToken(input: {
+  userId: string
+  tokenHash: string
+  expiresAt: Date
+}) {
+  await ensureDbReady()
+  const id = randomUUID()
+  await pool.query(
+    `
+      INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at)
+      VALUES ($1, $2, $3, $4)
+    `,
+    [id, input.userId, input.tokenHash, input.expiresAt.toISOString()]
+  )
+}
+
+export async function findPasswordResetTokenByHash(tokenHash: string) {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ user_id: string; expires_at: string }>(
+    `
+      SELECT user_id, expires_at
+      FROM password_reset_tokens
+      WHERE token_hash = $1
+      LIMIT 1
+    `,
+    [tokenHash]
+  )
+  if (!rows[0]) return null
+  return {
+    user_id: rows[0].user_id,
+    expires_at: toIso(rows[0].expires_at),
+  }
+}
+
+export async function deletePasswordResetTokenByHash(tokenHash: string) {
+  await ensureDbReady()
+  await pool.query('DELETE FROM password_reset_tokens WHERE token_hash = $1', [tokenHash])
+}
+
+export async function deletePasswordResetTokensByUserId(userId: string) {
+  await ensureDbReady()
+  await pool.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [userId])
+}
+
+export async function updateUserPassword(userId: string, passwordHash: string) {
+  await ensureDbReady()
+  await pool.query(
+    `
+      UPDATE users
+      SET password_hash = $1, updated_at = NOW()
+      WHERE id = $2
+    `,
+    [passwordHash, userId]
+  )
 }
 
 export function mapUserForClient(user: Pick<DbUser, 'id' | 'name' | 'email'>) {

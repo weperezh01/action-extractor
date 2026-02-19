@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   AlertCircle,
   ArrowRight,
@@ -34,6 +35,7 @@ interface ExtractMetadata {
 interface ExtractResult {
   id?: string
   createdAt?: string
+  cached?: boolean
   objective: string
   phases: Phase[]
   proTip: string
@@ -52,7 +54,12 @@ interface SessionUser {
   email: string
 }
 
-type AuthMode = 'login' | 'register'
+type AuthMode = 'login' | 'register' | 'forgot'
+
+interface ParsedSseEvent {
+  event: string
+  data: string
+}
 
 function formatHistoryDate(isoDate: string) {
   const parsed = new Date(isoDate)
@@ -64,7 +71,34 @@ function formatHistoryDate(isoDate: string) {
   }).format(parsed)
 }
 
-export default function ActionExtractor() {
+function parseSseFrame(frame: string): ParsedSseEvent | null {
+  if (!frame.trim()) return null
+
+  const lines = frame.split(/\r?\n/)
+  let event = 'message'
+  const dataLines: string[] = []
+
+  for (const rawLine of lines) {
+    if (rawLine.startsWith('event:')) {
+      event = rawLine.slice(6).trim()
+      continue
+    }
+
+    if (rawLine.startsWith('data:')) {
+      dataLines.push(rawLine.slice(5).trimStart())
+    }
+  }
+
+  return {
+    event,
+    data: dataLines.join('\n'),
+  }
+}
+
+function ActionExtractor() {
+  const searchParams = useSearchParams()
+  const resetTokenFromUrl = searchParams.get('token')
+
   const [url, setUrl] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
   const [result, setResult] = useState<ExtractResult | null>(null)
@@ -81,9 +115,22 @@ export default function ActionExtractor() {
   const [authLoading, setAuthLoading] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
 
+  const [forgotEmail, setForgotEmail] = useState('')
+  const [forgotLoading, setForgotLoading] = useState(false)
+  const [forgotError, setForgotError] = useState<string | null>(null)
+  const [forgotSuccess, setForgotSuccess] = useState(false)
+
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [resetLoading, setResetLoading] = useState(false)
+  const [resetError, setResetError] = useState<string | null>(null)
+  const [resetSuccess, setResetSuccess] = useState(false)
+
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [isExportingPdf, setIsExportingPdf] = useState(false)
+  const [streamStatus, setStreamStatus] = useState<string | null>(null)
+  const [streamPreview, setStreamPreview] = useState('')
 
   const loadHistory = async () => {
     setHistoryLoading(true)
@@ -173,6 +220,57 @@ export default function ActionExtractor() {
     }
   }
 
+  const handleForgotPassword = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (forgotLoading) return
+    setForgotLoading(true)
+    setForgotError(null)
+    try {
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail }),
+      })
+      if (!res.ok) {
+        setForgotError('Error al enviar el correo. Intenta de nuevo.')
+        return
+      }
+      setForgotSuccess(true)
+    } catch {
+      setForgotError('Error de conexión. Intenta de nuevo.')
+    } finally {
+      setForgotLoading(false)
+    }
+  }
+
+  const handleResetPassword = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (resetLoading) return
+    if (newPassword !== confirmPassword) {
+      setResetError('Las contraseñas no coinciden.')
+      return
+    }
+    setResetLoading(true)
+    setResetError(null)
+    try {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: resetTokenFromUrl, password: newPassword }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setResetError(data.error ?? 'No se pudo restablecer la contraseña.')
+        return
+      }
+      setResetSuccess(true)
+    } catch {
+      setResetError('Error de conexión. Intenta de nuevo.')
+    } finally {
+      setResetLoading(false)
+    }
+  }
+
   const handleLogout = async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' })
@@ -182,6 +280,8 @@ export default function ActionExtractor() {
       setResult(null)
       setError(null)
       setActivePhase(null)
+      setStreamStatus(null)
+      setStreamPreview('')
     }
   }
 
@@ -195,14 +295,94 @@ export default function ActionExtractor() {
     setIsProcessing(true)
     setError(null)
     setResult(null)
+    setStreamStatus('Iniciando extracción...')
+    setStreamPreview('')
+
+    let streamHadResult = false
+    let streamHadError = false
+    const appendPreviewChunk = (chunk: string) => {
+      if (!chunk) return
+
+      setStreamPreview((previous) => {
+        const next = previous + chunk
+        const maxChars = 6000
+        return next.length > maxChars ? next.slice(next.length - maxChars) : next
+      })
+    }
+
+    const processSseFrame = (frame: string) => {
+      const parsed = parseSseFrame(frame)
+      if (!parsed) return
+
+      let payload: unknown = null
+      if (parsed.data) {
+        try {
+          payload = JSON.parse(parsed.data) as unknown
+        } catch {
+          payload = { message: parsed.data }
+        }
+      }
+
+      if (parsed.event === 'status') {
+        if (payload && typeof payload === 'object') {
+          const message = (payload as { message?: unknown }).message
+          if (typeof message === 'string' && message.trim()) {
+            setStreamStatus(message)
+          }
+        }
+        return
+      }
+
+      if (parsed.event === 'text') {
+        if (payload && typeof payload === 'object') {
+          const chunk = (payload as { chunk?: unknown }).chunk
+          if (typeof chunk === 'string') {
+            appendPreviewChunk(chunk)
+          }
+        }
+        return
+      }
+
+      if (parsed.event === 'result') {
+        if (payload && typeof payload === 'object') {
+          setResult(payload as ExtractResult)
+          setActivePhase(null)
+          setError(null)
+          setStreamStatus(
+            (payload as { cached?: unknown }).cached === true
+              ? 'Resultado recuperado desde caché.'
+              : 'Extracción completada.'
+          )
+          streamHadResult = true
+          void loadHistory()
+        }
+        return
+      }
+
+      if (parsed.event === 'error') {
+        if (payload && typeof payload === 'object') {
+          const message = (payload as { message?: unknown }).message
+          if (typeof message === 'string' && message.trim()) {
+            setError(message)
+          } else {
+            setError('Error al procesar el contenido.')
+          }
+        } else {
+          setError('Error al procesar el contenido.')
+        }
+        streamHadError = true
+      }
+    }
 
     try {
-      const res = await fetch('/api/extract', {
+      const res = await fetch('/api/extract/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
         body: JSON.stringify({ url }),
       })
-      const data = await res.json()
 
       if (res.status === 401) {
         setUser(null)
@@ -212,17 +392,58 @@ export default function ActionExtractor() {
       }
 
       if (!res.ok) {
-        setError(data.error ?? 'Error al procesar el contenido.')
+        let apiError = 'Error al procesar el contenido.'
+        try {
+          const data = (await res.json()) as { error?: unknown }
+          if (typeof data.error === 'string' && data.error.trim()) {
+            apiError = data.error
+          }
+        } catch {
+          // noop
+        }
+        setError(apiError)
         return
       }
 
-      setResult(data)
-      setActivePhase(null)
-      void loadHistory()
+      if (!res.body) {
+        setError('No se pudo iniciar el stream de extracción.')
+        return
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+
+        while (true) {
+          const eventEnd = buffer.indexOf('\n\n')
+          if (eventEnd === -1) break
+
+          const rawFrame = buffer.slice(0, eventEnd)
+          buffer = buffer.slice(eventEnd + 2)
+          processSseFrame(rawFrame)
+        }
+      }
+
+      const remaining = buffer.trim()
+      if (remaining) {
+        processSseFrame(remaining)
+      }
+
+      if (!streamHadResult && !streamHadError) {
+        setError('La extracción finalizó sin resultado. Intenta de nuevo.')
+      }
     } catch {
       setError('Error de conexión. Verifica tu internet e intenta de nuevo.')
     } finally {
       setIsProcessing(false)
+      setStreamStatus(null)
+      setStreamPreview('')
     }
   }
 
@@ -380,6 +601,8 @@ export default function ActionExtractor() {
     })
     setActivePhase(null)
     setError(null)
+    setStreamStatus(null)
+    setStreamPreview('')
   }
 
   return (
@@ -420,100 +643,255 @@ export default function ActionExtractor() {
           </div>
         ) : !user ? (
           <div className="max-w-md mx-auto">
-            <div className="text-center mb-8 space-y-3">
-              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">
-                Acceso Multiusuario
-              </h1>
-              <p className="text-slate-600 text-sm">
-                Crea tu cuenta para guardar tu historial de extracciones por usuario.
-              </p>
-            </div>
-
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-lg shadow-slate-200/50">
-              <div className="grid grid-cols-2 gap-2 mb-5">
-                <button
-                  onClick={() => setAuthMode('login')}
-                  className={`h-10 rounded-lg text-sm font-semibold transition-colors ${
-                    authMode === 'login'
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  Iniciar sesión
-                </button>
-                <button
-                  onClick={() => setAuthMode('register')}
-                  className={`h-10 rounded-lg text-sm font-semibold transition-colors ${
-                    authMode === 'register'
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  Registrarme
-                </button>
-              </div>
-
-              <form onSubmit={handleAuthSubmit} className="space-y-4">
-                {authMode === 'register' && (
+            {resetTokenFromUrl ? (
+              resetSuccess ? (
+                <div className="text-center space-y-5">
+                  <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto">
+                    <CheckCircle2 size={36} className="text-emerald-500" />
+                  </div>
                   <div>
-                    <label className="block text-sm text-slate-600 mb-1.5">Nombre</label>
-                    <input
-                      type="text"
-                      value={name}
-                      onChange={(event) => setName(event.target.value)}
-                      required
-                      className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                      placeholder="Tu nombre"
-                    />
+                    <h2 className="text-2xl font-bold text-slate-900">Contraseña actualizada</h2>
+                    <p className="text-slate-600 text-sm mt-2">
+                      Tu contraseña fue restablecida exitosamente.
+                    </p>
                   </div>
-                )}
-
-                <div>
-                  <label className="block text-sm text-slate-600 mb-1.5">Correo</label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                    required
-                    className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                    placeholder="tu@correo.com"
-                  />
+                  <button
+                    onClick={() => { window.location.href = '/' }}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-6 py-2.5 rounded-lg text-sm transition-colors"
+                  >
+                    Iniciar sesión
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="text-center mb-8 space-y-3">
+                    <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">
+                      Nueva contraseña
+                    </h1>
+                    <p className="text-slate-600 text-sm">
+                      Escribe y confirma tu nueva contraseña.
+                    </p>
+                  </div>
+                  <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-lg shadow-slate-200/50">
+                    <form onSubmit={handleResetPassword} className="space-y-4">
+                      <div>
+                        <label className="block text-sm text-slate-600 mb-1.5">Nueva contraseña</label>
+                        <input
+                          type="password"
+                          value={newPassword}
+                          onChange={(event) => setNewPassword(event.target.value)}
+                          required
+                          minLength={8}
+                          className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                          placeholder="Mínimo 8 caracteres"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-slate-600 mb-1.5">Confirmar contraseña</label>
+                        <input
+                          type="password"
+                          value={confirmPassword}
+                          onChange={(event) => setConfirmPassword(event.target.value)}
+                          required
+                          minLength={8}
+                          className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                          placeholder="Repite la contraseña"
+                        />
+                      </div>
+                      {resetError && (
+                        <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">
+                          {resetError}
+                        </div>
+                      )}
+                      <button
+                        type="submit"
+                        disabled={resetLoading}
+                        className={`w-full h-11 rounded-lg text-sm font-semibold text-white transition-colors ${
+                          resetLoading ? 'bg-slate-400' : 'bg-indigo-600 hover:bg-indigo-700'
+                        }`}
+                      >
+                        {resetLoading ? 'Guardando...' : 'Restablecer contraseña'}
+                      </button>
+                    </form>
+                  </div>
+                </>
+              )
+            ) : authMode === 'forgot' ? (
+              forgotSuccess ? (
+                <div className="text-center space-y-5">
+                  <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mx-auto">
+                    <CheckCircle2 size={36} className="text-indigo-500" />
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-900">Revisa tu correo</h2>
+                    <p className="text-slate-600 text-sm mt-2">
+                      Si el correo está registrado, recibirás un enlace para restablecer tu contraseña.
+                      El enlace expira en 1 hora.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => { setAuthMode('login'); setForgotSuccess(false); setForgotEmail('') }}
+                    className="text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+                  >
+                    ← Volver al inicio de sesión
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="text-center mb-8 space-y-3">
+                    <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">
+                      Recuperar contraseña
+                    </h1>
+                    <p className="text-slate-600 text-sm">
+                      Te enviaremos un enlace para restablecer tu contraseña.
+                    </p>
+                  </div>
+                  <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-lg shadow-slate-200/50">
+                    <form onSubmit={handleForgotPassword} className="space-y-4">
+                      <div>
+                        <label className="block text-sm text-slate-600 mb-1.5">Correo electrónico</label>
+                        <input
+                          type="email"
+                          value={forgotEmail}
+                          onChange={(event) => setForgotEmail(event.target.value)}
+                          required
+                          className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                          placeholder="tu@correo.com"
+                        />
+                      </div>
+                      {forgotError && (
+                        <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">
+                          {forgotError}
+                        </div>
+                      )}
+                      <button
+                        type="submit"
+                        disabled={forgotLoading}
+                        className={`w-full h-11 rounded-lg text-sm font-semibold text-white transition-colors ${
+                          forgotLoading ? 'bg-slate-400' : 'bg-indigo-600 hover:bg-indigo-700'
+                        }`}
+                      >
+                        {forgotLoading ? 'Enviando...' : 'Enviar enlace'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setAuthMode('login'); setForgotError(null) }}
+                        className="w-full text-sm text-slate-500 hover:text-slate-700 font-medium py-1"
+                      >
+                        ← Volver al inicio de sesión
+                      </button>
+                    </form>
+                  </div>
+                </>
+              )
+            ) : (
+              <>
+                <div className="text-center mb-8 space-y-3">
+                  <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">
+                    Acceso Multiusuario
+                  </h1>
+                  <p className="text-slate-600 text-sm">
+                    Crea tu cuenta para guardar tu historial de extracciones por usuario.
+                  </p>
                 </div>
 
-                <div>
-                  <label className="block text-sm text-slate-600 mb-1.5">Contraseña</label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    required
-                    minLength={8}
-                    className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                    placeholder="Mínimo 8 caracteres"
-                  />
-                </div>
-
-                {authError && (
-                  <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">
-                    {authError}
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-lg shadow-slate-200/50">
+                  <div className="grid grid-cols-2 gap-2 mb-5">
+                    <button
+                      onClick={() => setAuthMode('login')}
+                      className={`h-10 rounded-lg text-sm font-semibold transition-colors ${
+                        authMode === 'login'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Iniciar sesión
+                    </button>
+                    <button
+                      onClick={() => setAuthMode('register')}
+                      className={`h-10 rounded-lg text-sm font-semibold transition-colors ${
+                        authMode === 'register'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Registrarme
+                    </button>
                   </div>
-                )}
 
-                <button
-                  type="submit"
-                  disabled={authLoading}
-                  className={`w-full h-11 rounded-lg text-sm font-semibold text-white transition-colors ${
-                    authLoading ? 'bg-slate-400' : 'bg-indigo-600 hover:bg-indigo-700'
-                  }`}
-                >
-                  {authLoading
-                    ? 'Procesando...'
-                    : authMode === 'login'
-                      ? 'Entrar'
-                      : 'Crear cuenta'}
-                </button>
-              </form>
-            </div>
+                  <form onSubmit={handleAuthSubmit} className="space-y-4">
+                    {authMode === 'register' && (
+                      <div>
+                        <label className="block text-sm text-slate-600 mb-1.5">Nombre</label>
+                        <input
+                          type="text"
+                          value={name}
+                          onChange={(event) => setName(event.target.value)}
+                          required
+                          className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                          placeholder="Tu nombre"
+                        />
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-sm text-slate-600 mb-1.5">Correo</label>
+                      <input
+                        type="email"
+                        value={email}
+                        onChange={(event) => setEmail(event.target.value)}
+                        required
+                        className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                        placeholder="tu@correo.com"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm text-slate-600 mb-1.5">Contraseña</label>
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={(event) => setPassword(event.target.value)}
+                        required
+                        minLength={8}
+                        className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                        placeholder="Mínimo 8 caracteres"
+                      />
+                    </div>
+
+                    {authError && (
+                      <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">
+                        {authError}
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={authLoading}
+                      className={`w-full h-11 rounded-lg text-sm font-semibold text-white transition-colors ${
+                        authLoading ? 'bg-slate-400' : 'bg-indigo-600 hover:bg-indigo-700'
+                      }`}
+                    >
+                      {authLoading
+                        ? 'Procesando...'
+                        : authMode === 'login'
+                          ? 'Entrar'
+                          : 'Crear cuenta'}
+                    </button>
+
+                    {authMode === 'login' && (
+                      <button
+                        type="button"
+                        onClick={() => { setAuthMode('forgot'); setAuthError(null) }}
+                        className="w-full text-sm text-slate-500 hover:text-indigo-600 font-medium py-1 transition-colors"
+                      >
+                        ¿Olvidaste tu contraseña?
+                      </button>
+                    )}
+                  </form>
+                </div>
+              </>
+            )}
           </div>
         ) : (
           <>
@@ -609,9 +987,16 @@ export default function ActionExtractor() {
             </div>
 
             {isProcessing && (
-              <p className="text-center text-sm text-slate-400 mb-10 animate-pulse">
-                Obteniendo transcripción y procesando con IA, puede tardar 15-30 segundos...
-              </p>
+              <div className="max-w-2xl mx-auto mb-10 bg-indigo-50 border border-indigo-100 rounded-xl p-4">
+                <p className="text-sm text-indigo-700 font-medium animate-pulse">
+                  {streamStatus ?? 'Obteniendo transcripción y procesando con IA...'}
+                </p>
+                {streamPreview && (
+                  <pre className="mt-3 text-xs text-slate-700 bg-white border border-indigo-100 rounded-lg p-3 max-h-56 overflow-auto whitespace-pre-wrap break-words">
+                    {streamPreview}
+                  </pre>
+                )}
+              </div>
             )}
 
             {error && (
@@ -761,5 +1146,19 @@ export default function ActionExtractor() {
         )}
       </main>
     </div>
+  )
+}
+
+export default function Page() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+          <div className="w-8 h-8 border-2 border-slate-300 border-t-indigo-600 rounded-full animate-spin" />
+        </div>
+      }
+    >
+      <ActionExtractor />
+    </Suspense>
   )
 }

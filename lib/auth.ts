@@ -17,6 +17,7 @@ const scrypt = promisify(nodeScrypt)
 const SESSION_COOKIE_NAME = 'ae_session'
 const SESSION_DURATION_DAYS = 30
 const PASSWORD_KEY_LENGTH = 64
+const RESET_TOKEN_EXPIRY_HOURS = 1
 
 interface SessionUser {
   id: string
@@ -131,4 +132,18 @@ export async function deleteSessionForRequest(req: NextRequest) {
   const token = getSessionTokenFromRequest(req)
   if (!token) return
   await deleteSessionByTokenHash(hashSessionToken(token))
+}
+
+export function createResetToken() {
+  return randomBytes(32).toString('hex')
+}
+
+export function hashResetToken(token: string) {
+  return createHmac('sha256', getSessionSecret()).update(token).digest('hex')
+}
+
+export function createResetTokenExpirationDate() {
+  const expiresAt = new Date()
+  expiresAt.setHours(expiresAt.getHours() + RESET_TOKEN_EXPIRY_HOURS)
+  return expiresAt
 }
