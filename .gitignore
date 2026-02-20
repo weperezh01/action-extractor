@@ -7,6 +7,8 @@ node_modules
 .data
 data
 plan_mejoras
+*.swp
+tsconfig.tsbuildinfo
 *.log
 npm-debug.log*
 .pnpm-debug.log*
