@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import { listExtractionsByUser } from '@/lib/db'
+import { buildYoutubeThumbnailUrl } from '@/lib/video-preview'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -24,6 +25,8 @@ export async function GET(req: NextRequest) {
     id: row.id,
     url: row.url,
     videoId: row.video_id,
+    videoTitle: row.video_title,
+    thumbnailUrl: row.thumbnail_url || (row.video_id ? buildYoutubeThumbnailUrl(row.video_id) : null),
     objective: row.objective,
     phases: safeParse(row.phases_json, []),
     proTip: row.pro_tip,

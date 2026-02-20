@@ -23,6 +23,8 @@ export interface DbExtraction {
   user_id: string
   url: string
   video_id: string | null
+  video_title: string | null
+  thumbnail_url: string | null
   objective: string
   phases_json: string
   pro_tip: string
@@ -32,6 +34,8 @@ export interface DbExtraction {
 
 export interface DbVideoCache {
   video_id: string
+  video_title: string | null
+  thumbnail_url: string | null
   objective: string
   phases_json: string
   pro_tip: string
@@ -70,6 +74,8 @@ interface DbExtractionRow {
   user_id: string
   url: string
   video_id: string | null
+  video_title: string | null
+  thumbnail_url: string | null
   objective: string
   phases_json: string
   pro_tip: string
@@ -79,6 +85,8 @@ interface DbExtractionRow {
 
 interface DbVideoCacheRow {
   video_id: string
+  video_title: string | null
+  thumbnail_url: string | null
   objective: string
   phases_json: string
   pro_tip: string
@@ -135,6 +143,8 @@ const INIT_SQL = `
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     url TEXT NOT NULL,
     video_id TEXT,
+    video_title TEXT,
+    thumbnail_url TEXT,
     objective TEXT NOT NULL,
     phases_json TEXT NOT NULL,
     pro_tip TEXT NOT NULL,
@@ -144,6 +154,8 @@ const INIT_SQL = `
 
   CREATE TABLE IF NOT EXISTS video_cache (
     video_id TEXT PRIMARY KEY,
+    video_title TEXT,
+    thumbnail_url TEXT,
     objective TEXT NOT NULL,
     phases_json TEXT NOT NULL,
     pro_tip TEXT NOT NULL,
@@ -162,6 +174,11 @@ const INIT_SQL = `
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
+
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS video_title TEXT;
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
+  ALTER TABLE video_cache ADD COLUMN IF NOT EXISTS video_title TEXT;
+  ALTER TABLE video_cache ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
 
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
   CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
@@ -215,6 +232,8 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
     user_id: row.user_id,
     url: row.url,
     video_id: row.video_id,
+    video_title: row.video_title,
+    thumbnail_url: row.thumbnail_url,
     objective: row.objective,
     phases_json: row.phases_json,
     pro_tip: row.pro_tip,
@@ -226,6 +245,8 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
 function mapVideoCacheRow(row: DbVideoCacheRow): DbVideoCache {
   return {
     video_id: row.video_id,
+    video_title: row.video_title,
+    thumbnail_url: row.thumbnail_url,
     objective: row.objective,
     phases_json: row.phases_json,
     pro_tip: row.pro_tip,
@@ -330,6 +351,8 @@ export async function createExtraction(input: {
   userId: string
   url: string
   videoId: string | null
+  videoTitle: string | null
+  thumbnailUrl: string | null
   objective: string
   phasesJson: string
   proTip: string
@@ -340,16 +363,38 @@ export async function createExtraction(input: {
   const { rows } = await pool.query<DbExtractionRow>(
     `
       INSERT INTO extractions (
-        id, user_id, url, video_id, objective, phases_json, pro_tip, metadata_json
+        id,
+        user_id,
+        url,
+        video_id,
+        video_title,
+        thumbnail_url,
+        objective,
+        phases_json,
+        pro_tip,
+        metadata_json
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      RETURNING id, user_id, url, video_id, objective, phases_json, pro_tip, metadata_json, created_at
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING
+        id,
+        user_id,
+        url,
+        video_id,
+        video_title,
+        thumbnail_url,
+        objective,
+        phases_json,
+        pro_tip,
+        metadata_json,
+        created_at
     `,
     [
       id,
       input.userId,
       input.url,
       input.videoId,
+      input.videoTitle,
+      input.thumbnailUrl,
       input.objective,
       input.phasesJson,
       input.proTip,
@@ -364,7 +409,18 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
   await ensureDbReady()
   const { rows } = await pool.query<DbExtractionRow>(
     `
-      SELECT id, user_id, url, video_id, objective, phases_json, pro_tip, metadata_json, created_at
+      SELECT
+        id,
+        user_id,
+        url,
+        video_id,
+        video_title,
+        thumbnail_url,
+        objective,
+        phases_json,
+        pro_tip,
+        metadata_json,
+        created_at
       FROM extractions
       WHERE user_id = $1
       ORDER BY created_at DESC
@@ -386,6 +442,8 @@ export async function findVideoCacheByVideoId(input: {
     `
       SELECT
         video_id,
+        video_title,
+        thumbnail_url,
         objective,
         phases_json,
         pro_tip,
@@ -424,6 +482,8 @@ export async function findVideoCacheByVideoId(input: {
 
 export async function upsertVideoCache(input: {
   videoId: string
+  videoTitle: string | null
+  thumbnailUrl: string | null
   objective: string
   phasesJson: string
   proTip: string
@@ -437,6 +497,8 @@ export async function upsertVideoCache(input: {
     `
       INSERT INTO video_cache (
         video_id,
+        video_title,
+        thumbnail_url,
         objective,
         phases_json,
         pro_tip,
@@ -444,9 +506,11 @@ export async function upsertVideoCache(input: {
         prompt_version,
         model
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (video_id)
       DO UPDATE SET
+        video_title = EXCLUDED.video_title,
+        thumbnail_url = EXCLUDED.thumbnail_url,
         objective = EXCLUDED.objective,
         phases_json = EXCLUDED.phases_json,
         pro_tip = EXCLUDED.pro_tip,
@@ -457,6 +521,8 @@ export async function upsertVideoCache(input: {
         last_used_at = NOW()
       RETURNING
         video_id,
+        video_title,
+        thumbnail_url,
         objective,
         phases_json,
         pro_tip,
@@ -469,6 +535,8 @@ export async function upsertVideoCache(input: {
     `,
     [
       input.videoId,
+      input.videoTitle,
+      input.thumbnailUrl,
       input.objective,
       input.phasesJson,
       input.proTip,

@@ -11,37 +11,20 @@ import {
 } from '@danielxceron/youtube-transcript'
 import { getUserFromRequest } from '@/lib/auth'
 import { createExtraction, findVideoCacheByVideoId, upsertVideoCache } from '@/lib/db'
+import {
+  buildExtractionUserPrompt,
+  estimateTime,
+  EXTRACTION_MODEL,
+  EXTRACTION_PROMPT_VERSION,
+  EXTRACTION_SYSTEM_PROMPT,
+  extractVideoId,
+  parseExtractionModelText,
+} from '@/lib/extract-core'
+import { resolveVideoPreview } from '@/lib/video-preview'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-const EXTRACTION_MODEL = 'claude-sonnet-4-6'
-const EXTRACTION_PROMPT_VERSION = 'action-plan-v1'
-
-function extractVideoId(url: string): string | null {
-  const patterns = [
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/,
-    /youtube\.com\/embed\/([^&\n?#]+)/,
-    /youtube\.com\/v\/([^&\n?#]+)/,
-  ]
-  for (const pattern of patterns) {
-    const match = url.match(pattern)
-    if (match) return match[1]
-  }
-  return null
-}
-
-function estimateTime(wordCount: number) {
-  const totalMinutes = Math.round(wordCount / 150) // ~150 wpm speech rate
-  const hours = Math.floor(totalMinutes / 60)
-  const mins = totalMinutes % 60
-  const originalTime = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`
-  const savedMinutes = Math.max(totalMinutes - 3, 0)
-  const savedH = Math.floor(savedMinutes / 60)
-  const savedM = savedMinutes % 60
-  const savedTime = savedH > 0 ? `${savedH}h ${savedM}m` : `${savedM}m`
-  return { originalTime, savedTime }
-}
 
 function safeParse<T>(value: string, fallback: T): T {
   try {
@@ -102,10 +85,32 @@ export async function POST(req: NextRequest) {
         },
       }
 
+      const videoPreview = await resolveVideoPreview({
+        videoId,
+        titleHint: cachedVideo.video_title,
+        thumbnailHint: cachedVideo.thumbnail_url,
+      })
+
+      if (!cachedVideo.video_title || !cachedVideo.thumbnail_url) {
+        await upsertVideoCache({
+          videoId,
+          videoTitle: videoPreview.videoTitle,
+          thumbnailUrl: videoPreview.thumbnailUrl,
+          objective: responsePayload.objective,
+          phasesJson: JSON.stringify(responsePayload.phases),
+          proTip: responsePayload.proTip,
+          metadataJson: JSON.stringify(responsePayload.metadata),
+          promptVersion: EXTRACTION_PROMPT_VERSION,
+          model: EXTRACTION_MODEL,
+        })
+      }
+
       const saved = await createExtraction({
         userId: user.id,
         url,
         videoId,
+        videoTitle: videoPreview.videoTitle,
+        thumbnailUrl: videoPreview.thumbnailUrl,
         objective: responsePayload.objective,
         phasesJson: JSON.stringify(responsePayload.phases),
         proTip: responsePayload.proTip,
@@ -114,6 +119,10 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.json({
         ...responsePayload,
+        url,
+        videoId,
+        videoTitle: videoPreview.videoTitle,
+        thumbnailUrl: videoPreview.thumbnailUrl,
         id: saved.id,
         createdAt: saved.created_at,
         cached: true,
@@ -202,41 +211,16 @@ export async function POST(req: NextRequest) {
 
     const wordCount = transcriptText.split(/\s+/).length
     const { originalTime, savedTime } = estimateTime(wordCount)
+    const previewPromise = resolveVideoPreview({ videoId })
 
     const message = await anthropic.messages.create({
       model: EXTRACTION_MODEL,
       max_tokens: 2048,
-      system: `Eres un estratega de negocios experto. Tu función es analizar transcripciones de videos/podcasts y extraer ÚNICAMENTE las acciones concretas y ejecutables, eliminando todo relleno, anécdotas y motivación genérica.
-
-REGLAS ESTRICTAS:
-- Cada acción debe ser específica, medible y comenzar con verbo de acción (Define, Crea, Identifica, Implementa, Establece, Documenta, etc.)
-- Elimina toda anécdota, motivación o consejo vago
-- Genera entre 4 y 6 fases, cada una con 3 a 5 items
-- La dificultad refleja recursos y habilidades requeridas: "Fácil", "Media" o "Difícil"
-- El consejo pro debe ser la táctica más contraintuitiva o menos obvia del contenido`,
+      system: EXTRACTION_SYSTEM_PROMPT,
       messages: [
         {
           role: 'user',
-          content: `Analiza la transcripción y responde ÚNICAMENTE con un JSON válido con esta estructura exacta (sin markdown, sin texto adicional):
-
-{
-  "objective": "Descripción en 1-2 oraciones del objetivo central del contenido",
-  "phases": [
-    {
-      "id": 1,
-      "title": "Fase 1: Nombre Descriptivo",
-      "items": ["Acción específica 1", "Acción específica 2", "Acción específica 3"]
-    }
-  ],
-  "proTip": "La táctica más específica y contraintuitiva del contenido",
-  "metadata": {
-    "difficulty": "Media",
-    "readingTime": "3 min"
-  }
-}
-
-TRANSCRIPCIÓN:
-${finalTranscript}`,
+          content: buildExtractionUserPrompt(finalTranscript),
         },
       ],
     })
@@ -246,36 +230,17 @@ ${finalTranscript}`,
       throw new Error('Respuesta inesperada del modelo.')
     }
 
-    // Strip potential markdown code fences
-    const cleaned = block.text.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim()
+    const responsePayload = parseExtractionModelText(block.text, {
+      originalTime,
+      savedTime,
+    })
 
-    let extracted
-    try {
-      extracted = JSON.parse(cleaned)
-    } catch {
-      throw new Error('El modelo devolvió JSON inválido. Intenta de nuevo.')
-    }
-
-    const responsePayload = {
-      objective: typeof extracted.objective === 'string' ? extracted.objective : '',
-      phases: Array.isArray(extracted.phases) ? extracted.phases : [],
-      proTip: typeof extracted.proTip === 'string' ? extracted.proTip : '',
-      metadata: {
-        readingTime:
-          typeof extracted.metadata?.readingTime === 'string'
-            ? extracted.metadata.readingTime
-            : '3 min',
-        difficulty:
-          typeof extracted.metadata?.difficulty === 'string'
-            ? extracted.metadata.difficulty
-            : 'Media',
-        originalTime,
-        savedTime,
-      },
-    }
+    const videoPreview = await previewPromise
 
     await upsertVideoCache({
       videoId,
+      videoTitle: videoPreview.videoTitle,
+      thumbnailUrl: videoPreview.thumbnailUrl,
       objective: responsePayload.objective,
       phasesJson: JSON.stringify(responsePayload.phases),
       proTip: responsePayload.proTip,
@@ -288,6 +253,8 @@ ${finalTranscript}`,
       userId: user.id,
       url,
       videoId,
+      videoTitle: videoPreview.videoTitle,
+      thumbnailUrl: videoPreview.thumbnailUrl,
       objective: responsePayload.objective,
       phasesJson: JSON.stringify(responsePayload.phases),
       proTip: responsePayload.proTip,
@@ -296,6 +263,10 @@ ${finalTranscript}`,
 
     return NextResponse.json({
       ...responsePayload,
+      url,
+      videoId,
+      videoTitle: videoPreview.videoTitle,
+      thumbnailUrl: videoPreview.thumbnailUrl,
       id: saved.id,
       createdAt: saved.created_at,
       cached: false,

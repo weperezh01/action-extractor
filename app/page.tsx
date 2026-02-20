@@ -15,7 +15,9 @@ import {
   Download,
   History,
   LogOut,
+  Moon,
   Play,
+  Sun,
   Zap,
 } from 'lucide-react'
 
@@ -36,6 +38,10 @@ interface ExtractResult {
   id?: string
   createdAt?: string
   cached?: boolean
+  url?: string
+  videoId?: string | null
+  videoTitle?: string | null
+  thumbnailUrl?: string | null
   objective: string
   phases: Phase[]
   proTip: string
@@ -55,10 +61,33 @@ interface SessionUser {
 }
 
 type AuthMode = 'login' | 'register' | 'forgot'
+type Theme = 'light' | 'dark'
 
 interface ParsedSseEvent {
   event: string
   data: string
+}
+
+const THEME_STORAGE_KEY = 'actionextractor-theme'
+
+function resolveInitialTheme(): Theme {
+  if (typeof window === 'undefined') return 'light'
+
+  try {
+    const storedTheme = localStorage.getItem(THEME_STORAGE_KEY)
+    if (storedTheme === 'light' || storedTheme === 'dark') {
+      return storedTheme
+    }
+  } catch {
+    // noop
+  }
+
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function applyTheme(theme: Theme) {
+  if (typeof document === 'undefined') return
+  document.documentElement.classList.toggle('dark', theme === 'dark')
 }
 
 function formatHistoryDate(isoDate: string) {
@@ -131,6 +160,7 @@ function ActionExtractor() {
   const [isExportingPdf, setIsExportingPdf] = useState(false)
   const [streamStatus, setStreamStatus] = useState<string | null>(null)
   const [streamPreview, setStreamPreview] = useState('')
+  const [theme, setTheme] = useState<Theme>('light')
 
   const loadHistory = async () => {
     setHistoryLoading(true)
@@ -176,6 +206,12 @@ function ActionExtractor() {
 
   useEffect(() => {
     void loadSession()
+  }, [])
+
+  useEffect(() => {
+    const initialTheme = resolveInitialTheme()
+    setTheme(initialTheme)
+    applyTheme(initialTheme)
   }, [])
 
   const handleAuthSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -232,7 +268,12 @@ function ActionExtractor() {
         body: JSON.stringify({ email: forgotEmail }),
       })
       if (!res.ok) {
-        setForgotError('Error al enviar el correo. Intenta de nuevo.')
+        const data = await res.json().catch(() => null)
+        setForgotError(
+          typeof data?.error === 'string'
+            ? data.error
+            : 'Error al enviar el correo. Intenta de nuevo.'
+        )
         return
       }
       setForgotSuccess(true)
@@ -282,6 +323,17 @@ function ActionExtractor() {
       setActivePhase(null)
       setStreamStatus(null)
       setStreamPreview('')
+    }
+  }
+
+  const toggleTheme = () => {
+    const nextTheme: Theme = theme === 'dark' ? 'light' : 'dark'
+    setTheme(nextTheme)
+    applyTheme(nextTheme)
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, nextTheme)
+    } catch {
+      // noop
     }
   }
 
@@ -594,6 +646,10 @@ function ActionExtractor() {
     setResult({
       id: item.id,
       createdAt: item.createdAt,
+      url: item.url,
+      videoId: item.videoId ?? null,
+      videoTitle: item.videoTitle ?? null,
+      thumbnailUrl: item.thumbnailUrl ?? null,
       objective: item.objective,
       phases: item.phases,
       proTip: item.proTip,
@@ -606,33 +662,47 @@ function ActionExtractor() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <nav className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-200 sticky top-0 z-10 backdrop-blur">
+    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+      <nav className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-200 sticky top-0 z-10 backdrop-blur dark:bg-slate-950/90 dark:border-slate-800">
         <div className="flex items-center gap-2">
           <div className="bg-indigo-600 p-1.5 rounded-lg text-white">
             <Zap size={20} fill="currentColor" />
           </div>
-          <span className="font-bold text-xl tracking-tight text-slate-800">
+          <span className="font-bold text-xl tracking-tight text-slate-800 dark:text-slate-100">
             Action<span className="text-indigo-600">Extractor</span>
           </span>
         </div>
 
-        {user ? (
-          <div className="flex items-center gap-3">
-            <span className="hidden md:inline text-sm text-slate-600">
-              {user.name} ({user.email})
+        <div className="flex items-center gap-3">
+          <button
+            onClick={toggleTheme}
+            className="h-10 px-3 rounded-lg border border-slate-200 bg-white text-slate-600 hover:text-slate-900 hover:border-slate-300 transition-colors inline-flex items-center gap-2 dark:bg-slate-900 dark:text-slate-200 dark:border-slate-700 dark:hover:border-slate-500 dark:hover:text-slate-100"
+            aria-label={theme === 'dark' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+            title={theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+            <span className="text-sm font-medium whitespace-nowrap">
+              {theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}
             </span>
-            <button
-              onClick={handleLogout}
-              className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors inline-flex items-center gap-2"
-            >
-              <LogOut size={16} />
-              Salir
-            </button>
-          </div>
-        ) : (
-          <span className="text-sm text-slate-500">Acceso requerido</span>
-        )}
+          </button>
+
+          {user ? (
+            <>
+              <span className="hidden md:inline text-sm text-slate-600 dark:text-slate-300">
+                {user.name} ({user.email})
+              </span>
+              <button
+                onClick={handleLogout}
+                className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors inline-flex items-center gap-2 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
+              >
+                <LogOut size={16} />
+                Salir
+              </button>
+            </>
+          ) : (
+            <span className="text-sm text-slate-500 dark:text-slate-400">Acceso requerido</span>
+          )}
+        </div>
       </nav>
 
       <main className="max-w-4xl mx-auto px-4 py-12 md:py-16">
@@ -976,11 +1046,25 @@ function ActionExtractor() {
                     onClick={() => openHistoryItem(item)}
                     className="w-full px-5 py-4 text-left hover:bg-slate-50 transition-colors"
                   >
-                    <p className="font-semibold text-slate-800 line-clamp-1">
-                      {item.objective || 'Extracción sin objetivo'}
-                    </p>
-                    <p className="text-xs text-slate-500 mt-1 truncate">{item.url}</p>
-                    <p className="text-xs text-slate-400 mt-1">{formatHistoryDate(item.createdAt)}</p>
+                    <div className="flex items-start gap-3">
+                      {item.thumbnailUrl ? (
+                        <img
+                          src={item.thumbnailUrl}
+                          alt={item.videoTitle ?? 'Miniatura del video'}
+                          className="w-24 h-14 rounded-md object-cover border border-slate-200 flex-shrink-0"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-24 h-14 rounded-md bg-slate-200 border border-slate-200 flex-shrink-0" />
+                      )}
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-800 line-clamp-1">
+                          {item.videoTitle || item.objective || 'Video de YouTube'}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-1 truncate">{item.url}</p>
+                        <p className="text-xs text-slate-400 mt-1">{formatHistoryDate(item.createdAt)}</p>
+                      </div>
+                    </div>
                   </button>
                 ))}
               </div>
@@ -1044,6 +1128,33 @@ function ActionExtractor() {
                 </div>
 
                 <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-200 overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 bg-white">
+                    <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
+                      Video Fuente
+                    </h2>
+                    <div className="flex flex-col md:flex-row gap-4">
+                      {result.thumbnailUrl ? (
+                        <img
+                          src={result.thumbnailUrl}
+                          alt={result.videoTitle ?? 'Miniatura del video'}
+                          className="w-full md:w-56 h-32 rounded-xl object-cover border border-slate-200"
+                        />
+                      ) : (
+                        <div className="w-full md:w-56 h-32 rounded-xl bg-slate-100 border border-slate-200" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold text-slate-800 text-base line-clamp-2">
+                          {result.videoTitle || 'Video de YouTube'}
+                        </p>
+                        {(result.url || url) && (
+                          <p className="text-xs text-slate-500 mt-2 break-all">
+                            {result.url || url}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="bg-slate-50 p-6 border-b border-slate-100">
                     <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
                       Objetivo Estratégico
@@ -1153,7 +1264,7 @@ export default function Page() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
           <div className="w-8 h-8 border-2 border-slate-300 border-t-indigo-600 rounded-full animate-spin" />
         </div>
       }
