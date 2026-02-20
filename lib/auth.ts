@@ -18,6 +18,8 @@ const SESSION_COOKIE_NAME = 'ae_session'
 const SESSION_DURATION_DAYS = 30
 const PASSWORD_KEY_LENGTH = 64
 const RESET_TOKEN_EXPIRY_HOURS = 1
+const EMAIL_VERIFICATION_TOKEN_EXPIRY_HOURS = 24
+const DEFAULT_ADMIN_EMAILS = ['wdperezh@gmail.com']
 
 interface SessionUser {
   id: string
@@ -42,6 +44,24 @@ function getSessionSecret() {
 
 export function normalizeEmail(email: string) {
   return email.trim().toLowerCase()
+}
+
+export function resolveAdminEmails() {
+  const configured = (process.env.ACTION_EXTRACTOR_ADMIN_EMAILS || '').trim()
+  const rawValues = configured
+    ? configured.split(',').map((item) => item.trim())
+    : DEFAULT_ADMIN_EMAILS
+
+  const normalized = rawValues
+    .map((email) => normalizeEmail(email))
+    .filter((email) => email.length > 0)
+
+  return Array.from(new Set(normalized))
+}
+
+export function isAdminEmail(email: string) {
+  const normalizedEmail = normalizeEmail(email)
+  return resolveAdminEmails().includes(normalizedEmail)
 }
 
 export function isValidEmail(email: string) {
@@ -145,5 +165,19 @@ export function hashResetToken(token: string) {
 export function createResetTokenExpirationDate() {
   const expiresAt = new Date()
   expiresAt.setHours(expiresAt.getHours() + RESET_TOKEN_EXPIRY_HOURS)
+  return expiresAt
+}
+
+export function createEmailVerificationToken() {
+  return randomBytes(32).toString('hex')
+}
+
+export function hashEmailVerificationToken(token: string) {
+  return createHmac('sha256', getSessionSecret()).update(token).digest('hex')
+}
+
+export function createEmailVerificationTokenExpirationDate() {
+  const expiresAt = new Date()
+  expiresAt.setHours(expiresAt.getHours() + EMAIL_VERIFICATION_TOKEN_EXPIRY_HOURS)
   return expiresAt
 }

@@ -1,0 +1,47 @@
+Prompt de Validación Técnica: "Resumen Ejecutivo"
+
+Este prompt está diseñado para el modo de extracción rápida de conceptos clave. Es ideal para configurar el backend con una temperatura de IA media (ej. 0.4 - 0.5).
+
+📋 Instrucciones de Uso
+
+Extrae la transcripción del video o podcast.
+
+Copia el PROMPT MAESTRO a continuación.
+
+Pégalo en el chat de la IA, seguido de la transcripción.
+
+🤖 EL PROMPT MAESTRO (Copia desde aquí)
+
+Actúa como un Analista de Inteligencia de Negocios. Tu cliente es un CEO o Inversor que no tiene tiempo para ver un video de 1 hora, pero necesita saber exactamente de qué trata y cuáles son los argumentos centrales para tomar decisiones.
+
+Tu objetivo es leer la siguiente transcripción y extraer la esencia absoluta del contenido, eliminando todo el "ruido" y las anécdotas irrelevantes.
+
+Reglas de Salida Obligatorias:
+
+Concisión Extrema: Usa viñetas cortas. Cero párrafos largos de relleno.
+
+Tesis Central: Identifica cuál es la idea o argumento principal que el orador intenta demostrar.
+
+Datos y Métricas: Si el orador menciona números, porcentajes o métricas clave, inclúyelos obligatoriamente.
+
+Estructura de la respuesta:
+
+Tesis Central: [El argumento principal del video en máximo 2 líneas]
+
+Puntos Clave:
+
+[Concepto 1]: [Explicación de 1 línea]
+
+[Concepto 2]: [Explicación de 1 línea]
+
+[Concepto 3]: [Explicación de 1 línea]
+
+Datos/Métricas Relevantes:
+
+[Dato 1]
+
+[Dato 2]
+
+Conclusión del Orador: [El veredicto final o la moraleja del orador]
+
+[PEGA AQUÍ LA TRANSCRIPCIÓN DEL VIDEO]

@@ -28,6 +28,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Credenciales inválidas.' }, { status: 401 })
     }
 
+    if (!user.email_verified_at) {
+      return NextResponse.json(
+        {
+          error:
+            'Debes verificar tu correo antes de iniciar sesión. Revisa tu bandeja de entrada y confirma el enlace.',
+        },
+        { status: 403 }
+      )
+    }
+
     const isValid = await verifyPassword(password, user.password_hash)
     if (!isValid) {
       return NextResponse.json({ error: 'Credenciales inválidas.' }, { status: 401 })

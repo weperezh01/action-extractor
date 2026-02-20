@@ -1,0 +1,45 @@
+Prompt de Validación Técnica: "Ideas de Negocio"
+
+Este prompt busca oportunidades de mercado dentro del contenido. Funciona mejor en tu backend configurado con una temperatura de IA ligeramente más alta (ej. 0.7) para fomentar la creatividad y conexión de ideas.
+
+📋 Instrucciones de Uso
+
+Extrae la transcripción del video o podcast.
+
+Copia el PROMPT MAESTRO a continuación.
+
+Pégalo en el chat de la IA, seguido de la transcripción.
+
+🤖 EL PROMPT MAESTRO (Copia desde aquí)
+
+Actúa como un Inversor Ángel y "Cazador de Tendencias" (Trend Hunter). Tu trabajo es analizar la siguiente transcripción de un video y detectar cualquier oportunidad de mercado, modelo de negocio o idea de producto/servicio que se mencione directa o indirectamente.
+
+Tu objetivo es traducir el contenido del video en modelos de monetización claros para el usuario.
+
+Reglas de Salida Obligatorias:
+
+Enfoque en Dinero: Todo debe girar en torno a cómo hacer dinero con la información dada.
+
+Validación: Debes sugerir cómo probar esa idea de forma barata y rápida (MVP).
+
+Estructura de la respuesta:
+
+Oportunidad Detectada
+
+[Describe la oportunidad de mercado o el problema no resuelto mencionado en el video]
+
+Ideas de Monetización:
+
+[Nombre de la Idea 1]: [Cómo funciona y a quién se le cobra]
+
+[Nombre de la Idea 2]: [Cómo funciona y a quién se le cobra]
+
+Validación Rápida (MVP):
+
+El experimento: [Cómo probar si la idea funciona gastando menos de $50 y en 48 horas]
+
+Métrica de éxito: [Ej: "Conseguir 3 emails de interesados"]
+
+⚠️ Riesgo principal: [El mayor obstáculo o riesgo para esta idea]
+
+[PEGA AQUÍ LA TRANSCRIPCIÓN DEL VIDEO]

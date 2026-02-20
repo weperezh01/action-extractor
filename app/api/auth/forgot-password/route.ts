@@ -9,6 +9,7 @@ import {
 } from '@/lib/auth'
 import {
   createPasswordResetToken,
+  deletePasswordResetTokenByHash,
   deletePasswordResetTokensByUserId,
   findUserByEmail,
 } from '@/lib/db'
@@ -41,17 +42,42 @@ export async function POST(req: Request) {
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://roi.welltechnologies.net'
       const resetUrl = `${appUrl}/?token=${token}`
 
-      const resendKey = process.env.RESEND_API_KEY
+      const resendKey = process.env.RESEND_API_KEY?.trim()
+      const resendFrom =
+        process.env.RESEND_FROM_EMAIL?.trim() ??
+        'ActionExtractor <noreply@roi.welltechnologies.net>'
+      const isProduction = process.env.NODE_ENV === 'production'
 
       if (resendKey) {
         const resend = new Resend(resendKey)
-        await resend.emails.send({
-          from: 'ActionExtractor <noreply@roi.welltechnologies.net>',
+        const { error: resendError } = await resend.emails.send({
+          from: resendFrom,
           to: email,
           subject: 'Restablecer contraseña — ActionExtractor',
           html: buildResetEmailHtml(user.name, resetUrl),
         })
+
+        if (resendError) {
+          // Limpiar token no entregado para evitar enlaces "huérfanos"
+          await deletePasswordResetTokenByHash(tokenHash)
+          console.error('[forgot-password] Resend error:', resendError)
+          return NextResponse.json(
+            { error: 'No se pudo enviar el correo de recuperación. Intenta de nuevo.' },
+            { status: 502 }
+          )
+        }
       } else {
+        if (isProduction) {
+          await deletePasswordResetTokenByHash(tokenHash)
+          console.error(
+            '[forgot-password] RESEND_API_KEY no configurada en producción. No se envió correo.'
+          )
+          return NextResponse.json(
+            { error: 'El servicio de correo no está disponible. Intenta más tarde.' },
+            { status: 503 }
+          )
+        }
+
         // Dev: imprimir en consola cuando no hay clave de Resend configurada
         console.log('[RESET PASSWORD] URL de restablecimiento (dev):', resetUrl)
       }
@@ -60,8 +86,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true })
   } catch (error) {
     console.error('[forgot-password]', error)
-    // Siempre retornar 200 para no filtrar información
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ error: 'No se pudo procesar la solicitud.' }, { status: 500 })
   }
 }
 

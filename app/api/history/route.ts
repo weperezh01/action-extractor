@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import { listExtractionsByUser } from '@/lib/db'
+import { normalizeExtractionMode } from '@/lib/extraction-modes'
 import { buildYoutubeThumbnailUrl } from '@/lib/video-preview'
 
 export const runtime = 'nodejs'
@@ -27,6 +28,7 @@ export async function GET(req: NextRequest) {
     videoId: row.video_id,
     videoTitle: row.video_title,
     thumbnailUrl: row.thumbnail_url || (row.video_id ? buildYoutubeThumbnailUrl(row.video_id) : null),
+    mode: normalizeExtractionMode(row.extraction_mode),
     objective: row.objective,
     phases: safeParse(row.phases_json, []),
     proTip: row.pro_tip,

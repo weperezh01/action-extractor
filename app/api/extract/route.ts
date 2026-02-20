@@ -1,36 +1,204 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
-import {
-  YoutubeTranscript,
-  YoutubeTranscriptDisabledError,
-  YoutubeTranscriptEmptyError,
-  YoutubeTranscriptNotAvailableError,
-  YoutubeTranscriptNotAvailableLanguageError,
-  YoutubeTranscriptTooManyRequestError,
-  YoutubeTranscriptVideoUnavailableError,
-} from '@danielxceron/youtube-transcript'
+import { YoutubeTranscript } from '@danielxceron/youtube-transcript'
 import { getUserFromRequest } from '@/lib/auth'
 import { createExtraction, findVideoCacheByVideoId, upsertVideoCache } from '@/lib/db'
+import { classifyModelError, classifyTranscriptError, retryWithBackoff } from '@/lib/extract-resilience'
 import {
   buildExtractionUserPrompt,
+  buildExtractionSystemPrompt,
   estimateTime,
   EXTRACTION_MODEL,
-  EXTRACTION_PROMPT_VERSION,
-  EXTRACTION_SYSTEM_PROMPT,
   extractVideoId,
+  getExtractionPromptVersion,
   parseExtractionModelText,
 } from '@/lib/extract-core'
+import { normalizeExtractionMode } from '@/lib/extraction-modes'
+import {
+  normalizeExtractionOutputLanguage,
+  resolveExtractionOutputLanguage,
+  type ResolvedExtractionOutputLanguage,
+} from '@/lib/output-language'
+import {
+  buildExtractionRateLimitMessage,
+  consumeUserExtractionRateLimit,
+  type UserExtractionRateLimitResult,
+} from '@/lib/rate-limit'
 import { resolveVideoPreview } from '@/lib/video-preview'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+const EXTRACTION_MAX_TOKENS = 4096
+const JSON_REPAIR_MAX_TOKENS = 4096
+const JSON_REPAIR_SYSTEM_PROMPT =
+  'Eres un normalizador de JSON. Convierte contenido en JSON válido estricto. Devuelve solo JSON, sin markdown ni texto adicional.'
+
 function safeParse<T>(value: string, fallback: T): T {
   try {
     return JSON.parse(value) as T
   } catch {
     return fallback
+  }
+}
+
+function createRateLimitResponse(rateLimit: UserExtractionRateLimitResult) {
+  return NextResponse.json(
+    {
+      error: buildExtractionRateLimitMessage(rateLimit.limit),
+      rateLimit: {
+        limit: rateLimit.limit,
+        remaining: rateLimit.remaining,
+        resetAt: rateLimit.resetAt,
+      },
+    },
+    {
+      status: 429,
+      headers: {
+        'Retry-After': String(rateLimit.retryAfterSeconds),
+        'X-RateLimit-Limit': String(rateLimit.limit),
+        'X-RateLimit-Remaining': String(rateLimit.remaining),
+        'X-RateLimit-Reset': rateLimit.resetAt,
+      },
+    }
+  )
+}
+
+function buildJsonRepairUserPrompt(rawText: string) {
+  return `Convierte el siguiente contenido en JSON VÁLIDO con esta estructura exacta:
+
+{
+  "objective": "string",
+  "phases": [
+    {
+      "id": 1,
+      "title": "string",
+      "items": ["string"]
+    }
+  ],
+  "proTip": "string",
+  "metadata": {
+    "difficulty": "string",
+    "readingTime": "string"
+  }
+}
+
+Reglas:
+- Mantén el contenido original lo más fiel posible.
+- Si falta algún campo, completa con valor vacío razonable ("" o []).
+- No agregues markdown.
+- No uses comentarios.
+
+CONTENIDO A NORMALIZAR:
+${rawText}`
+}
+
+function buildCompactJsonRepairUserPrompt(rawText: string, modeLabel: string) {
+  return `Convierte el siguiente contenido en JSON VÁLIDO y COMPACTO para el modo "${modeLabel}" con esta estructura exacta:
+
+{
+  "objective": "string",
+  "phases": [
+    {
+      "id": 1,
+      "title": "string",
+      "items": ["string"]
+    }
+  ],
+  "proTip": "string",
+  "metadata": {
+    "difficulty": "string",
+    "readingTime": "string"
+  }
+}
+
+Reglas de compresión:
+- Máximo 4 fases.
+- Máximo 4 items por fase.
+- Cada item con máximo 20 palabras.
+- objective en máximo 2 líneas.
+- proTip en máximo 1 línea.
+- Mantén la esencia del contenido y elimina relleno.
+- Si falta algún campo, completa con valor vacío razonable ("" o []).
+- Devuelve solo JSON, sin markdown.
+
+CONTENIDO A NORMALIZAR:
+${rawText}`
+}
+
+async function parseExtractionWithRepair(params: {
+  modelText: string
+  mode: ReturnType<typeof normalizeExtractionMode>
+  resolvedOutputLanguage: ResolvedExtractionOutputLanguage
+  originalTime: string
+  savedTime: string
+}) {
+  const { modelText, mode, resolvedOutputLanguage, originalTime, savedTime } = params
+
+  const parseWithTime = (text: string) =>
+    parseExtractionModelText(
+      text,
+      {
+        originalTime,
+        savedTime,
+      },
+      mode,
+      resolvedOutputLanguage
+    )
+
+  try {
+    return parseWithTime(modelText)
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : ''
+    if (!message.includes('JSON inválido')) {
+      throw error
+    }
+
+    const repairPrompts = [
+      buildJsonRepairUserPrompt(modelText),
+      buildCompactJsonRepairUserPrompt(modelText, mode),
+    ]
+
+    let lastError: unknown = error
+    for (const repairPrompt of repairPrompts) {
+      try {
+        const repairResponse = await retryWithBackoff(
+          () =>
+            anthropic.messages.create({
+              model: EXTRACTION_MODEL,
+              max_tokens: JSON_REPAIR_MAX_TOKENS,
+              system: JSON_REPAIR_SYSTEM_PROMPT,
+              messages: [
+                {
+                  role: 'user',
+                  content: repairPrompt,
+                },
+              ],
+            }),
+          {
+            maxAttempts: 2,
+            shouldRetry: (repairError) => classifyModelError(repairError).retryable,
+          }
+        )
+
+        const repairBlock = repairResponse.content[0]
+        if (repairBlock.type !== 'text') {
+          lastError = new Error('No se pudo normalizar la respuesta del modelo.')
+          continue
+        }
+
+        return parseWithTime(repairBlock.text)
+      } catch (repairError: unknown) {
+        lastError = repairError
+      }
+    }
+
+    if (lastError instanceof Error) {
+      throw lastError
+    }
+
+    throw new Error('El modelo devolvió JSON inválido. Intenta de nuevo.')
   }
 }
 
@@ -43,6 +211,9 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json()
     const url: string = body?.url ?? ''
+    const mode = normalizeExtractionMode(body?.mode)
+    const outputLanguage = normalizeExtractionOutputLanguage(body?.outputLanguage)
+    const promptVersion = getExtractionPromptVersion(mode, outputLanguage)
 
     if (!url.trim()) {
       return NextResponse.json({ error: 'URL requerida.' }, { status: 400 })
@@ -58,7 +229,7 @@ export async function POST(req: NextRequest) {
 
     const cachedVideo = await findVideoCacheByVideoId({
       videoId,
-      promptVersion: EXTRACTION_PROMPT_VERSION,
+      promptVersion,
       model: EXTRACTION_MODEL,
     })
 
@@ -71,6 +242,7 @@ export async function POST(req: NextRequest) {
       })
 
       const responsePayload = {
+        mode,
         objective: cachedVideo.objective,
         phases: safeParse(cachedVideo.phases_json, []),
         proTip: cachedVideo.pro_tip,
@@ -100,7 +272,7 @@ export async function POST(req: NextRequest) {
           phasesJson: JSON.stringify(responsePayload.phases),
           proTip: responsePayload.proTip,
           metadataJson: JSON.stringify(responsePayload.metadata),
-          promptVersion: EXTRACTION_PROMPT_VERSION,
+          promptVersion,
           model: EXTRACTION_MODEL,
         })
       }
@@ -111,6 +283,7 @@ export async function POST(req: NextRequest) {
         videoId,
         videoTitle: videoPreview.videoTitle,
         thumbnailUrl: videoPreview.thumbnailUrl,
+        extractionMode: mode,
         objective: responsePayload.objective,
         phasesJson: JSON.stringify(responsePayload.phases),
         proTip: responsePayload.proTip,
@@ -123,6 +296,8 @@ export async function POST(req: NextRequest) {
         videoId,
         videoTitle: videoPreview.videoTitle,
         thumbnailUrl: videoPreview.thumbnailUrl,
+        outputLanguageRequested: outputLanguage,
+        outputLanguageResolved: outputLanguage === 'auto' ? null : outputLanguage,
         id: saved.id,
         createdAt: saved.created_at,
         cached: true,
@@ -136,63 +311,32 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Fetch transcript
+    const rateLimit = await consumeUserExtractionRateLimit(user.id)
+    if (!rateLimit.allowed) {
+      return createRateLimitResponse(rateLimit)
+    }
+
+    // Fetch transcript con retry automático
     let transcriptText = ''
     try {
-      const segments = await YoutubeTranscript.fetchTranscript(videoId)
+      const segments = await retryWithBackoff(() => YoutubeTranscript.fetchTranscript(videoId), {
+        maxAttempts: 3,
+        shouldRetry: (transcriptError) => classifyTranscriptError(transcriptError).retryable,
+      })
+
       if (!segments.length) {
         return NextResponse.json(
           {
-            error:
-              'No se encontró transcripción utilizable para este video. Prueba con otro enlace.',
+            error: 'No se encontró transcripción utilizable para este video. Prueba con otro enlace.',
           },
           { status: 422 }
         )
       }
-      transcriptText = segments.map((s) => s.text).join(' ')
+
+      transcriptText = segments.map((segment) => segment.text).join(' ')
     } catch (error: unknown) {
-      if (error instanceof YoutubeTranscriptTooManyRequestError) {
-        return NextResponse.json(
-          {
-            error:
-              'YouTube bloqueó temporalmente la extracción por demasiadas solicitudes desde este servidor. Intenta más tarde.',
-          },
-          { status: 429 }
-        )
-      }
-
-      if (error instanceof YoutubeTranscriptVideoUnavailableError) {
-        return NextResponse.json(
-          {
-            error:
-              'El video no está disponible o no puede consultarse desde este servidor.',
-          },
-          { status: 404 }
-        )
-      }
-
-      if (
-        error instanceof YoutubeTranscriptDisabledError ||
-        error instanceof YoutubeTranscriptNotAvailableError ||
-        error instanceof YoutubeTranscriptNotAvailableLanguageError ||
-        error instanceof YoutubeTranscriptEmptyError
-      ) {
-        return NextResponse.json(
-          {
-            error:
-              'No se encontró transcripción para este video. Asegúrate de que tenga subtítulos habilitados (automáticos o manuales).',
-          },
-          { status: 422 }
-        )
-      }
-
-      return NextResponse.json(
-        {
-          error:
-            'No se pudo obtener la transcripción desde YouTube. Intenta con otro video o vuelve a intentar en unos minutos.',
-        },
-        { status: 502 }
-      )
+      const transcriptError = classifyTranscriptError(error)
+      return NextResponse.json({ error: transcriptError.message }, { status: transcriptError.status })
     }
 
     if (!transcriptText.trim()) {
@@ -211,29 +355,58 @@ export async function POST(req: NextRequest) {
 
     const wordCount = transcriptText.split(/\s+/).length
     const { originalTime, savedTime } = estimateTime(wordCount)
+    const resolvedOutputLanguage = resolveExtractionOutputLanguage(outputLanguage, finalTranscript)
     const previewPromise = resolveVideoPreview({ videoId })
 
-    const message = await anthropic.messages.create({
-      model: EXTRACTION_MODEL,
-      max_tokens: 2048,
-      system: EXTRACTION_SYSTEM_PROMPT,
-      messages: [
+    let message: Awaited<ReturnType<typeof anthropic.messages.create>>
+    try {
+      message = await retryWithBackoff(
+        () =>
+          anthropic.messages.create({
+            model: EXTRACTION_MODEL,
+            max_tokens: EXTRACTION_MAX_TOKENS,
+            system: buildExtractionSystemPrompt(mode, resolvedOutputLanguage),
+            messages: [
+              {
+                role: 'user',
+                content: buildExtractionUserPrompt(finalTranscript, mode, resolvedOutputLanguage),
+              },
+            ],
+          }),
         {
-          role: 'user',
-          content: buildExtractionUserPrompt(finalTranscript),
-        },
-      ],
-    })
+          maxAttempts: 3,
+          shouldRetry: (modelError) => classifyModelError(modelError).retryable,
+        }
+      )
+    } catch (error: unknown) {
+      const modelError = classifyModelError(error)
+      return NextResponse.json({ error: modelError.message }, { status: modelError.status })
+    }
 
     const block = message.content[0]
     if (block.type !== 'text') {
-      throw new Error('Respuesta inesperada del modelo.')
+      return NextResponse.json(
+        {
+          error:
+            'La IA devolvió una respuesta inesperada. Intenta nuevamente y, si persiste, prueba con otro video.',
+        },
+        { status: 502 }
+      )
     }
 
-    const responsePayload = parseExtractionModelText(block.text, {
-      originalTime,
-      savedTime,
-    })
+    let responsePayload: Awaited<ReturnType<typeof parseExtractionWithRepair>>
+    try {
+      responsePayload = await parseExtractionWithRepair({
+        modelText: block.text,
+        originalTime,
+        savedTime,
+        mode,
+        resolvedOutputLanguage,
+      })
+    } catch (error: unknown) {
+      const modelError = classifyModelError(error)
+      return NextResponse.json({ error: modelError.message }, { status: modelError.status })
+    }
 
     const videoPreview = await previewPromise
 
@@ -245,7 +418,7 @@ export async function POST(req: NextRequest) {
       phasesJson: JSON.stringify(responsePayload.phases),
       proTip: responsePayload.proTip,
       metadataJson: JSON.stringify(responsePayload.metadata),
-      promptVersion: EXTRACTION_PROMPT_VERSION,
+      promptVersion,
       model: EXTRACTION_MODEL,
     })
 
@@ -255,6 +428,7 @@ export async function POST(req: NextRequest) {
       videoId,
       videoTitle: videoPreview.videoTitle,
       thumbnailUrl: videoPreview.thumbnailUrl,
+      extractionMode: mode,
       objective: responsePayload.objective,
       phasesJson: JSON.stringify(responsePayload.phases),
       proTip: responsePayload.proTip,
@@ -267,13 +441,20 @@ export async function POST(req: NextRequest) {
       videoId,
       videoTitle: videoPreview.videoTitle,
       thumbnailUrl: videoPreview.thumbnailUrl,
+      outputLanguageRequested: outputLanguage,
+      outputLanguageResolved: resolvedOutputLanguage,
       id: saved.id,
       createdAt: saved.created_at,
       cached: false,
     })
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Error interno del servidor.'
-    console.error('[ActionExtractor] extract error:', msg)
-    return NextResponse.json({ error: msg }, { status: 500 })
+    console.error('[ActionExtractor] extract error:', err)
+    return NextResponse.json(
+      {
+        error:
+          'No se pudo completar la extracción por un error interno. Intenta nuevamente en unos minutos.',
+      },
+      { status: 500 }
+    )
   }
 }
