@@ -1,4 +1,4 @@
-import { consumeExtractionRateLimitByUser } from '@/lib/db'
+import { consumeExtractionRateLimitByUser, getExtractionRateLimitUsageByUser } from '@/lib/db'
 
 const DEFAULT_EXTRACTIONS_PER_HOUR = 12
 const MAX_EXTRACTIONS_PER_HOUR = 500
@@ -12,7 +12,7 @@ export interface UserExtractionRateLimitResult {
   retryAfterSeconds: number
 }
 
-function resolveExtractionRateLimitPerHour() {
+export function resolveExtractionRateLimitPerHour() {
   const rawLimit = process.env.ACTION_EXTRACTOR_EXTRACTIONS_PER_HOUR
   if (!rawLimit) {
     return DEFAULT_EXTRACTIONS_PER_HOUR
@@ -29,6 +29,27 @@ function resolveExtractionRateLimitPerHour() {
 export async function consumeUserExtractionRateLimit(userId: string): Promise<UserExtractionRateLimitResult> {
   const limit = resolveExtractionRateLimitPerHour()
   const usage = await consumeExtractionRateLimitByUser({ userId, limit })
+
+  const resetAtMs = new Date(usage.reset_at).getTime()
+  const retryAfterSeconds = Number.isFinite(resetAtMs)
+    ? Math.max(1, Math.ceil((resetAtMs - Date.now()) / 1000))
+    : 60
+
+  return {
+    allowed: usage.allowed,
+    limit: usage.limit,
+    used: usage.used,
+    remaining: usage.remaining,
+    resetAt: usage.reset_at,
+    retryAfterSeconds,
+  }
+}
+
+export async function getUserExtractionRateLimitSnapshot(
+  userId: string
+): Promise<UserExtractionRateLimitResult> {
+  const limit = resolveExtractionRateLimitPerHour()
+  const usage = await getExtractionRateLimitUsageByUser({ userId, limit })
 
   const resetAtMs = new Date(usage.reset_at).getTime()
   const retryAfterSeconds = Number.isFinite(resetAtMs)

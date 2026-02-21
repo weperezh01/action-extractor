@@ -7,6 +7,7 @@ export interface DbUser {
   email: string
   password_hash: string
   email_verified_at: string | null
+  blocked_at: string | null
   created_at: string
   updated_at: string
 }
@@ -17,6 +18,7 @@ interface DbSessionWithUser {
   expires_at: string
   user_name: string
   user_email: string
+  user_blocked_at: string | null
 }
 
 export interface DbExtraction {
@@ -143,6 +145,25 @@ export interface AdminUsageStats {
   extraction_modes: AdminModeBreakdownStat[]
 }
 
+export type AdminUserVerificationFilter = 'all' | 'verified' | 'unverified'
+export type AdminUserBlockedFilter = 'all' | 'blocked' | 'active'
+
+export interface AdminUserListItem {
+  id: string
+  name: string
+  email: string
+  created_at: string
+  email_verified_at: string | null
+  blocked_at: string | null
+  total_extractions: number
+  last_extraction_at: string | null
+}
+
+export interface AdminUserListResult {
+  total: number
+  users: AdminUserListItem[]
+}
+
 interface GlobalDb {
   __actionExtractorPgPool?: Pool
   __actionExtractorDbReady?: Promise<void>
@@ -154,6 +175,7 @@ interface DbUserRow {
   email: string
   password_hash: string
   email_verified_at: Date | string | null
+  blocked_at: Date | string | null
   created_at: Date | string
   updated_at: Date | string
 }
@@ -169,6 +191,7 @@ interface DbSessionWithUserRow {
   expires_at: Date | string
   user_name: string
   user_email: string
+  user_blocked_at: Date | string | null
 }
 
 interface DbExtractionRow {
@@ -283,6 +306,17 @@ interface DbAdminModeBreakdownRow {
   total: number | string
 }
 
+interface DbAdminUserListRow {
+  id: string
+  name: string
+  email: string
+  created_at: Date | string
+  email_verified_at: Date | string | null
+  blocked_at: Date | string | null
+  total_extractions: number | string
+  last_extraction_at: Date | string | null
+}
+
 const globalForDb = globalThis as unknown as GlobalDb
 
 const pool =
@@ -312,6 +346,7 @@ const INIT_SQL = `
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     email_verified_at TIMESTAMPTZ,
+    blocked_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
@@ -440,8 +475,10 @@ const INIT_SQL = `
   ALTER TABLE video_cache ADD COLUMN IF NOT EXISTS video_title TEXT;
   ALTER TABLE video_cache ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ;
 
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+  CREATE INDEX IF NOT EXISTS idx_users_blocked_at ON users(blocked_at);
   CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
   CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
   CREATE INDEX IF NOT EXISTS idx_extractions_user_id ON extractions(user_id);
@@ -496,6 +533,7 @@ function mapUserRow(row: DbUserRow): DbUser {
     email: row.email,
     password_hash: row.password_hash,
     email_verified_at: row.email_verified_at ? toIso(row.email_verified_at) : null,
+    blocked_at: row.blocked_at ? toIso(row.blocked_at) : null,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   }
@@ -508,6 +546,20 @@ function mapSessionRow(row: DbSessionWithUserRow): DbSessionWithUser {
     expires_at: toIso(row.expires_at),
     user_name: row.user_name,
     user_email: row.user_email,
+    user_blocked_at: row.user_blocked_at ? toIso(row.user_blocked_at) : null,
+  }
+}
+
+function mapAdminUserListRow(row: DbAdminUserListRow): AdminUserListItem {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    created_at: toIso(row.created_at),
+    email_verified_at: row.email_verified_at ? toIso(row.email_verified_at) : null,
+    blocked_at: row.blocked_at ? toIso(row.blocked_at) : null,
+    total_extractions: parseDbInteger(row.total_extractions),
+    last_extraction_at: row.last_extraction_at ? toIso(row.last_extraction_at) : null,
   }
 }
 
@@ -619,7 +671,7 @@ export async function findUserByEmail(email: string) {
   await ensureDbReady()
   const { rows } = await pool.query<DbUserRow>(
     `
-      SELECT id, name, email, password_hash, email_verified_at, created_at, updated_at
+      SELECT id, name, email, password_hash, email_verified_at, blocked_at, created_at, updated_at
       FROM users
       WHERE email = $1
       LIMIT 1
@@ -633,7 +685,7 @@ export async function findUserById(id: string) {
   await ensureDbReady()
   const { rows } = await pool.query<DbUserRow>(
     `
-      SELECT id, name, email, password_hash, email_verified_at, created_at, updated_at
+      SELECT id, name, email, password_hash, email_verified_at, blocked_at, created_at, updated_at
       FROM users
       WHERE id = $1
       LIMIT 1
@@ -655,7 +707,7 @@ export async function createUser(input: {
     `
       INSERT INTO users (id, name, email, password_hash, email_verified_at)
       VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, name, email, password_hash, email_verified_at, created_at, updated_at
+      RETURNING id, name, email, password_hash, email_verified_at, blocked_at, created_at, updated_at
     `,
     [
       id,
@@ -666,6 +718,34 @@ export async function createUser(input: {
     ]
   )
   return mapUserRow(rows[0])
+}
+
+export async function updateUserName(userId: string, name: string) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbUserRow>(
+    `
+      UPDATE users
+      SET name = $1, updated_at = NOW()
+      WHERE id = $2
+      RETURNING id, name, email, password_hash, email_verified_at, blocked_at, created_at, updated_at
+    `,
+    [name, userId]
+  )
+
+  return rows[0] ? mapUserRow(rows[0]) : null
+}
+
+export async function deleteUserById(userId: string) {
+  await ensureDbReady()
+  const result = await pool.query(
+    `
+      DELETE FROM users
+      WHERE id = $1
+    `,
+    [userId]
+  )
+
+  return result.rowCount ?? 0
 }
 
 export async function createSession(input: { userId: string; tokenHash: string; expiresAt: Date }) {
@@ -689,7 +769,8 @@ export async function findSessionWithUserByTokenHash(tokenHash: string) {
         s.user_id AS user_id,
         s.expires_at AS expires_at,
         u.name AS user_name,
-        u.email AS user_email
+        u.email AS user_email,
+        u.blocked_at AS user_blocked_at
       FROM sessions s
       INNER JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = $1
@@ -703,6 +784,11 @@ export async function findSessionWithUserByTokenHash(tokenHash: string) {
 export async function deleteSessionByTokenHash(tokenHash: string) {
   await ensureDbReady()
   await pool.query('DELETE FROM sessions WHERE token_hash = $1', [tokenHash])
+}
+
+export async function deleteSessionsByUserId(userId: string) {
+  await ensureDbReady()
+  await pool.query('DELETE FROM sessions WHERE user_id = $1', [userId])
 }
 
 export async function deleteExpiredSessions() {
@@ -797,6 +883,32 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
     [userId, limit]
   )
   return rows.map(mapExtractionRow)
+}
+
+export async function deleteExtractionByIdForUser(input: { id: string; userId: string }) {
+  await ensureDbReady()
+  const result = await pool.query(
+    `
+      DELETE FROM extractions
+      WHERE id = $1 AND user_id = $2
+    `,
+    [input.id, input.userId]
+  )
+
+  return result.rowCount ?? 0
+}
+
+export async function deleteExtractionsByUser(userId: string) {
+  await ensureDbReady()
+  const result = await pool.query(
+    `
+      DELETE FROM extractions
+      WHERE user_id = $1
+    `,
+    [userId]
+  )
+
+  return result.rowCount ?? 0
 }
 
 export async function findExtractionById(id: string) {
@@ -1341,6 +1453,49 @@ export async function consumeExtractionRateLimitByUser(input: {
   }
 }
 
+export async function getExtractionRateLimitUsageByUser(input: {
+  userId: string
+  limit: number
+}): Promise<UserExtractionRateLimitUsage> {
+  await ensureDbReady()
+
+  const { rows } = await pool.query<DbExtractionRateLimitRow>(
+    `
+      WITH current_window AS (
+        SELECT date_trunc('hour', NOW()) AS window_start
+      )
+      SELECT
+        cw.window_start AS window_start,
+        COALESCE(erl.request_count, 0) AS request_count
+      FROM current_window cw
+      LEFT JOIN extraction_rate_limits erl
+        ON erl.user_id = $1
+       AND erl.window_start = cw.window_start
+      LIMIT 1
+    `,
+    [input.userId]
+  )
+
+  const row = rows[0]
+  const usedRaw =
+    typeof row?.request_count === 'number'
+      ? row.request_count
+      : Number.parseInt(String(row?.request_count ?? 0), 10)
+  const used = Number.isFinite(usedRaw) ? Math.max(0, usedRaw) : 0
+
+  const windowStart = row?.window_start ? new Date(toIso(row.window_start)) : new Date()
+  const resetAtMs = windowStart.getTime() + 60 * 60 * 1000
+  const resetAt = Number.isFinite(resetAtMs) ? new Date(resetAtMs).toISOString() : new Date().toISOString()
+
+  return {
+    limit: input.limit,
+    used,
+    remaining: Math.max(0, input.limit - used),
+    reset_at: resetAt,
+    allowed: used < input.limit,
+  }
+}
+
 export async function getAdminUsageStats(periodDays = 30): Promise<AdminUsageStats> {
   await ensureDbReady()
 
@@ -1443,6 +1598,149 @@ export async function getAdminUsageStats(periodDays = 30): Promise<AdminUsageSta
       total: parseDbInteger(row.total),
     })),
   }
+}
+
+function normalizeAdminUserVerificationFilter(
+  value: string | null | undefined
+): AdminUserVerificationFilter {
+  if (value === 'verified' || value === 'unverified') return value
+  return 'all'
+}
+
+function normalizeAdminUserBlockedFilter(value: string | null | undefined): AdminUserBlockedFilter {
+  if (value === 'blocked' || value === 'active') return value
+  return 'all'
+}
+
+export async function listAdminUsers(input?: {
+  query?: string
+  verification?: string
+  blocked?: string
+  limit?: number
+  offset?: number
+}): Promise<AdminUserListResult> {
+  await ensureDbReady()
+
+  const query = typeof input?.query === 'string' ? input.query.trim().slice(0, 120) : ''
+  const verification = normalizeAdminUserVerificationFilter(input?.verification)
+  const blocked = normalizeAdminUserBlockedFilter(input?.blocked)
+  const limit = Number.isFinite(input?.limit)
+    ? Math.min(200, Math.max(1, Math.trunc(input?.limit ?? 50)))
+    : 50
+  const offset = Number.isFinite(input?.offset)
+    ? Math.max(0, Math.trunc(input?.offset ?? 0))
+    : 0
+
+  const filterParams = [query, verification, blocked]
+
+  const countResult = await pool.query<DbCountRow>(
+    `
+      SELECT COUNT(*)::int AS total
+      FROM users u
+      WHERE
+        ($1 = '' OR u.name ILIKE ('%' || $1 || '%') OR u.email ILIKE ('%' || $1 || '%'))
+        AND (
+          $2 = 'all'
+          OR ($2 = 'verified' AND u.email_verified_at IS NOT NULL)
+          OR ($2 = 'unverified' AND u.email_verified_at IS NULL)
+        )
+        AND (
+          $3 = 'all'
+          OR ($3 = 'blocked' AND u.blocked_at IS NOT NULL)
+          OR ($3 = 'active' AND u.blocked_at IS NULL)
+        )
+    `,
+    filterParams
+  )
+
+  const usersResult = await pool.query<DbAdminUserListRow>(
+    `
+      SELECT
+        u.id,
+        u.name,
+        u.email,
+        u.created_at,
+        u.email_verified_at,
+        u.blocked_at,
+        COUNT(e.id)::int AS total_extractions,
+        MAX(e.created_at) AS last_extraction_at
+      FROM users u
+      LEFT JOIN extractions e ON e.user_id = u.id
+      WHERE
+        ($1 = '' OR u.name ILIKE ('%' || $1 || '%') OR u.email ILIKE ('%' || $1 || '%'))
+        AND (
+          $2 = 'all'
+          OR ($2 = 'verified' AND u.email_verified_at IS NOT NULL)
+          OR ($2 = 'unverified' AND u.email_verified_at IS NULL)
+        )
+        AND (
+          $3 = 'all'
+          OR ($3 = 'blocked' AND u.blocked_at IS NOT NULL)
+          OR ($3 = 'active' AND u.blocked_at IS NULL)
+        )
+      GROUP BY u.id
+      ORDER BY u.created_at DESC
+      LIMIT $4
+      OFFSET $5
+    `,
+    [...filterParams, limit, offset]
+  )
+
+  return {
+    total: parseDbInteger(countResult.rows[0]?.total),
+    users: usersResult.rows.map(mapAdminUserListRow),
+  }
+}
+
+export async function findAdminUserById(userId: string): Promise<AdminUserListItem | null> {
+  await ensureDbReady()
+
+  const { rows } = await pool.query<DbAdminUserListRow>(
+    `
+      SELECT
+        u.id,
+        u.name,
+        u.email,
+        u.created_at,
+        u.email_verified_at,
+        u.blocked_at,
+        COUNT(e.id)::int AS total_extractions,
+        MAX(e.created_at) AS last_extraction_at
+      FROM users u
+      LEFT JOIN extractions e ON e.user_id = u.id
+      WHERE u.id = $1
+      GROUP BY u.id
+      LIMIT 1
+    `,
+    [userId]
+  )
+
+  return rows[0] ? mapAdminUserListRow(rows[0]) : null
+}
+
+export async function updateUserBlockedState(input: { userId: string; blocked: boolean }) {
+  await ensureDbReady()
+
+  const { rows } = await pool.query<DbUserRow>(
+    `
+      UPDATE users
+      SET
+        blocked_at = CASE WHEN $2::boolean THEN COALESCE(blocked_at, NOW()) ELSE NULL END,
+        updated_at = NOW()
+      WHERE id = $1
+      RETURNING id, name, email, password_hash, email_verified_at, blocked_at, created_at, updated_at
+    `,
+    [input.userId, input.blocked]
+  )
+
+  const user = rows[0] ? mapUserRow(rows[0]) : null
+  if (!user) return null
+
+  if (input.blocked) {
+    await deleteSessionsByUserId(input.userId)
+  }
+
+  return user
 }
 
 export async function findVideoCacheByVideoId(input: {
@@ -1686,7 +1984,7 @@ export async function updateUnverifiedUserRegistration(input: {
       UPDATE users
       SET name = $1, password_hash = $2, updated_at = NOW()
       WHERE id = $3 AND email_verified_at IS NULL
-      RETURNING id, name, email, password_hash, email_verified_at, created_at, updated_at
+      RETURNING id, name, email, password_hash, email_verified_at, blocked_at, created_at, updated_at
     `,
     [input.name, input.passwordHash, input.userId]
   )

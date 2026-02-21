@@ -28,6 +28,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Credenciales inválidas.' }, { status: 401 })
     }
 
+    if (user.blocked_at) {
+      return NextResponse.json(
+        { error: 'Tu cuenta está bloqueada temporalmente. Contacta al administrador.' },
+        { status: 403 }
+      )
+    }
+
     if (!user.email_verified_at) {
       return NextResponse.json(
         {

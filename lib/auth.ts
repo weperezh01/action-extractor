@@ -145,6 +145,11 @@ export async function getUserFromRequest(req: NextRequest): Promise<SessionUser 
     return null
   }
 
+  if (session.user_blocked_at) {
+    await deleteSessionByTokenHash(tokenHash)
+    return null
+  }
+
   return mapSessionUserForClient(session)
 }
 
