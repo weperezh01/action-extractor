@@ -7,7 +7,6 @@ import { useSearchParams } from 'next/navigation'
 import {
   AlertCircle,
   Brain,
-  CheckCircle2,
   CheckSquare,
   Clock,
   Copy,
@@ -33,8 +32,11 @@ import {
   type ExtractionOutputLanguage,
 } from '@/lib/output-language'
 import { ExtractionForm } from '@/app/home/components/ExtractionForm'
+import { AuthAccessPanel } from '@/app/home/components/AuthAccessPanel'
+import { GoogleIcon } from '@/app/home/components/GoogleIcon'
 import { HistoryPanel } from '@/app/home/components/HistoryPanel'
 import { IntegrationsPanel } from '@/app/home/components/IntegrationsPanel'
+import { PublicHeroSection } from '@/app/home/components/PublicHeroSection'
 import { ResultPanel } from '@/app/home/components/ResultPanel'
 import { useAuth } from '@/app/home/hooks/useAuth'
 import { useHistory } from '@/app/home/hooks/useHistory'
@@ -53,34 +55,6 @@ const MODE_ICONS: Record<string, React.ReactNode> = {
   executive_summary: <FileText size={15} />,
   business_ideas: <Lightbulb size={15} />,
   key_quotes: <MessageSquare size={15} />,
-}
-
-function GoogleIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className={className}
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        fill="#4285F4"
-        d="M23.49 12.27c0-.79-.07-1.54-.2-2.27H12v4.3h6.45a5.52 5.52 0 0 1-2.4 3.62v3h3.88c2.27-2.08 3.56-5.16 3.56-8.65Z"
-      />
-      <path
-        fill="#34A853"
-        d="M12 24c3.24 0 5.96-1.07 7.95-2.9l-3.88-3A7.17 7.17 0 0 1 12 19.33a7.2 7.2 0 0 1-6.75-4.97H1.24v3.09A12 12 0 0 0 12 24Z"
-      />
-      <path
-        fill="#FBBC05"
-        d="M5.25 14.36a7.2 7.2 0 0 1 0-4.72V6.55H1.24a12 12 0 0 0 0 10.9l4-3.09Z"
-      />
-      <path
-        fill="#EA4335"
-        d="M12 4.77c1.76 0 3.34.61 4.58 1.82l3.42-3.42A11.5 11.5 0 0 0 12 0 12 12 0 0 0 1.24 6.55l4 3.09A7.2 7.2 0 0 1 12 4.77Z"
-      />
-    </svg>
-  )
 }
 
 function ActionExtractor() {
@@ -913,10 +887,10 @@ function ActionExtractor() {
   }, [clearAllHistory, handleUnauthorized, history.length])
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      <nav className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-200 sticky top-0 z-10 backdrop-blur dark:bg-slate-950/90 dark:border-slate-800">
+    <div className="min-h-screen bg-white text-zinc-900 dark:bg-black dark:text-zinc-100">
+      <nav className="sticky top-0 z-10 flex items-center justify-between border-b border-zinc-200 bg-white/95 px-6 py-4 backdrop-blur dark:border-white/10 dark:bg-black/90">
         <div className="flex items-center gap-3">
-          <div className="relative h-9 w-9 overflow-hidden rounded-lg border border-slate-200 bg-white">
+          <div className="relative h-9 w-9 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-white/15 dark:bg-zinc-950">
             <Image
               src="/roi-logo.png"
               alt="Roi Action Extractor App logo"
@@ -926,24 +900,24 @@ function ActionExtractor() {
               priority
             />
           </div>
-          <span className="font-bold text-base md:text-xl tracking-tight text-slate-800 dark:text-slate-100">
+          <span className="text-base font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-xl">
             Roi Action Extractor App
           </span>
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="hidden md:flex items-center gap-3 text-xs font-medium text-slate-500">
-            <Link className="hover:text-indigo-600 transition-colors" href="/privacy-policy">
+          <div className="hidden items-center gap-3 text-xs font-medium text-zinc-500 md:flex dark:text-zinc-400">
+            <Link className="transition-colors hover:text-zinc-800 dark:hover:text-zinc-100" href="/privacy-policy">
               Política de Privacidad
             </Link>
-            <Link className="hover:text-indigo-600 transition-colors" href="/terms-of-use">
+            <Link className="transition-colors hover:text-zinc-800 dark:hover:text-zinc-100" href="/terms-of-use">
               Términos de Uso
             </Link>
           </div>
 
           <button
             onClick={toggleTheme}
-            className="h-10 px-3 rounded-lg border border-slate-200 bg-white text-slate-600 hover:text-slate-900 hover:border-slate-300 transition-colors inline-flex items-center gap-2 dark:bg-slate-900 dark:text-slate-200 dark:border-slate-700 dark:hover:border-slate-500 dark:hover:text-slate-100"
+            className="inline-flex h-10 items-center gap-2 rounded-lg border border-zinc-300 bg-transparent px-3 text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:border-white/15 dark:text-zinc-300 dark:hover:bg-white/5 dark:hover:text-zinc-100 dark:shadow-[0_20px_44px_-24px_rgba(148,163,184,0.72)]"
             aria-label={theme === 'dark' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
             title={theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}
           >
@@ -955,431 +929,86 @@ function ActionExtractor() {
 
           {user ? (
             <>
-              <span className="hidden md:inline text-sm text-slate-600 dark:text-slate-300">
+              <span className="hidden text-sm text-zinc-600 dark:text-zinc-300 md:inline">
                 {user.name} ({user.email})
               </span>
               <Link
                 href="/settings"
-                className="bg-white text-slate-700 px-3 py-2 rounded-lg text-sm font-medium border border-slate-200 hover:bg-slate-100 transition-colors dark:bg-slate-900 dark:text-slate-200 dark:border-slate-700 dark:hover:bg-slate-800"
+                className="rounded-lg border border-zinc-300 bg-transparent px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-white/15 dark:text-zinc-200 dark:hover:bg-white/5 dark:shadow-[0_20px_44px_-24px_rgba(148,163,184,0.72)]"
               >
                 Configuración
               </Link>
               <button
                 onClick={handleLogout}
-                className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors inline-flex items-center gap-2 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
+                className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors duration-200 hover:bg-violet-700 dark:shadow-[0_24px_52px_-22px_rgba(139,92,246,0.96)]"
               >
                 <LogOut size={16} />
                 Salir
               </button>
             </>
           ) : (
-            <span className="text-sm text-slate-500 dark:text-slate-400">Acceso requerido</span>
+            <span className="text-sm text-zinc-500 dark:text-zinc-400">Acceso requerido</span>
           )}
         </div>
       </nav>
 
-      <main className="max-w-4xl mx-auto px-4 py-10 md:py-14">
+      <main className="mx-auto max-w-6xl px-4 py-10 md:py-14">
         {sessionLoading ? (
           <div className="text-center py-16">
             <div className="w-8 h-8 border-2 border-slate-300 border-t-indigo-600 rounded-full animate-spin mx-auto mb-4" />
-            <p className="text-sm text-slate-500">Cargando sesión...</p>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">Cargando sesión...</p>
           </div>
         ) : !user && !reauthRequired ? (
           <div className="space-y-8">
             {!resetTokenFromUrl && (
-              <section className="max-w-5xl mx-auto rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-200/60 overflow-hidden">
-                <div className="grid lg:grid-cols-2 gap-0">
-                  <div className="p-6 md:p-10 bg-gradient-to-br from-indigo-50 via-sky-50 to-emerald-50 border-b lg:border-b-0 lg:border-r border-slate-200">
-                    <div className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-white px-3 py-1 text-xs font-bold tracking-wider uppercase text-indigo-700 mb-4">
-                      <Zap size={13} />
-                      ROI Action System
-                    </div>
-
-                    <h2 className="text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900 leading-tight">
-                      De 2 horas de video a un plan ejecutable en minutos.
-                    </h2>
-                    <p className="mt-4 text-sm md:text-base text-slate-600 leading-relaxed">
-                      Convierte cualquier video de YouTube en decisiones listas para ejecutar:
-                      plan de acción, resumen ejecutivo, ideas de negocio o frases clave.
-                    </p>
-
-                    <div className="mt-6 grid grid-cols-3 gap-3 text-center">
-                      <div className="rounded-xl border border-indigo-100 bg-gradient-to-b from-indigo-50 to-white p-4">
-                        <p className="text-2xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">3m</p>
-                        <p className="text-xs text-slate-500 mt-1 leading-tight">Lectura promedio</p>
-                      </div>
-                      <div className="rounded-xl border border-indigo-100 bg-gradient-to-b from-indigo-50 to-white p-4">
-                        <p className="text-2xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">4</p>
-                        <p className="text-xs text-slate-500 mt-1 leading-tight">Modos de extracción</p>
-                      </div>
-                      <div className="rounded-xl border border-indigo-100 bg-gradient-to-b from-indigo-50 to-white p-4">
-                        <p className="text-2xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">1-click</p>
-                        <p className="text-xs text-slate-500 mt-1 leading-tight">Export a apps</p>
-                      </div>
-                    </div>
-
-                    <div className="mt-6 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setAuthMode('register')}
-                        className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors"
-                      >
-                        Crear cuenta
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAuthMode('login')}
-                        className="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-semibold hover:bg-slate-100 transition-colors"
-                      >
-                        Ya tengo cuenta
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="p-6 md:p-10 bg-slate-50">
-                    <h3 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-3">
-                      Vista previa del flujo
-                    </h3>
-
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                      <div className="flex items-center justify-between mb-3">
-                        <p className="text-sm font-semibold text-slate-800">Resultado generado</p>
-                        <span className="text-[11px] px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
-                          Plan de Acción
-                        </span>
-                      </div>
-
-                      <div className="space-y-2">
-                        <div className="rounded-lg border border-slate-200 p-2 bg-slate-50">
-                          <p className="text-xs font-semibold text-slate-700">Fase 1: Posicionamiento</p>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 p-2 bg-slate-50">
-                          <p className="text-xs font-semibold text-slate-700">Fase 2: Oferta y monetización</p>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 p-2 bg-slate-50">
-                          <p className="text-xs font-semibold text-slate-700">Fase 3: Ejecución diaria</p>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 grid grid-cols-2 gap-2">
-                        <div className="rounded-lg border border-slate-200 bg-white p-2 text-center">
-                          <p className="text-[11px] text-slate-500">Tiempo ahorrado</p>
-                          <p className="text-sm font-bold text-emerald-600">1h 27m</p>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 bg-white p-2 text-center">
-                          <p className="text-[11px] text-slate-500">Dificultad</p>
-                          <p className="text-sm font-bold text-amber-600">Media</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 grid gap-2">
-                      <div className="rounded-xl border border-slate-200 bg-white p-3">
-                        <p className="text-xs text-slate-700">
-                          “Pasé de consumir contenido a ejecutar acciones concretas cada día.”
-                        </p>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-white p-3">
-                        <p className="text-xs text-slate-700">
-                          “El modo Resumen Ejecutivo me ahorra reuniones y acelera decisiones.”
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
+              <PublicHeroSection
+                onCreateAccount={() => {
+                  setAuthMode('register')
+                  setAuthNotice(null)
+                  setAuthError(null)
+                }}
+                onLogin={() => {
+                  setAuthMode('login')
+                  setAuthError(null)
+                }}
+              />
             )}
 
-            <div className="max-w-md mx-auto">
-            {resetTokenFromUrl ? (
-              resetSuccess ? (
-                <div className="text-center space-y-5">
-                  <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto">
-                    <CheckCircle2 size={36} className="text-emerald-500" />
-                  </div>
-                  <div>
-                    <h2 className="text-2xl font-bold text-slate-900">Contraseña actualizada</h2>
-                    <p className="text-slate-600 text-sm mt-2">
-                      Tu contraseña fue restablecida exitosamente.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => { window.location.href = '/' }}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-6 py-2.5 rounded-lg text-sm transition-colors"
-                  >
-                    Iniciar sesión
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="text-center mb-8 space-y-3">
-                    <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">
-                      Nueva contraseña
-                    </h1>
-                    <p className="text-slate-600 text-sm">
-                      Escribe y confirma tu nueva contraseña.
-                    </p>
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-lg shadow-slate-200/50">
-                    <form onSubmit={handleResetPassword} className="space-y-4">
-                      <div>
-                        <label className="block text-sm text-slate-600 mb-1.5">Nueva contraseña</label>
-                        <input
-                          type="password"
-                          value={newPassword}
-                          onChange={(event) => setNewPassword(event.target.value)}
-                          required
-                          minLength={8}
-                          className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                          placeholder="Mínimo 8 caracteres"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm text-slate-600 mb-1.5">Confirmar contraseña</label>
-                        <input
-                          type="password"
-                          value={confirmPassword}
-                          onChange={(event) => setConfirmPassword(event.target.value)}
-                          required
-                          minLength={8}
-                          className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                          placeholder="Repite la contraseña"
-                        />
-                      </div>
-                      {resetError && (
-                        <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">
-                          {resetError}
-                        </div>
-                      )}
-                      <button
-                        type="submit"
-                        disabled={resetLoading}
-                        className={`w-full h-11 rounded-lg text-sm font-semibold text-white transition-colors ${
-                          resetLoading ? 'bg-slate-400' : 'bg-indigo-600 hover:bg-indigo-700'
-                        }`}
-                      >
-                        {resetLoading ? 'Guardando...' : 'Restablecer contraseña'}
-                      </button>
-                    </form>
-                  </div>
-                </>
-              )
-            ) : authMode === 'forgot' ? (
-              forgotSuccess ? (
-                <div className="text-center space-y-5">
-                  <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mx-auto">
-                    <CheckCircle2 size={36} className="text-indigo-500" />
-                  </div>
-                  <div>
-                    <h2 className="text-2xl font-bold text-slate-900">Revisa tu correo</h2>
-                    <p className="text-slate-600 text-sm mt-2">
-                      Si el correo está registrado, recibirás un enlace para restablecer tu contraseña.
-                      El enlace expira en 1 hora.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => { setAuthMode('login'); setForgotSuccess(false); setForgotEmail('') }}
-                    className="text-sm text-indigo-600 hover:text-indigo-700 font-medium"
-                  >
-                    ← Volver al inicio de sesión
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="text-center mb-8 space-y-3">
-                    <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">
-                      Recuperar contraseña
-                    </h1>
-                    <p className="text-slate-600 text-sm">
-                      Te enviaremos un enlace para restablecer tu contraseña.
-                    </p>
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-lg shadow-slate-200/50">
-                    <form onSubmit={handleForgotPassword} className="space-y-4">
-                      <div>
-                        <label className="block text-sm text-slate-600 mb-1.5">Correo electrónico</label>
-                        <input
-                          type="email"
-                          value={forgotEmail}
-                          onChange={(event) => setForgotEmail(event.target.value)}
-                          required
-                          className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                          placeholder="tu@correo.com"
-                        />
-                      </div>
-                      {forgotError && (
-                        <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">
-                          {forgotError}
-                        </div>
-                      )}
-                      <button
-                        type="submit"
-                        disabled={forgotLoading}
-                        className={`w-full h-11 rounded-lg text-sm font-semibold text-white transition-colors ${
-                          forgotLoading ? 'bg-slate-400' : 'bg-indigo-600 hover:bg-indigo-700'
-                        }`}
-                      >
-                        {forgotLoading ? 'Enviando...' : 'Enviar enlace'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { setAuthMode('login'); setForgotError(null) }}
-                        className="w-full text-sm text-slate-500 hover:text-slate-700 font-medium py-1"
-                      >
-                        ← Volver al inicio de sesión
-                      </button>
-                    </form>
-                  </div>
-                </>
-              )
-            ) : (
-              <>
-                <div className="text-center mb-8 space-y-3">
-                  <p className="text-slate-600 text-sm">
-                    Crea tu cuenta para guardar tu historial de extracciones por usuario.
-                  </p>
-                </div>
-
-                <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-lg shadow-slate-200/50">
-                  <div className="grid grid-cols-2 gap-2 mb-5">
-                    <button
-                      onClick={() => {
-                        setAuthMode('login')
-                        setAuthError(null)
-                      }}
-                      className={`h-10 rounded-lg text-sm font-semibold transition-colors ${
-                        authMode === 'login'
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      Iniciar sesión
-                    </button>
-                    <button
-                      onClick={() => {
-                        setAuthMode('register')
-                        setAuthNotice(null)
-                        setAuthError(null)
-                      }}
-                      className={`h-10 rounded-lg text-sm font-semibold transition-colors ${
-                        authMode === 'register'
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      Registrarme
-                    </button>
-                  </div>
-
-                  <form onSubmit={handleAuthSubmit} className="space-y-4">
-                    <button
-                      type="button"
-                      onClick={handleGoogleAuthStart}
-                      disabled={authLoading || googleAuthLoading}
-                      className={`w-full h-11 rounded-lg border text-sm font-semibold transition-colors flex items-center justify-center gap-2 ${
-                        authLoading || googleAuthLoading
-                          ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
-                          : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
-                      }`}
-                    >
-                      <GoogleIcon className="h-4 w-4" />
-                      {googleAuthLoading
-                        ? 'Conectando con Google...'
-                        : authMode === 'register'
-                          ? 'Crear cuenta con Google'
-                          : 'Continuar con Google'}
-                    </button>
-
-                    <div className="relative py-1">
-                      <div className="h-px w-full bg-slate-200" />
-                      <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white px-2 text-[11px] font-medium uppercase tracking-wide text-slate-400">
-                        o con correo
-                      </span>
-                    </div>
-
-                    {authMode === 'register' && (
-                      <div>
-                        <label className="block text-sm text-slate-600 mb-1.5">Nombre</label>
-                        <input
-                          type="text"
-                          value={name}
-                          onChange={(event) => setName(event.target.value)}
-                          required
-                          className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                          placeholder="Tu nombre"
-                        />
-                      </div>
-                    )}
-
-                    <div>
-                      <label className="block text-sm text-slate-600 mb-1.5">Correo</label>
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={(event) => setEmail(event.target.value)}
-                        required
-                        className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                        placeholder="tu@correo.com"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm text-slate-600 mb-1.5">Contraseña</label>
-                      <input
-                        type="password"
-                        value={password}
-                        onChange={(event) => setPassword(event.target.value)}
-                        required
-                        minLength={8}
-                        className="w-full h-11 rounded-lg border border-slate-300 px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                        placeholder="Mínimo 8 caracteres"
-                      />
-                    </div>
-
-                    {authNotice && (
-                      <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-sm text-emerald-700">
-                        {authNotice}
-                      </div>
-                    )}
-
-                    {authError && (
-                      <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">
-                        {authError}
-                      </div>
-                    )}
-
-                    <button
-                      type="submit"
-                      disabled={authLoading}
-                      className={`w-full h-11 rounded-lg text-sm font-semibold text-white transition-colors ${
-                        authLoading ? 'bg-slate-400' : 'bg-indigo-600 hover:bg-indigo-700'
-                      }`}
-                    >
-                      {authLoading
-                        ? 'Procesando...'
-                        : authMode === 'login'
-                          ? 'Entrar'
-                          : 'Crear cuenta'}
-                    </button>
-
-                    {authMode === 'login' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAuthMode('forgot')
-                          setAuthError(null)
-                          setAuthNotice(null)
-                        }}
-                        className="w-full text-sm text-slate-500 hover:text-indigo-600 font-medium py-1 transition-colors"
-                      >
-                        ¿Olvidaste tu contraseña?
-                      </button>
-                    )}
-                  </form>
-                </div>
-              </>
-            )}
-            </div>
+            <AuthAccessPanel
+              resetTokenFromUrl={resetTokenFromUrl}
+              resetSuccess={resetSuccess}
+              resetLoading={resetLoading}
+              resetError={resetError}
+              newPassword={newPassword}
+              confirmPassword={confirmPassword}
+              onNewPasswordChange={setNewPassword}
+              onConfirmPasswordChange={setConfirmPassword}
+              onSubmitResetPassword={handleResetPassword}
+              authMode={authMode}
+              onAuthModeChange={setAuthMode}
+              authLoading={authLoading}
+              googleAuthLoading={googleAuthLoading}
+              authNotice={authNotice}
+              authError={authError}
+              onAuthNoticeChange={setAuthNotice}
+              onAuthErrorChange={setAuthError}
+              onGoogleAuthStart={handleGoogleAuthStart}
+              onSubmitAuth={handleAuthSubmit}
+              name={name}
+              email={email}
+              password={password}
+              onNameChange={setName}
+              onEmailChange={setEmail}
+              onPasswordChange={setPassword}
+              forgotEmail={forgotEmail}
+              forgotLoading={forgotLoading}
+              forgotError={forgotError}
+              forgotSuccess={forgotSuccess}
+              onForgotEmailChange={setForgotEmail}
+              onForgotErrorChange={setForgotError}
+              onForgotSuccessChange={setForgotSuccess}
+              onSubmitForgotPassword={handleForgotPassword}
+            />
           </div>
         ) : (
           <>
@@ -1754,7 +1383,7 @@ export default function Page() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
+        <div className="flex min-h-screen items-center justify-center bg-white dark:bg-black">
           <div className="w-8 h-8 border-2 border-slate-300 border-t-indigo-600 rounded-full animate-spin" />
         </div>
       }
