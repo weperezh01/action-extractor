@@ -44,6 +44,7 @@ export interface DbVideoCache {
   phases_json: string
   pro_tip: string
   metadata_json: string
+  transcript_text: string | null
   prompt_version: string
   model: string
   created_at: string
@@ -217,6 +218,7 @@ interface DbVideoCacheRow {
   phases_json: string
   pro_tip: string
   metadata_json: string
+  transcript_text: string | null
   prompt_version: string
   model: string
   created_at: Date | string
@@ -382,6 +384,7 @@ const INIT_SQL = `
     phases_json TEXT NOT NULL,
     pro_tip TEXT NOT NULL,
     metadata_json TEXT NOT NULL,
+    transcript_text TEXT,
     prompt_version TEXT NOT NULL,
     model TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -474,6 +477,7 @@ const INIT_SQL = `
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS extraction_mode TEXT NOT NULL DEFAULT 'action_plan';
   ALTER TABLE video_cache ADD COLUMN IF NOT EXISTS video_title TEXT;
   ALTER TABLE video_cache ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
+  ALTER TABLE video_cache ADD COLUMN IF NOT EXISTS transcript_text TEXT;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ;
 
@@ -589,6 +593,7 @@ function mapVideoCacheRow(row: DbVideoCacheRow): DbVideoCache {
     phases_json: row.phases_json,
     pro_tip: row.pro_tip,
     metadata_json: row.metadata_json,
+    transcript_text: row.transcript_text,
     prompt_version: row.prompt_version,
     model: row.model,
     created_at: toIso(row.created_at),
@@ -1760,6 +1765,7 @@ export async function findVideoCacheByVideoId(input: {
         phases_json,
         pro_tip,
         metadata_json,
+        transcript_text,
         prompt_version,
         model,
         created_at,
@@ -1792,6 +1798,50 @@ export async function findVideoCacheByVideoId(input: {
   })
 }
 
+export async function findAnyVideoCacheByVideoId(videoId: string) {
+  await ensureDbReady()
+
+  const { rows } = await pool.query<DbVideoCacheRow>(
+    `
+      SELECT
+        video_id,
+        video_title,
+        thumbnail_url,
+        objective,
+        phases_json,
+        pro_tip,
+        metadata_json,
+        transcript_text,
+        prompt_version,
+        model,
+        created_at,
+        updated_at,
+        last_used_at
+      FROM video_cache
+      WHERE video_id = $1
+      LIMIT 1
+    `,
+    [videoId]
+  )
+
+  const row = rows[0]
+  if (!row) return null
+
+  await pool.query(
+    `
+      UPDATE video_cache
+      SET last_used_at = NOW()
+      WHERE video_id = $1
+    `,
+    [videoId]
+  )
+
+  return mapVideoCacheRow({
+    ...row,
+    last_used_at: new Date().toISOString(),
+  })
+}
+
 export async function upsertVideoCache(input: {
   videoId: string
   videoTitle: string | null
@@ -1800,6 +1850,7 @@ export async function upsertVideoCache(input: {
   phasesJson: string
   proTip: string
   metadataJson: string
+  transcriptText?: string | null
   promptVersion: string
   model: string
 }) {
@@ -1815,10 +1866,11 @@ export async function upsertVideoCache(input: {
         phases_json,
         pro_tip,
         metadata_json,
+        transcript_text,
         prompt_version,
         model
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       ON CONFLICT (video_id)
       DO UPDATE SET
         video_title = EXCLUDED.video_title,
@@ -1827,6 +1879,7 @@ export async function upsertVideoCache(input: {
         phases_json = EXCLUDED.phases_json,
         pro_tip = EXCLUDED.pro_tip,
         metadata_json = EXCLUDED.metadata_json,
+        transcript_text = COALESCE(EXCLUDED.transcript_text, video_cache.transcript_text),
         prompt_version = EXCLUDED.prompt_version,
         model = EXCLUDED.model,
         updated_at = NOW(),
@@ -1839,6 +1892,7 @@ export async function upsertVideoCache(input: {
         phases_json,
         pro_tip,
         metadata_json,
+        transcript_text,
         prompt_version,
         model,
         created_at,
@@ -1853,6 +1907,7 @@ export async function upsertVideoCache(input: {
       input.phasesJson,
       input.proTip,
       input.metadataJson,
+      input.transcriptText ?? null,
       input.promptVersion,
       input.model,
     ]

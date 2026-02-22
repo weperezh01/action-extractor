@@ -3,6 +3,8 @@ import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extractio
 import { formatHistoryDate } from '@/app/home/lib/utils'
 import type { HistoryItem } from '@/app/home/lib/types'
 
+const HISTORY_REQUEST_TIMEOUT_MS = 10000
+
 interface HistoryMutationResult {
   ok: boolean
   unauthorized?: boolean
@@ -38,8 +40,13 @@ export function useHistory() {
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), HISTORY_REQUEST_TIMEOUT_MS)
     try {
-      const res = await fetch('/api/history', { cache: 'no-store' })
+      const res = await fetch('/api/history', {
+        cache: 'no-store',
+        signal: controller.signal,
+      })
       if (res.status === 401) {
         setHistory([])
         return
@@ -54,6 +61,7 @@ export function useHistory() {
     } catch {
       setHistory([])
     } finally {
+      clearTimeout(timeoutId)
       setHistoryLoading(false)
     }
   }, [])

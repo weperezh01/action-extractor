@@ -1,26 +1,23 @@
 'use client'
 
-import { Suspense, useCallback, useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { useSearchParams } from 'next/navigation'
 import {
   AlertCircle,
+  ArrowUp,
   Brain,
   CheckSquare,
   Clock,
   Copy,
-  FileText,
-  Lightbulb,
+  History,
   LogOut,
-  MessageSquare,
   Moon,
   Sun,
-  Zap,
 } from 'lucide-react'
 import {
   DEFAULT_EXTRACTION_MODE,
-  EXTRACTION_MODE_OPTIONS,
   type ExtractionMode,
   getExtractionModeLabel,
   normalizeExtractionMode,
@@ -28,16 +25,15 @@ import {
 import { buildExtractionMarkdown } from '@/lib/export-content'
 import {
   DEFAULT_EXTRACTION_OUTPUT_LANGUAGE,
-  EXTRACTION_OUTPUT_LANGUAGE_OPTIONS,
   type ExtractionOutputLanguage,
 } from '@/lib/output-language'
 import { ExtractionForm } from '@/app/home/components/ExtractionForm'
 import { AuthAccessPanel } from '@/app/home/components/AuthAccessPanel'
 import { GoogleIcon } from '@/app/home/components/GoogleIcon'
 import { HistoryPanel } from '@/app/home/components/HistoryPanel'
-import { IntegrationsPanel } from '@/app/home/components/IntegrationsPanel'
 import { PublicHeroSection } from '@/app/home/components/PublicHeroSection'
 import { ResultPanel } from '@/app/home/components/ResultPanel'
+import { WorkspaceControlsDock } from '@/app/home/components/WorkspaceControlsDock'
 import { useAuth } from '@/app/home/hooks/useAuth'
 import { useHistory } from '@/app/home/hooks/useHistory'
 import { useIntegrations } from '@/app/home/hooks/useIntegrations'
@@ -50,11 +46,74 @@ import {
 } from '@/app/home/lib/utils'
 import type { ExtractResult, HistoryItem, Theme } from '@/app/home/lib/types'
 
-const MODE_ICONS: Record<string, React.ReactNode> = {
-  action_plan: <Zap size={15} />,
-  executive_summary: <FileText size={15} />,
-  business_ideas: <Lightbulb size={15} />,
-  key_quotes: <MessageSquare size={15} />,
+function slowScrollToElement(element: HTMLElement, durationMs = 1400) {
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const startY = window.scrollY || window.pageYOffset
+  const targetY = Math.max(0, element.getBoundingClientRect().top + startY - 92)
+  const distance = targetY - startY
+
+  if (Math.abs(distance) < 4) return
+
+  if (prefersReducedMotion) {
+    window.scrollTo({ top: targetY, left: 0, behavior: 'auto' })
+    return
+  }
+
+  const startedAt = performance.now()
+  const easeInOutCubic = (progress: number) =>
+    progress < 0.5 ? 4 * progress * progress * progress : 1 - Math.pow(-2 * progress + 2, 3) / 2
+
+  const animate = (now: number) => {
+    const elapsed = now - startedAt
+    const progress = Math.min(elapsed / durationMs, 1)
+    const eased = easeInOutCubic(progress)
+
+    window.scrollTo({
+      top: startY + distance * eased,
+      left: 0,
+      behavior: 'auto',
+    })
+
+    if (progress < 1) {
+      window.requestAnimationFrame(animate)
+    }
+  }
+
+  window.requestAnimationFrame(animate)
+}
+
+function ValueHighlights() {
+  return (
+    <div className="grid gap-4 text-center md:grid-cols-3">
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
+          <Clock size={24} />
+        </div>
+        <h3 className="font-semibold text-slate-800 dark:text-slate-100">Ahorra Horas</h3>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          De 2 horas de video a 3 minutos de lectura.
+        </p>
+      </div>
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400">
+          <CheckSquare size={24} />
+        </div>
+        <h3 className="font-semibold text-slate-800 dark:text-slate-100">Acción Pura</h3>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          Sin relleno. Solo los pasos que generan ROI.
+        </p>
+      </div>
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400">
+          <Copy size={24} />
+        </div>
+        <h3 className="font-semibold text-slate-800 dark:text-slate-100">Exporta Fácil</h3>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          Exporta en un click a Notion, Trello, Todoist o Google Doc.
+        </p>
+      </div>
+    </div>
+  )
 }
 
 function ActionExtractor() {
@@ -77,8 +136,14 @@ function ActionExtractor() {
   const [notice, setNotice] = useState<string | null>(null)
   const [streamStatus, setStreamStatus] = useState<string | null>(null)
   const [streamPreview, setStreamPreview] = useState('')
+  const [shouldScrollToResult, setShouldScrollToResult] = useState(false)
+  const [showBackToExtractorButton, setShowBackToExtractorButton] = useState(false)
+  const [showGoToHistoryButton, setShowGoToHistoryButton] = useState(false)
   const [theme, setTheme] = useState<Theme>('light')
   const [reauthRequired, setReauthRequired] = useState(false)
+  const extractorSectionRef = useRef<HTMLElement | null>(null)
+  const resultAnchorRef = useRef<HTMLDivElement | null>(null)
+  const historyAnchorRef = useRef<HTMLDivElement | null>(null)
   const themeStorageKey = getThemeStorageKey()
   const trimmedUrl = url.trim()
   const urlError =
@@ -108,6 +173,7 @@ function ActionExtractor() {
     setShareCopied(false)
     setStreamStatus(null)
     setStreamPreview('')
+    setShouldScrollToResult(false)
   }, [])
 
   const handleSessionMissing = useCallback(() => {
@@ -182,6 +248,80 @@ function ActionExtractor() {
     if (!user) return
     setReauthRequired(false)
   }, [user])
+
+  useEffect(() => {
+    if (!shouldScrollToResult || isProcessing || !result) return
+
+    const anchor = resultAnchorRef.current
+    if (!anchor) return
+
+    window.requestAnimationFrame(() => {
+      slowScrollToElement(anchor)
+      setShouldScrollToResult(false)
+    })
+  }, [isProcessing, result, shouldScrollToResult])
+
+  const handleScrollToHistory = useCallback(() => {
+    const anchor = historyAnchorRef.current
+    if (!anchor) return
+    window.requestAnimationFrame(() => {
+      slowScrollToElement(anchor, 1500)
+    })
+  }, [])
+
+  const handleScrollToExtractor = useCallback(() => {
+    const anchor = extractorSectionRef.current
+    window.requestAnimationFrame(() => {
+      if (anchor) {
+        slowScrollToElement(anchor, 1600)
+      } else {
+        window.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+      }
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!user) {
+      setShowBackToExtractorButton(false)
+      setShowGoToHistoryButton(false)
+      return
+    }
+
+    const updateBackToExtractorVisibility = () => {
+      const section = extractorSectionRef.current
+      if (!section) {
+        setShowBackToExtractorButton(window.scrollY > 280)
+      } else {
+        const rect = section.getBoundingClientRect()
+        setShowBackToExtractorButton(rect.bottom < 140)
+      }
+
+      const resultSection = resultAnchorRef.current
+      const historySection = historyAnchorRef.current
+      if (!resultSection || !historySection) {
+        setShowGoToHistoryButton(false)
+        return
+      }
+
+      const viewportHeight = window.innerHeight
+      const resultRect = resultSection.getBoundingClientRect()
+      const historyRect = historySection.getBoundingClientRect()
+
+      const isInsideResultContentZone =
+        resultRect.top < viewportHeight * 0.82 && resultRect.bottom > 140
+      const isHistoryAlreadyReached = historyRect.top <= 140
+      setShowGoToHistoryButton(isInsideResultContentZone && !isHistoryAlreadyReached)
+    }
+
+    updateBackToExtractorVisibility()
+    window.addEventListener('scroll', updateBackToExtractorVisibility, { passive: true })
+    window.addEventListener('resize', updateBackToExtractorVisibility)
+
+    return () => {
+      window.removeEventListener('scroll', updateBackToExtractorVisibility)
+      window.removeEventListener('resize', updateBackToExtractorVisibility)
+    }
+  }, [result, user])
 
   const {
     notionConfigured,
@@ -412,6 +552,7 @@ function ActionExtractor() {
 
     const previousResult = result
     setIsProcessing(true)
+    setShouldScrollToResult(true)
     setError(null)
     setNotice(null)
     setResult(null)
@@ -573,6 +714,9 @@ function ActionExtractor() {
       setIsProcessing(false)
       setStreamStatus(null)
       setStreamPreview('')
+      if (!streamHadResult) {
+        setShouldScrollToResult(false)
+      }
     }
   }
 
@@ -799,6 +943,7 @@ function ActionExtractor() {
     setShareCopied(false)
     setStreamStatus(null)
     setStreamPreview('')
+    setShouldScrollToResult(true)
   }
 
   const detachCurrentResultFromHistory = useCallback((extractionId?: string) => {
@@ -961,18 +1106,44 @@ function ActionExtractor() {
         ) : !user && !reauthRequired ? (
           <div className="space-y-8">
             {!resetTokenFromUrl && (
-              <PublicHeroSection
-                onCreateAccount={() => {
-                  setAuthMode('register')
-                  setAuthNotice(null)
-                  setAuthError(null)
-                }}
-                onLogin={() => {
-                  setAuthMode('login')
-                  setAuthError(null)
-                }}
-              />
+              <>
+                <PublicHeroSection
+                  onCreateAccount={() => {
+                    setAuthMode('register')
+                    setAuthNotice(null)
+                    setAuthError(null)
+                  }}
+                  onLogin={() => {
+                    setAuthMode('login')
+                    setAuthError(null)
+                  }}
+                />
+
+                <div className="text-center">
+                  <h1 className="text-4xl md:text-5xl font-extrabold text-slate-900 tracking-tight leading-tight">
+                    De Video a{' '}
+                    <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">
+                      Dinero Ejecutable
+                    </span>{' '}
+                    en Segundos.
+                  </h1>
+                  <div className="mx-auto mt-5 h-[180px] w-[180px]">
+                    <div className="relative h-full w-full overflow-hidden rounded-3xl border border-zinc-200 bg-white dark:border-white/15 dark:bg-zinc-950">
+                      <Image
+                        src="/roi-logo.png"
+                        alt="Roi Action Extractor App logo"
+                        fill
+                        sizes="180px"
+                        className="object-cover"
+                        priority
+                      />
+                    </div>
+                  </div>
+                </div>
+              </>
             )}
+
+            <ValueHighlights />
 
             <AuthAccessPanel
               resetTokenFromUrl={resetTokenFromUrl}
@@ -1012,183 +1183,185 @@ function ActionExtractor() {
           </div>
         ) : (
           <>
-            <div className="text-center mb-10 space-y-4">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-bold uppercase tracking-wider mb-2 border border-indigo-100">
-                <Brain size={12} />
-                Historial Personal Activo
-              </div>
-              <h1 className="text-4xl md:text-5xl font-extrabold text-slate-900 tracking-tight leading-tight">
-                De Video a{' '}
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">
-                  Dinero Ejecutable
-                </span>{' '}
-                en Segundos.
-              </h1>
-              <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-                {user ? (
-                  <>
-                    Usuario conectado: <span className="font-semibold text-slate-800">{user.name}</span>
-                  </>
-                ) : (
-                  'Sesión expirada. Reautentica para continuar.'
+            <section
+              ref={extractorSectionRef}
+              className="flex min-h-[calc(100svh-7rem)] flex-col justify-center"
+            >
+              <div className="mx-auto w-full max-w-4xl">
+                <div>
+                  <div className="mb-7 text-center md:mb-9">
+                    <p className="text-3xl font-semibold tracking-tight text-zinc-900 md:text-4xl dark:text-zinc-100">
+                      Roi Action Extractor
+                    </p>
+                  </div>
+                  <div className="mb-4 flex justify-center">
+                    <div className="inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-bold uppercase tracking-wider text-indigo-700">
+                      <Brain size={12} />
+                      Historial Personal Activo
+                    </div>
+                  </div>
+                  <ExtractionForm
+                    url={url}
+                    isProcessing={isProcessing}
+                    urlError={urlError}
+                    onUrlChange={setUrl}
+                    onExtract={handleExtract}
+                    onScrollToHistory={handleScrollToHistory}
+                  />
+                </div>
+
+                <WorkspaceControlsDock
+                  extractionMode={extractionMode}
+                  outputLanguage={outputLanguage}
+                  isProcessing={isProcessing}
+                  onExtractionModeChange={setExtractionMode}
+                  onOutputLanguageChange={setOutputLanguage}
+                  notionConfigured={notionConfigured}
+                  notionConnected={notionConnected}
+                  notionWorkspaceName={notionWorkspaceName}
+                  notionLoading={notionLoading}
+                  notionDisconnectLoading={notionDisconnectLoading}
+                  onConnectNotion={handleConnectNotion}
+                  onDisconnectNotion={handleDisconnectNotion}
+                  trelloConfigured={trelloConfigured}
+                  trelloConnected={trelloConnected}
+                  trelloUsername={trelloUsername}
+                  trelloLoading={trelloLoading}
+                  trelloDisconnectLoading={trelloDisconnectLoading}
+                  onConnectTrello={handleConnectTrello}
+                  onDisconnectTrello={handleDisconnectTrello}
+                  todoistConfigured={todoistConfigured}
+                  todoistConnected={todoistConnected}
+                  todoistUserLabel={todoistUserLabel}
+                  todoistLoading={todoistLoading}
+                  todoistDisconnectLoading={todoistDisconnectLoading}
+                  onConnectTodoist={handleConnectTodoist}
+                  onDisconnectTodoist={handleDisconnectTodoist}
+                  googleDocsConfigured={googleDocsConfigured}
+                  googleDocsConnected={googleDocsConnected}
+                  googleDocsUserEmail={googleDocsUserEmail}
+                  googleDocsLoading={googleDocsLoading}
+                  googleDocsDisconnectLoading={googleDocsDisconnectLoading}
+                  onConnectGoogleDocs={handleConnectGoogleDocs}
+                  onDisconnectGoogleDocs={handleDisconnectGoogleDocs}
+                />
+
+                {notice && (
+                  <div className="mx-auto mt-1 mb-8 w-full max-w-3xl rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-900/20">
+                    <p className="text-sm text-emerald-700 dark:text-emerald-400">{notice}</p>
+                  </div>
                 )}
-              </p>
-            </div>
 
-            <div className="max-w-2xl mx-auto mb-4">
-              <p className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
-                Modo de extracción
-              </p>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                {EXTRACTION_MODE_OPTIONS.map((option) => {
-                  const isActive = extractionMode === option.value
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      disabled={isProcessing}
-                      onClick={() => setExtractionMode(option.value)}
-                      className={`text-left rounded-xl border px-3 py-2.5 transition-colors ${
-                        isActive
-                          ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/40 dark:border-indigo-600 dark:text-indigo-300'
-                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600'
-                      } disabled:opacity-60 disabled:cursor-not-allowed`}
-                    >
-                      <div className={`mb-1.5 ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-slate-500'}`}>
-                        {MODE_ICONS[option.value]}
-                      </div>
-                      <p className="text-sm font-semibold leading-tight">{option.label}</p>
-                      <p className="text-xs mt-1 leading-tight opacity-80">{option.description}</p>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            <div className="max-w-2xl mx-auto mb-4">
-              <p className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
-                Idioma de salida
-              </p>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                {EXTRACTION_OUTPUT_LANGUAGE_OPTIONS.map((option) => {
-                  const isActive = outputLanguage === option.value
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      disabled={isProcessing}
-                      onClick={() => setOutputLanguage(option.value)}
-                      className={`text-left rounded-xl border px-3 py-2 transition-colors ${
-                        isActive
-                          ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/40 dark:border-indigo-600 dark:text-indigo-300'
-                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600'
-                      } disabled:opacity-60 disabled:cursor-not-allowed`}
-                    >
-                      <p className="text-sm font-semibold leading-tight">{option.label}</p>
-                      <p className="text-xs mt-1 leading-tight opacity-80">{option.description}</p>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            <IntegrationsPanel
-              notionConfigured={notionConfigured}
-              notionConnected={notionConnected}
-              notionWorkspaceName={notionWorkspaceName}
-              notionLoading={notionLoading}
-              notionDisconnectLoading={notionDisconnectLoading}
-              onConnectNotion={handleConnectNotion}
-              onDisconnectNotion={handleDisconnectNotion}
-              trelloConfigured={trelloConfigured}
-              trelloConnected={trelloConnected}
-              trelloUsername={trelloUsername}
-              trelloLoading={trelloLoading}
-              trelloDisconnectLoading={trelloDisconnectLoading}
-              onConnectTrello={handleConnectTrello}
-              onDisconnectTrello={handleDisconnectTrello}
-              todoistConfigured={todoistConfigured}
-              todoistConnected={todoistConnected}
-              todoistUserLabel={todoistUserLabel}
-              todoistLoading={todoistLoading}
-              todoistDisconnectLoading={todoistDisconnectLoading}
-              onConnectTodoist={handleConnectTodoist}
-              onDisconnectTodoist={handleDisconnectTodoist}
-              googleDocsConfigured={googleDocsConfigured}
-              googleDocsConnected={googleDocsConnected}
-              googleDocsUserEmail={googleDocsUserEmail}
-              googleDocsLoading={googleDocsLoading}
-              googleDocsDisconnectLoading={googleDocsDisconnectLoading}
-              onConnectGoogleDocs={handleConnectGoogleDocs}
-              onDisconnectGoogleDocs={handleDisconnectGoogleDocs}
-            />
-
-            <ExtractionForm
-              url={url}
-              isProcessing={isProcessing}
-              urlError={urlError}
-              onUrlChange={setUrl}
-              onExtract={handleExtract}
-            />
-
-            <HistoryPanel
-              history={history}
-              filteredHistory={filteredHistory}
-              historyLoading={historyLoading}
-              historyQuery={historyQuery}
-              pdfExportLoading={isExportingPdf}
-              notionConfigured={notionConfigured}
-              notionConnected={notionConnected}
-              notionLoading={notionLoading}
-              notionExportLoading={notionExportLoading}
-              trelloConfigured={trelloConfigured}
-              trelloConnected={trelloConnected}
-              trelloLoading={trelloLoading}
-              trelloExportLoading={trelloExportLoading}
-              todoistConfigured={todoistConfigured}
-              todoistConnected={todoistConnected}
-              todoistLoading={todoistLoading}
-              todoistExportLoading={todoistExportLoading}
-              googleDocsConfigured={googleDocsConfigured}
-              googleDocsConnected={googleDocsConnected}
-              googleDocsLoading={googleDocsLoading}
-              googleDocsExportLoading={googleDocsExportLoading}
-              deletingHistoryItemId={deletingHistoryItemId}
-              clearingHistory={clearingHistory}
-              onHistoryQueryChange={setHistoryQuery}
-              onRefresh={() => void loadHistory()}
-              onSelectItem={openHistoryItem}
-              onDownloadPdf={(item) => void handleDownloadPdf(item)}
-              onExportToNotion={(item) => void handleExportToNotion(item.id)}
-              onConnectNotion={handleConnectNotion}
-              onExportToTrello={(item) => void handleExportToTrello(item.id)}
-              onConnectTrello={handleConnectTrello}
-              onExportToTodoist={(item) => void handleExportToTodoist(item.id)}
-              onConnectTodoist={handleConnectTodoist}
-              onExportToGoogleDocs={(item) => void handleExportToGoogleDocs(item.id)}
-              onConnectGoogleDocs={handleConnectGoogleDocs}
-              onDeleteItem={(item) => void handleDeleteHistoryItem(item)}
-              onClearHistory={() => void handleClearHistory()}
-            />
-
-            {isProcessing && (
-              <div className="max-w-2xl mx-auto mb-10 bg-indigo-50 border border-indigo-100 rounded-xl p-4 dark:bg-indigo-900/20 dark:border-indigo-800">
-                <p className="text-sm text-indigo-700 font-medium animate-pulse dark:text-indigo-300">
-                  {streamStatus ?? 'Obteniendo transcripción y procesando con IA...'}
-                </p>
-                {streamPreview && (
-                  <pre className="mt-3 text-xs text-slate-700 bg-white border border-indigo-100 rounded-lg p-3 max-h-56 overflow-auto whitespace-pre-wrap break-words dark:text-slate-300 dark:bg-slate-800 dark:border-indigo-800">
-                    {streamPreview}
-                  </pre>
+                {isProcessing && (
+                  <div className="mx-auto mt-1 mb-8 w-full max-w-3xl rounded-xl border border-indigo-100 bg-indigo-50 p-4 dark:border-indigo-800 dark:bg-indigo-900/20">
+                    <p className="animate-pulse text-sm font-medium text-indigo-700 dark:text-indigo-300">
+                      {streamStatus ?? 'Obteniendo transcripción y procesando con IA...'}
+                    </p>
+                    {streamPreview && (
+                      <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-indigo-100 bg-white p-3 text-xs text-slate-700 dark:border-indigo-800 dark:bg-slate-800 dark:text-slate-300">
+                        {streamPreview}
+                      </pre>
+                    )}
+                  </div>
                 )}
+              </div>
+            </section>
+
+            {result && (
+              <div ref={resultAnchorRef} className="scroll-mt-24">
+                <ResultPanel
+                  result={result}
+                  url={url}
+                  extractionMode={extractionMode}
+                  isProcessing={isProcessing}
+                  activePhase={activePhase}
+                  onTogglePhase={togglePhase}
+                  isExportingPdf={isExportingPdf}
+                  shareLoading={shareLoading}
+                  shareCopied={shareCopied}
+                  notionConfigured={notionConfigured}
+                  notionConnected={notionConnected}
+                  notionWorkspaceName={notionWorkspaceName}
+                  notionLoading={notionLoading}
+                  notionExportLoading={notionExportLoading}
+                  trelloConfigured={trelloConfigured}
+                  trelloConnected={trelloConnected}
+                  trelloUsername={trelloUsername}
+                  trelloLoading={trelloLoading}
+                  trelloExportLoading={trelloExportLoading}
+                  todoistConfigured={todoistConfigured}
+                  todoistConnected={todoistConnected}
+                  todoistUserLabel={todoistUserLabel}
+                  todoistLoading={todoistLoading}
+                  todoistExportLoading={todoistExportLoading}
+                  googleDocsConfigured={googleDocsConfigured}
+                  googleDocsConnected={googleDocsConnected}
+                  googleDocsUserEmail={googleDocsUserEmail}
+                  googleDocsLoading={googleDocsLoading}
+                  googleDocsExportLoading={googleDocsExportLoading}
+                  onDownloadPdf={handleDownloadPdf}
+                  onCopyShareLink={handleCopyShareLink}
+                  onCopyMarkdown={handleCopyNotion}
+                  onExportToNotion={() => handleExportToNotion(result.id)}
+                  onConnectNotion={handleConnectNotion}
+                  onExportToTrello={() => handleExportToTrello(result.id)}
+                  onConnectTrello={handleConnectTrello}
+                  onExportToTodoist={() => handleExportToTodoist(result.id)}
+                  onConnectTodoist={handleConnectTodoist}
+                  onExportToGoogleDocs={() => handleExportToGoogleDocs(result.id)}
+                  onConnectGoogleDocs={handleConnectGoogleDocs}
+                  onReExtractMode={(mode) => {
+                    handleScrollToExtractor()
+                    void handleExtract({
+                      url: (result.url ?? url).trim(),
+                      mode,
+                    })
+                  }}
+                />
               </div>
             )}
 
-            {notice && (
-              <div className="max-w-2xl mx-auto mb-10 bg-emerald-50 border border-emerald-200 rounded-xl p-4 dark:bg-emerald-900/20 dark:border-emerald-800">
-                <p className="text-sm text-emerald-700 dark:text-emerald-400">{notice}</p>
-              </div>
-            )}
+            <div ref={historyAnchorRef} className="scroll-mt-24 pt-6 md:pt-10">
+              <HistoryPanel
+                history={history}
+                filteredHistory={filteredHistory}
+                historyLoading={historyLoading}
+                historyQuery={historyQuery}
+                pdfExportLoading={isExportingPdf}
+                notionConfigured={notionConfigured}
+                notionConnected={notionConnected}
+                notionLoading={notionLoading}
+                notionExportLoading={notionExportLoading}
+                trelloConfigured={trelloConfigured}
+                trelloConnected={trelloConnected}
+                trelloLoading={trelloLoading}
+                trelloExportLoading={trelloExportLoading}
+                todoistConfigured={todoistConfigured}
+                todoistConnected={todoistConnected}
+                todoistLoading={todoistLoading}
+                todoistExportLoading={todoistExportLoading}
+                googleDocsConfigured={googleDocsConfigured}
+                googleDocsConnected={googleDocsConnected}
+                googleDocsLoading={googleDocsLoading}
+                googleDocsExportLoading={googleDocsExportLoading}
+                deletingHistoryItemId={deletingHistoryItemId}
+                clearingHistory={clearingHistory}
+                onHistoryQueryChange={setHistoryQuery}
+                onRefresh={() => void loadHistory()}
+                onSelectItem={openHistoryItem}
+                onDownloadPdf={(item) => void handleDownloadPdf(item)}
+                onExportToNotion={(item) => void handleExportToNotion(item.id)}
+                onConnectNotion={handleConnectNotion}
+                onExportToTrello={(item) => void handleExportToTrello(item.id)}
+                onConnectTrello={handleConnectTrello}
+                onExportToTodoist={(item) => void handleExportToTodoist(item.id)}
+                onConnectTodoist={handleConnectTodoist}
+                onExportToGoogleDocs={(item) => void handleExportToGoogleDocs(item.id)}
+                onConnectGoogleDocs={handleConnectGoogleDocs}
+                onDeleteItem={(item) => void handleDeleteHistoryItem(item)}
+                onClearHistory={() => void handleClearHistory()}
+              />
+            </div>
 
             {error && (
               <div className="max-w-2xl mx-auto mb-10 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3 dark:bg-red-900/20 dark:border-red-800">
@@ -1197,81 +1370,36 @@ function ActionExtractor() {
               </div>
             )}
 
-            {!result && !isProcessing && !error && (
-              <div className="grid md:grid-cols-3 gap-4 text-center">
-                <div className="p-5 rounded-2xl border border-slate-200 bg-white dark:bg-slate-900 dark:border-slate-800">
-                  <div className="w-12 h-12 bg-emerald-100 dark:bg-emerald-900/30 rounded-2xl mx-auto mb-4 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
-                    <Clock size={24} />
-                  </div>
-                  <h3 className="font-semibold text-slate-800 dark:text-slate-100">Ahorra Horas</h3>
-                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">De 2 horas de video a 3 minutos de lectura.</p>
-                </div>
-                <div className="p-5 rounded-2xl border border-slate-200 bg-white dark:bg-slate-900 dark:border-slate-800">
-                  <div className="w-12 h-12 bg-indigo-100 dark:bg-indigo-900/30 rounded-2xl mx-auto mb-4 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
-                    <CheckSquare size={24} />
-                  </div>
-                  <h3 className="font-semibold text-slate-800 dark:text-slate-100">Acción Pura</h3>
-                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Sin relleno. Solo los pasos que generan ROI.</p>
-                </div>
-                <div className="p-5 rounded-2xl border border-slate-200 bg-white dark:bg-slate-900 dark:border-slate-800">
-                  <div className="w-12 h-12 bg-violet-100 dark:bg-violet-900/30 rounded-2xl mx-auto mb-4 flex items-center justify-center text-violet-600 dark:text-violet-400">
-                    <Copy size={24} />
-                  </div>
-                  <h3 className="font-semibold text-slate-800 dark:text-slate-100">Exporta Fácil</h3>
-                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Exporta en un click a Notion, Trello, Todoist o Google Docs.</p>
-                </div>
-              </div>
-            )}
+            <button
+              type="button"
+              onClick={handleScrollToExtractor}
+              aria-label="Volver al extractor"
+              className={`fixed bottom-6 right-4 z-40 inline-flex items-center gap-2 rounded-full border border-violet-400/70 bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_22px_44px_-18px_rgba(79,70,229,0.8)] transition-all duration-300 hover:-translate-y-0.5 hover:from-violet-500 hover:to-indigo-500 md:right-6 ${
+                showBackToExtractorButton
+                  ? 'pointer-events-auto translate-y-0 opacity-100'
+                  : 'pointer-events-none translate-y-3 opacity-0'
+              }`}
+            >
+              <ArrowUp size={16} />
+              <span className="hidden sm:inline">Volver al extractor</span>
+              <span className="sm:hidden">Inicio</span>
+            </button>
 
             {result && (
-              <ResultPanel
-                result={result}
-                url={url}
-                extractionMode={extractionMode}
-                isProcessing={isProcessing}
-                activePhase={activePhase}
-                onTogglePhase={togglePhase}
-                isExportingPdf={isExportingPdf}
-                shareLoading={shareLoading}
-                shareCopied={shareCopied}
-                notionConfigured={notionConfigured}
-                notionConnected={notionConnected}
-                notionWorkspaceName={notionWorkspaceName}
-                notionLoading={notionLoading}
-                notionExportLoading={notionExportLoading}
-                trelloConfigured={trelloConfigured}
-                trelloConnected={trelloConnected}
-                trelloUsername={trelloUsername}
-                trelloLoading={trelloLoading}
-                trelloExportLoading={trelloExportLoading}
-                todoistConfigured={todoistConfigured}
-                todoistConnected={todoistConnected}
-                todoistUserLabel={todoistUserLabel}
-                todoistLoading={todoistLoading}
-                todoistExportLoading={todoistExportLoading}
-                googleDocsConfigured={googleDocsConfigured}
-                googleDocsConnected={googleDocsConnected}
-                googleDocsUserEmail={googleDocsUserEmail}
-                googleDocsLoading={googleDocsLoading}
-                googleDocsExportLoading={googleDocsExportLoading}
-                onDownloadPdf={handleDownloadPdf}
-                onCopyShareLink={handleCopyShareLink}
-                onCopyMarkdown={handleCopyNotion}
-                onExportToNotion={() => void handleExportToNotion(result.id)}
-                onConnectNotion={handleConnectNotion}
-                onExportToTrello={() => void handleExportToTrello(result.id)}
-                onConnectTrello={handleConnectTrello}
-                onExportToTodoist={() => void handleExportToTodoist(result.id)}
-                onConnectTodoist={handleConnectTodoist}
-                onExportToGoogleDocs={() => void handleExportToGoogleDocs(result.id)}
-                onConnectGoogleDocs={handleConnectGoogleDocs}
-                onReExtractMode={(mode) =>
-                  void handleExtract({
-                    url: (result.url ?? url).trim(),
-                    mode,
-                  })
-                }
-              />
+              <button
+                type="button"
+                onClick={handleScrollToHistory}
+                aria-label="Ir al historial de extracciones"
+                className={`fixed bottom-6 left-4 z-40 inline-flex items-center gap-2 rounded-full border border-cyan-300/80 bg-gradient-to-r from-cyan-500 to-teal-500 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_22px_44px_-18px_rgba(13,148,136,0.85)] transition-all duration-300 hover:-translate-y-0.5 hover:from-cyan-400 hover:to-teal-400 md:left-6 ${
+                  showGoToHistoryButton
+                    ? 'pointer-events-auto translate-y-0 opacity-100'
+                    : 'pointer-events-none translate-y-3 opacity-0'
+                }`}
+              >
+                <History size={16} />
+                <span className="hidden sm:inline">Ir al historial</span>
+                <span className="sm:hidden">Historial</span>
+              </button>
             )}
 
             {reauthRequired && !user && (

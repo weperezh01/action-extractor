@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import type { ReadonlyURLSearchParams } from 'next/navigation'
 import type { AuthMode, SessionUser } from '@/app/home/lib/types'
 
+const SESSION_REQUEST_TIMEOUT_MS = 10000
+
 interface UseAuthParams {
   searchParams: ReadonlyURLSearchParams
   resetTokenFromUrl: string | null
@@ -46,12 +48,22 @@ export function useAuth({
 
   const loadSession = useCallback(async () => {
     setSessionLoading(true)
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), SESSION_REQUEST_TIMEOUT_MS)
+
     try {
-      const res = await fetch('/api/auth/session', { cache: 'no-store' })
-      const data = await res.json()
+      const res = await fetch('/api/auth/session', {
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+      const data = await res.json().catch(() => null)
+
       if (res.ok && data.user) {
         setUser(data.user as SessionUser)
-        await onAuthenticated()
+        // Do not block the main app shell while history loads.
+        void Promise.resolve(onAuthenticated()).catch(() => {
+          // noop: auth shell should remain usable even if secondary data fails
+        })
       } else {
         setUser(null)
         onSessionMissing()
@@ -60,6 +72,7 @@ export function useAuth({
       setUser(null)
       onSessionMissing()
     } finally {
+      clearTimeout(timeoutId)
       setSessionLoading(false)
     }
   }, [onAuthenticated, onSessionMissing])

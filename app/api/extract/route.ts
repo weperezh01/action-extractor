@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { YoutubeTranscript } from '@danielxceron/youtube-transcript'
 import { getUserFromRequest } from '@/lib/auth'
-import { createExtraction, findVideoCacheByVideoId, upsertVideoCache } from '@/lib/db'
+import {
+  createExtraction,
+  findAnyVideoCacheByVideoId,
+  findVideoCacheByVideoId,
+  upsertVideoCache,
+} from '@/lib/db'
 import { classifyModelError, classifyTranscriptError, retryWithBackoff } from '@/lib/extract-resilience'
 import {
   buildExtractionUserPrompt,
@@ -41,6 +46,39 @@ function safeParse<T>(value: string, fallback: T): T {
   } catch {
     return fallback
   }
+}
+
+function buildTranscriptFallbackFromCachedExtraction(cachedVideo: {
+  objective: string
+  phases_json: string
+  pro_tip: string
+}) {
+  const phases = safeParse<Array<{ title?: unknown; items?: unknown }>>(cachedVideo.phases_json, [])
+  const phaseLines = phases
+    .map((phase, index) => {
+      const title = typeof phase.title === 'string' && phase.title.trim() ? phase.title.trim() : `Fase ${index + 1}`
+      const items = Array.isArray(phase.items)
+        ? phase.items
+            .filter(
+              (item): item is string => typeof item === 'string' && item.trim().length > 0
+            )
+            .slice(0, 5)
+        : []
+      if (items.length === 0) {
+        return `- ${title}`
+      }
+      return [`- ${title}`, ...items.map((item) => `  - ${item}`)].join('\n')
+    })
+    .join('\n')
+
+  return [
+    'Resumen previo del mismo video:',
+    `Objetivo: ${cachedVideo.objective}`,
+    phaseLines,
+    `Consejo Pro: ${cachedVideo.pro_tip}`,
+  ]
+    .filter((line) => line.trim().length > 0)
+    .join('\n')
 }
 
 function createRateLimitResponse(rateLimit: UserExtractionRateLimitResult) {
@@ -232,6 +270,7 @@ export async function POST(req: NextRequest) {
       promptVersion,
       model: EXTRACTION_MODEL,
     })
+    const fallbackVideoCache = cachedVideo ?? (await findAnyVideoCacheByVideoId(videoId))
 
     if (cachedVideo) {
       const cachedMetadata = safeParse(cachedVideo.metadata_json, {
@@ -272,6 +311,7 @@ export async function POST(req: NextRequest) {
           phasesJson: JSON.stringify(responsePayload.phases),
           proTip: responsePayload.proTip,
           metadataJson: JSON.stringify(responsePayload.metadata),
+          transcriptText: cachedVideo.transcript_text,
           promptVersion,
           model: EXTRACTION_MODEL,
         })
@@ -316,27 +356,46 @@ export async function POST(req: NextRequest) {
       return createRateLimitResponse(rateLimit)
     }
 
-    // Fetch transcript con retry automático
-    let transcriptText = ''
-    try {
-      const segments = await retryWithBackoff(() => YoutubeTranscript.fetchTranscript(videoId), {
-        maxAttempts: 3,
-        shouldRetry: (transcriptError) => classifyTranscriptError(transcriptError).retryable,
-      })
+    // Fetch transcript con retry automático, con fallback a transcripción cacheada
+    let transcriptText = fallbackVideoCache?.transcript_text?.trim() ?? ''
+    let transcriptSource: 'cache_transcript' | 'youtube' | 'cache_result' = transcriptText
+      ? 'cache_transcript'
+      : 'youtube'
+    const transcriptFallbackFromCache = fallbackVideoCache
+      ? buildTranscriptFallbackFromCachedExtraction(fallbackVideoCache)
+      : ''
+    if (!transcriptText) {
+      try {
+        const segments = await retryWithBackoff(() => YoutubeTranscript.fetchTranscript(videoId), {
+          maxAttempts: 3,
+          shouldRetry: (transcriptError) => classifyTranscriptError(transcriptError).retryable,
+        })
 
-      if (!segments.length) {
-        return NextResponse.json(
-          {
-            error: 'No se encontró transcripción utilizable para este video. Prueba con otro enlace.',
-          },
-          { status: 422 }
-        )
+        if (!segments.length) {
+          if (transcriptFallbackFromCache) {
+            transcriptText = transcriptFallbackFromCache
+            transcriptSource = 'cache_result'
+          } else {
+            return NextResponse.json(
+              {
+                error: 'No se encontró transcripción utilizable para este video. Prueba con otro enlace.',
+              },
+              { status: 422 }
+            )
+          }
+        } else {
+          transcriptText = segments.map((segment) => segment.text).join(' ')
+          transcriptSource = 'youtube'
+        }
+      } catch (error: unknown) {
+        if (transcriptFallbackFromCache) {
+          transcriptText = transcriptFallbackFromCache
+          transcriptSource = 'cache_result'
+        } else {
+          const transcriptError = classifyTranscriptError(error)
+          return NextResponse.json({ error: transcriptError.message }, { status: transcriptError.status })
+        }
       }
-
-      transcriptText = segments.map((segment) => segment.text).join(' ')
-    } catch (error: unknown) {
-      const transcriptError = classifyTranscriptError(error)
-      return NextResponse.json({ error: transcriptError.message }, { status: transcriptError.status })
     }
 
     if (!transcriptText.trim()) {
@@ -418,6 +477,7 @@ export async function POST(req: NextRequest) {
       phasesJson: JSON.stringify(responsePayload.phases),
       proTip: responsePayload.proTip,
       metadataJson: JSON.stringify(responsePayload.metadata),
+      transcriptText: transcriptSource === 'cache_result' ? null : transcriptText,
       promptVersion,
       model: EXTRACTION_MODEL,
     })

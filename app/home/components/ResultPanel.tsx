@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import {
   Brain,
   CheckCircle2,
@@ -54,22 +55,22 @@ interface ResultPanelProps {
   googleDocsLoading: boolean
   googleDocsExportLoading: boolean
 
-  onDownloadPdf: () => void
-  onCopyShareLink: () => void
-  onCopyMarkdown: () => void
+  onDownloadPdf: () => void | Promise<void>
+  onCopyShareLink: () => void | Promise<void>
+  onCopyMarkdown: () => void | Promise<void>
   onReExtractMode: (mode: ExtractionMode) => void
 
-  onExportToNotion: () => void
-  onConnectNotion: () => void
+  onExportToNotion: () => void | Promise<void>
+  onConnectNotion: () => void | Promise<void>
 
-  onExportToTrello: () => void
-  onConnectTrello: () => void
+  onExportToTrello: () => void | Promise<void>
+  onConnectTrello: () => void | Promise<void>
 
-  onExportToTodoist: () => void
-  onConnectTodoist: () => void
+  onExportToTodoist: () => void | Promise<void>
+  onConnectTodoist: () => void | Promise<void>
 
-  onExportToGoogleDocs: () => void
-  onConnectGoogleDocs: () => void
+  onExportToGoogleDocs: () => void | Promise<void>
+  onConnectGoogleDocs: () => void | Promise<void>
 }
 
 export function ResultPanel({
@@ -126,6 +127,143 @@ export function ResultPanel({
 }: ResultPanelProps) {
   const resolvedMode = normalizeExtractionMode(result.mode ?? extractionMode)
   const sourceUrl = (result.url ?? url).trim()
+  const [isActionsExpanded, setIsActionsExpanded] = useState(false)
+  const [collapseAfterAsyncAction, setCollapseAfterAsyncAction] = useState(false)
+  const asyncActionLoadingRef = useRef(false)
+  const [isReextractExpanded, setIsReextractExpanded] = useState(false)
+  const [collapseAfterReextract, setCollapseAfterReextract] = useState(false)
+  const reextractProcessingRef = useRef(false)
+  const rightControlsRef = useRef<HTMLDivElement | null>(null)
+  const isAnyActionLoading =
+    isExportingPdf ||
+    shareLoading ||
+    notionLoading ||
+    notionExportLoading ||
+    trelloLoading ||
+    trelloExportLoading ||
+    todoistLoading ||
+    todoistExportLoading ||
+    googleDocsLoading ||
+    googleDocsExportLoading
+
+  useEffect(() => {
+    if (!collapseAfterAsyncAction) return
+
+    if (isAnyActionLoading) {
+      asyncActionLoadingRef.current = true
+      return
+    }
+
+    if (!asyncActionLoadingRef.current) return
+
+    setIsActionsExpanded(false)
+    setCollapseAfterAsyncAction(false)
+    asyncActionLoadingRef.current = false
+  }, [collapseAfterAsyncAction, isAnyActionLoading])
+
+  useEffect(() => {
+    if (!collapseAfterReextract) return
+
+    if (isProcessing) {
+      reextractProcessingRef.current = true
+      return
+    }
+
+    if (!reextractProcessingRef.current) return
+
+    setIsReextractExpanded(false)
+    setCollapseAfterReextract(false)
+    reextractProcessingRef.current = false
+  }, [collapseAfterReextract, isProcessing])
+
+  useEffect(() => {
+    if (!isActionsExpanded && !isReextractExpanded) return
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+
+      const controls = rightControlsRef.current
+      if (!controls || controls.contains(target)) return
+
+      setIsActionsExpanded(false)
+      setIsReextractExpanded(false)
+      setCollapseAfterAsyncAction(false)
+      setCollapseAfterReextract(false)
+      asyncActionLoadingRef.current = false
+      reextractProcessingRef.current = false
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+    }
+  }, [isActionsExpanded, isReextractExpanded])
+
+  const collapseActionsSection = () => {
+    setIsActionsExpanded(false)
+    setCollapseAfterAsyncAction(false)
+    asyncActionLoadingRef.current = false
+  }
+
+  const triggerAsyncAction = (action: () => void | Promise<void>) => {
+    const maybePromise = action()
+    if (maybePromise && typeof (maybePromise as PromiseLike<void>).then === 'function') {
+      void Promise.resolve(maybePromise).finally(() => {
+        collapseActionsSection()
+      })
+      return
+    }
+
+    setCollapseAfterAsyncAction(true)
+    asyncActionLoadingRef.current = false
+  }
+
+  const triggerInstantAction = (action: () => void | Promise<void>) => {
+    const maybePromise = action()
+    if (maybePromise && typeof (maybePromise as PromiseLike<void>).then === 'function') {
+      void Promise.resolve(maybePromise).finally(() => {
+        collapseActionsSection()
+      })
+      return
+    }
+
+    collapseActionsSection()
+  }
+
+  const triggerReextractMode = (mode: ExtractionMode) => {
+    setCollapseAfterReextract(true)
+    reextractProcessingRef.current = false
+    onReExtractMode(mode)
+  }
+
+  const handleToggleActions = () => {
+    setCollapseAfterAsyncAction(false)
+    asyncActionLoadingRef.current = false
+    setIsActionsExpanded((previous) => {
+      const next = !previous
+      if (next) {
+        setIsReextractExpanded(false)
+        setCollapseAfterReextract(false)
+        reextractProcessingRef.current = false
+      }
+      return next
+    })
+  }
+
+  const handleToggleReextract = () => {
+    setCollapseAfterReextract(false)
+    reextractProcessingRef.current = false
+    setIsReextractExpanded((previous) => {
+      const next = !previous
+      if (next) {
+        setIsActionsExpanded(false)
+        setCollapseAfterAsyncAction(false)
+        asyncActionLoadingRef.current = false
+      }
+      return next
+    })
+  }
 
   return (
     <div className="animate-fade-slide">
@@ -146,29 +284,314 @@ export function ResultPanel({
           <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
             Video Fuente
           </h2>
-          <div className="flex flex-col md:flex-row gap-4">
-            {result.thumbnailUrl ? (
-              <div className="relative w-full md:w-56 h-32">
-                <Image
-                  src={result.thumbnailUrl}
-                  alt={result.videoTitle ?? 'Miniatura del video'}
-                  fill
-                  sizes="(min-width: 768px) 224px, 100vw"
-                  className="rounded-xl object-cover border border-slate-200 dark:border-slate-700"
-                />
-              </div>
-            ) : (
-              <div className="w-full md:w-56 h-32 rounded-xl bg-slate-100 border border-slate-200 dark:bg-slate-800 dark:border-slate-700" />
-            )}
-            <div className="min-w-0 flex-1">
-              <p className="font-semibold text-slate-800 text-base line-clamp-2 dark:text-slate-100">
-                {result.videoTitle || 'Video de YouTube'}
-              </p>
-              {sourceUrl && (
-                <p className="text-xs text-slate-500 mt-2 break-all dark:text-slate-400">
-                  {sourceUrl}
-                </p>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+            <div className="flex min-w-0 flex-1 flex-col gap-4 md:flex-row">
+              {result.thumbnailUrl ? (
+                <div className="relative h-32 w-full md:w-56">
+                  <Image
+                    src={result.thumbnailUrl}
+                    alt={result.videoTitle ?? 'Miniatura del video'}
+                    fill
+                    sizes="(min-width: 768px) 224px, 100vw"
+                    className="rounded-xl object-cover border border-slate-200 dark:border-slate-700"
+                  />
+                </div>
+              ) : (
+                <div className="h-32 w-full rounded-xl bg-slate-100 border border-slate-200 md:w-56 dark:bg-slate-800 dark:border-slate-700" />
               )}
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-slate-800 text-base line-clamp-2 dark:text-slate-100">
+                  {result.videoTitle || 'Video de YouTube'}
+                </p>
+                {sourceUrl && (
+                  <p className="text-xs text-slate-500 mt-2 break-all dark:text-slate-400">
+                    {sourceUrl}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="w-full lg:w-[22rem] lg:shrink-0">
+              <div ref={rightControlsRef} className="flex flex-col gap-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50/90 p-3.5 dark:border-slate-700 dark:bg-slate-800/45">
+                <button
+                  type="button"
+                  onClick={handleToggleActions}
+                  aria-expanded={isActionsExpanded}
+                  className="flex w-full items-center justify-between gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-slate-100/70 dark:hover:bg-slate-700/30"
+                >
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                      Acciones y Exportación
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">
+                      {isActionsExpanded
+                        ? 'Selecciona una acción o exportación.'
+                        : 'Haz clic para desplegar opciones.'}
+                    </p>
+                  </div>
+                  <ChevronDown
+                    size={16}
+                    className={`text-slate-500 transition-transform duration-500 ease-out dark:text-slate-300 ${
+                      isActionsExpanded ? 'rotate-180' : 'rotate-0'
+                    }`}
+                  />
+                </button>
+
+                <div
+                  aria-hidden={!isActionsExpanded}
+                  className={`grid transition-[grid-template-rows,opacity,margin-top] duration-700 ease-out ${
+                    isActionsExpanded
+                      ? 'visible mt-3 grid-rows-[1fr] opacity-100'
+                      : 'invisible mt-0 grid-rows-[0fr] opacity-0 pointer-events-none'
+                  }`}
+                >
+                  <div className="overflow-hidden">
+                    <div
+                      className={`transition-transform duration-700 ease-out ${
+                        isActionsExpanded ? 'translate-y-0' : '-translate-y-2'
+                      }`}
+                    >
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-1">
+                        <button
+                          onClick={() => triggerAsyncAction(onDownloadPdf)}
+                          disabled={isExportingPdf}
+                          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-wait disabled:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                        >
+                          <Download size={15} />
+                          {isExportingPdf ? 'Generando...' : 'Guardar PDF'}
+                        </button>
+
+                        <button
+                          onClick={() => triggerAsyncAction(onCopyShareLink)}
+                          disabled={!result.id || shareLoading}
+                          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-wait disabled:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                        >
+                          <Share2 size={15} />
+                          {shareLoading ? 'Generando...' : shareCopied ? 'Copiado' : 'Compartir'}
+                        </button>
+
+                        <button
+                          onClick={() => triggerInstantAction(onCopyMarkdown)}
+                          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                        >
+                          <Copy size={15} />
+                          Copiar Markdown
+                        </button>
+                      </div>
+
+                      <div className="mt-3 border-t border-slate-200 pt-3 dark:border-slate-700">
+                        <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                          Integraciones
+                        </p>
+
+                        <div className="mt-2 grid grid-cols-1 gap-2">
+                          {notionConnected ? (
+                            <button
+                              onClick={() => triggerAsyncAction(onExportToNotion)}
+                              disabled={!result.id || notionExportLoading}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {notionExportLoading ? 'Exportando a Notion...' : 'Exportar a Notion'}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => triggerAsyncAction(onConnectNotion)}
+                              disabled={notionLoading || !notionConfigured}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {notionLoading
+                                ? 'Conectando Notion...'
+                                : notionConfigured
+                                  ? 'Conectar Notion'
+                                  : 'Notion no configurado'}
+                            </button>
+                          )}
+
+                          {trelloConnected ? (
+                            <button
+                              onClick={() => triggerAsyncAction(onExportToTrello)}
+                              disabled={!result.id || trelloExportLoading}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-sky-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-sky-700 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {trelloExportLoading ? 'Exportando a Trello...' : 'Exportar a Trello'}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => triggerAsyncAction(onConnectTrello)}
+                              disabled={trelloLoading || !trelloConfigured}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {trelloLoading
+                                ? 'Conectando Trello...'
+                                : trelloConfigured
+                                  ? 'Conectar Trello'
+                                  : 'Trello no configurado'}
+                            </button>
+                          )}
+
+                          {todoistConnected ? (
+                            <button
+                              onClick={() => triggerAsyncAction(onExportToTodoist)}
+                              disabled={!result.id || todoistExportLoading}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-rose-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-rose-700 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {todoistExportLoading ? 'Exportando a Todoist...' : 'Exportar a Todoist'}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => triggerAsyncAction(onConnectTodoist)}
+                              disabled={todoistLoading || !todoistConfigured}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {todoistLoading
+                                ? 'Conectando Todoist...'
+                                : todoistConfigured
+                                  ? 'Conectar Todoist'
+                                  : 'Todoist no configurado'}
+                            </button>
+                          )}
+
+                          {googleDocsConnected ? (
+                            <button
+                              onClick={() => triggerAsyncAction(onExportToGoogleDocs)}
+                              disabled={!result.id || googleDocsExportLoading}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {googleDocsExportLoading
+                                ? 'Exportando a Google Docs...'
+                                : 'Exportar a Google Docs'}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => triggerAsyncAction(onConnectGoogleDocs)}
+                              disabled={googleDocsLoading || !googleDocsConfigured}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {googleDocsLoading
+                                ? 'Conectando Google Docs...'
+                                : googleDocsConfigured
+                                  ? 'Conectar Google Docs'
+                                  : 'Google Docs no configurado'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {notionConnected && notionWorkspaceName && (
+                          <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                            Notion: {notionWorkspaceName}
+                          </span>
+                        )}
+                        {trelloConnected && trelloUsername && (
+                          <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                            Trello: @{trelloUsername}
+                          </span>
+                        )}
+                        {todoistConnected && todoistUserLabel && (
+                          <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                            Todoist: {todoistUserLabel}
+                          </span>
+                        )}
+                        {googleDocsConnected && googleDocsUserEmail && (
+                          <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                            Google: {googleDocsUserEmail}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                </div>
+
+                {sourceUrl && (
+                  <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 dark:border-indigo-900/60 dark:bg-indigo-950/20">
+                    <button
+                      type="button"
+                      onClick={handleToggleReextract}
+                      aria-expanded={isReextractExpanded}
+                      className="flex w-full items-center justify-between gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-indigo-100/70 dark:hover:bg-indigo-900/20"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
+                          Re-extraer en otro modo
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-indigo-500/90 dark:text-indigo-300/80">
+                          {isReextractExpanded
+                            ? 'Selecciona un modo para generar una nueva extracción.'
+                            : 'Haz clic para desplegar opciones.'}
+                        </p>
+                      </div>
+                      <ChevronDown
+                        size={16}
+                        className={`text-indigo-500 transition-transform duration-500 ease-out dark:text-indigo-300 ${
+                          isReextractExpanded ? 'rotate-180' : 'rotate-0'
+                        }`}
+                      />
+                    </button>
+
+                    <div
+                      aria-hidden={!isReextractExpanded}
+                      className={`grid transition-[grid-template-rows,opacity,margin-top] duration-700 ease-out ${
+                        isReextractExpanded
+                          ? 'visible mt-3 grid-rows-[1fr] opacity-100'
+                          : 'invisible mt-0 grid-rows-[0fr] opacity-0 pointer-events-none'
+                      }`}
+                    >
+                      <div className="overflow-hidden">
+                        <div
+                          className={`transition-transform duration-700 ease-out ${
+                            isReextractExpanded ? 'translate-y-0' : '-translate-y-2'
+                          }`}
+                        >
+                          <p className="text-sm text-slate-600 dark:text-slate-300">
+                            Usa este mismo video sin copiar la URL para descubrir los otros modos.
+                          </p>
+
+                          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            {EXTRACTION_MODE_OPTIONS.map((option) => {
+                              const isActive = option.value === resolvedMode
+                              const isDisabled = isProcessing || isActive
+
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  onClick={() => triggerReextractMode(option.value)}
+                                  disabled={isDisabled}
+                                  className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                                    isActive
+                                      ? 'border-indigo-300 bg-white text-indigo-700 dark:border-indigo-700 dark:bg-slate-900 dark:text-indigo-300'
+                                      : isProcessing
+                                        ? 'cursor-wait border-slate-200 bg-slate-100 text-slate-400 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-500'
+                                        : 'border-indigo-100 bg-white text-slate-700 hover:border-indigo-300 hover:bg-indigo-100/60 dark:border-indigo-900/60 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-indigo-700 dark:hover:bg-indigo-950/40'
+                                  }`}
+                                >
+                                  <p className="text-sm font-semibold">
+                                    {option.label}
+                                    {isActive ? ' (actual)' : ''}
+                                  </p>
+                                  <p className="mt-0.5 text-xs opacity-80">{option.description}</p>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -181,48 +604,6 @@ export function ResultPanel({
             {result.objective}
           </p>
         </div>
-
-        {sourceUrl && (
-          <div className="px-6 pt-6">
-            <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 dark:border-indigo-900/60 dark:bg-indigo-950/20">
-              <p className="text-xs font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
-                Re-extraer en otro modo
-              </p>
-              <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                Usa este mismo video sin copiar la URL para descubrir los otros modos.
-              </p>
-
-              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {EXTRACTION_MODE_OPTIONS.map((option) => {
-                  const isActive = option.value === resolvedMode
-                  const isDisabled = isProcessing || isActive
-
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => onReExtractMode(option.value)}
-                      disabled={isDisabled}
-                      className={`rounded-lg border px-3 py-2 text-left transition-colors ${
-                        isActive
-                          ? 'border-indigo-300 bg-white text-indigo-700 dark:border-indigo-700 dark:bg-slate-900 dark:text-indigo-300'
-                          : isProcessing
-                            ? 'cursor-wait border-slate-200 bg-slate-100 text-slate-400 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-500'
-                            : 'border-indigo-100 bg-white text-slate-700 hover:border-indigo-300 hover:bg-indigo-100/60 dark:border-indigo-900/60 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-indigo-700 dark:hover:bg-indigo-950/40'
-                      }`}
-                    >
-                      <p className="text-sm font-semibold">
-                        {option.label}
-                        {isActive ? ' (actual)' : ''}
-                      </p>
-                      <p className="mt-0.5 text-xs opacity-80">{option.description}</p>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          </div>
-        )}
 
         <div className="p-6 space-y-4">
           {result.phases.map((phase: Phase) => (
@@ -295,151 +676,6 @@ export function ResultPanel({
           </div>
         </div>
 
-        <div className="bg-slate-50 p-4 border-t border-slate-200 flex flex-wrap gap-3 justify-between items-center dark:bg-slate-800/30 dark:border-slate-800">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={onDownloadPdf}
-              disabled={isExportingPdf}
-              className="text-slate-500 hover:text-indigo-600 text-sm font-medium flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white hover:shadow-sm transition-all disabled:text-slate-400 disabled:cursor-wait dark:text-slate-300 dark:hover:text-indigo-300 dark:hover:bg-slate-800"
-            >
-              <Download size={16} /> {isExportingPdf ? 'Generando PDF...' : 'Guardar PDF'}
-            </button>
-            <button
-              onClick={onCopyShareLink}
-              disabled={!result.id || shareLoading}
-              className="text-slate-500 hover:text-indigo-600 text-sm font-medium flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white hover:shadow-sm transition-all disabled:text-slate-400 disabled:cursor-wait dark:text-slate-300 dark:hover:text-indigo-300 dark:hover:bg-slate-800"
-            >
-              <Share2 size={16} />
-              {shareLoading ? 'Generando link...' : shareCopied ? 'Link copiado' : 'Compartir'}
-            </button>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 justify-end">
-            {notionConnected && notionWorkspaceName && (
-              <span className="text-xs text-slate-500 px-2 py-1 rounded-md bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300">
-                Notion: {notionWorkspaceName}
-              </span>
-            )}
-            {trelloConnected && trelloUsername && (
-              <span className="text-xs text-slate-500 px-2 py-1 rounded-md bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300">
-                Trello: @{trelloUsername}
-              </span>
-            )}
-            {todoistConnected && todoistUserLabel && (
-              <span className="text-xs text-slate-500 px-2 py-1 rounded-md bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300">
-                Todoist: {todoistUserLabel}
-              </span>
-            )}
-            {googleDocsConnected && googleDocsUserEmail && (
-              <span className="text-xs text-slate-500 px-2 py-1 rounded-md bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300">
-                Google: {googleDocsUserEmail}
-              </span>
-            )}
-
-            {notionConnected ? (
-              <button
-                onClick={onExportToNotion}
-                disabled={!result.id || notionExportLoading}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-md shadow-indigo-200 transition-all transform hover:-translate-y-0.5 disabled:bg-slate-400 disabled:cursor-wait disabled:shadow-none"
-              >
-                <Zap size={16} />
-                {notionExportLoading ? 'Exportando...' : 'Exportar a Notion'}
-              </button>
-            ) : (
-              <button
-                onClick={onConnectNotion}
-                disabled={notionLoading || !notionConfigured}
-                className="bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium flex items-center gap-2 px-4 py-2.5 rounded-lg transition-all disabled:bg-slate-400 disabled:cursor-wait"
-              >
-                <Zap size={16} />
-                {notionLoading
-                  ? 'Conectando...'
-                  : notionConfigured
-                    ? 'Conectar Notion'
-                    : 'Notion no configurado'}
-              </button>
-            )}
-
-            {trelloConnected ? (
-              <button
-                onClick={onExportToTrello}
-                disabled={!result.id || trelloExportLoading}
-                className="bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-md shadow-sky-200 transition-all transform hover:-translate-y-0.5 disabled:bg-slate-400 disabled:cursor-wait disabled:shadow-none"
-              >
-                <Zap size={16} />
-                {trelloExportLoading ? 'Exportando...' : 'Exportar a Trello'}
-              </button>
-            ) : (
-              <button
-                onClick={onConnectTrello}
-                disabled={trelloLoading || !trelloConfigured}
-                className="bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium flex items-center gap-2 px-4 py-2.5 rounded-lg transition-all disabled:bg-slate-400 disabled:cursor-wait"
-              >
-                <Zap size={16} />
-                {trelloLoading
-                  ? 'Conectando...'
-                  : trelloConfigured
-                    ? 'Conectar Trello'
-                    : 'Trello no configurado'}
-              </button>
-            )}
-
-            {todoistConnected ? (
-              <button
-                onClick={onExportToTodoist}
-                disabled={!result.id || todoistExportLoading}
-                className="bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-md shadow-rose-200 transition-all transform hover:-translate-y-0.5 disabled:bg-slate-400 disabled:cursor-wait disabled:shadow-none"
-              >
-                <Zap size={16} />
-                {todoistExportLoading ? 'Exportando...' : 'Exportar a Todoist'}
-              </button>
-            ) : (
-              <button
-                onClick={onConnectTodoist}
-                disabled={todoistLoading || !todoistConfigured}
-                className="bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium flex items-center gap-2 px-4 py-2.5 rounded-lg transition-all disabled:bg-slate-400 disabled:cursor-wait"
-              >
-                <Zap size={16} />
-                {todoistLoading
-                  ? 'Conectando...'
-                  : todoistConfigured
-                    ? 'Conectar Todoist'
-                    : 'Todoist no configurado'}
-              </button>
-            )}
-
-            {googleDocsConnected ? (
-              <button
-                onClick={onExportToGoogleDocs}
-                disabled={!result.id || googleDocsExportLoading}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-md shadow-emerald-200 transition-all transform hover:-translate-y-0.5 disabled:bg-slate-400 disabled:cursor-wait disabled:shadow-none"
-              >
-                <Zap size={16} />
-                {googleDocsExportLoading ? 'Exportando...' : 'Exportar a Google Docs'}
-              </button>
-            ) : (
-              <button
-                onClick={onConnectGoogleDocs}
-                disabled={googleDocsLoading || !googleDocsConfigured}
-                className="bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium flex items-center gap-2 px-4 py-2.5 rounded-lg transition-all disabled:bg-slate-400 disabled:cursor-wait"
-              >
-                <Zap size={16} />
-                {googleDocsLoading
-                  ? 'Conectando...'
-                  : googleDocsConfigured
-                    ? 'Conectar Google Docs'
-                    : 'Google Docs no configurado'}
-              </button>
-            )}
-
-            <button
-              onClick={onCopyMarkdown}
-              className="text-slate-600 hover:text-indigo-600 text-sm font-medium flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white hover:shadow-sm transition-all dark:text-slate-300 dark:hover:text-indigo-300 dark:hover:bg-slate-800"
-            >
-              <Copy size={16} /> Copiar Markdown
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   )
