@@ -108,6 +108,35 @@ export interface DbGoogleDocsConnection {
   last_used_at: string
 }
 
+export type ExtractionTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed'
+export type ExtractionTaskEventType = 'note' | 'pending_action' | 'blocker'
+
+export interface DbExtractionTask {
+  id: string
+  extraction_id: string
+  user_id: string
+  phase_id: number
+  phase_title: string
+  item_index: number
+  item_text: string
+  checked: boolean
+  status: ExtractionTaskStatus
+  due_at: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DbExtractionTaskEvent {
+  id: string
+  task_id: string
+  user_id: string
+  event_type: ExtractionTaskEventType
+  content: string
+  metadata_json: string
+  created_at: string
+}
+
 export interface UserExtractionRateLimitUsage {
   limit: number
   used: number
@@ -280,6 +309,32 @@ interface DbGoogleDocsConnectionRow {
   created_at: Date | string
   updated_at: Date | string
   last_used_at: Date | string
+}
+
+interface DbExtractionTaskRow {
+  id: string
+  extraction_id: string
+  user_id: string
+  phase_id: number | string
+  phase_title: string
+  item_index: number | string
+  item_text: string
+  checked: boolean
+  status: ExtractionTaskStatus
+  due_at: Date | string | null
+  completed_at: Date | string | null
+  created_at: Date | string
+  updated_at: Date | string
+}
+
+interface DbExtractionTaskEventRow {
+  id: string
+  task_id: string
+  user_id: string
+  event_type: ExtractionTaskEventType
+  content: string
+  metadata_json: string
+  created_at: Date | string
 }
 
 interface DbExtractionRateLimitRow {
@@ -472,6 +527,42 @@ const INIT_SQL = `
     PRIMARY KEY (user_id, window_start)
   );
 
+  CREATE TABLE IF NOT EXISTS extraction_tasks (
+    id TEXT PRIMARY KEY,
+    extraction_id TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    phase_id INTEGER NOT NULL,
+    phase_title TEXT NOT NULL,
+    item_index INTEGER NOT NULL,
+    item_text TEXT NOT NULL,
+    checked BOOLEAN NOT NULL DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    due_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (extraction_id, phase_id, item_index)
+  );
+
+  CREATE TABLE IF NOT EXISTS extraction_task_events (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES extraction_tasks(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS checked BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS due_at TIMESTAMPTZ;
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE extraction_task_events ADD COLUMN IF NOT EXISTS metadata_json TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE extraction_task_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS video_title TEXT;
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS extraction_mode TEXT NOT NULL DEFAULT 'action_plan';
@@ -500,6 +591,11 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_todoist_connections_last_used_at ON todoist_connections(last_used_at);
   CREATE INDEX IF NOT EXISTS idx_google_docs_connections_last_used_at ON google_docs_connections(last_used_at);
   CREATE INDEX IF NOT EXISTS idx_extraction_rate_limits_window_start ON extraction_rate_limits(window_start);
+  CREATE INDEX IF NOT EXISTS idx_extraction_tasks_extraction_id ON extraction_tasks(extraction_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_tasks_user_id ON extraction_tasks(user_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_tasks_status ON extraction_tasks(status);
+  CREATE INDEX IF NOT EXISTS idx_extraction_task_events_task_id ON extraction_task_events(task_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_task_events_created_at ON extraction_task_events(created_at);
 `
 
 function getDbReadyPromise() {
@@ -665,6 +761,41 @@ function mapGoogleDocsConnectionRow(row: DbGoogleDocsConnectionRow): DbGoogleDoc
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
     last_used_at: toIso(row.last_used_at),
+  }
+}
+
+function mapExtractionTaskRow(row: DbExtractionTaskRow): DbExtractionTask {
+  const parsedPhaseId =
+    typeof row.phase_id === 'number' ? row.phase_id : Number.parseInt(String(row.phase_id), 10)
+  const parsedItemIndex =
+    typeof row.item_index === 'number' ? row.item_index : Number.parseInt(String(row.item_index), 10)
+
+  return {
+    id: row.id,
+    extraction_id: row.extraction_id,
+    user_id: row.user_id,
+    phase_id: Number.isFinite(parsedPhaseId) ? parsedPhaseId : 0,
+    phase_title: row.phase_title,
+    item_index: Number.isFinite(parsedItemIndex) ? parsedItemIndex : 0,
+    item_text: row.item_text,
+    checked: row.checked === true,
+    status: row.status,
+    due_at: row.due_at ? toIso(row.due_at) : null,
+    completed_at: row.completed_at ? toIso(row.completed_at) : null,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  }
+}
+
+function mapExtractionTaskEventRow(row: DbExtractionTaskEventRow): DbExtractionTaskEvent {
+  return {
+    id: row.id,
+    task_id: row.task_id,
+    user_id: row.user_id,
+    event_type: row.event_type,
+    content: row.content,
+    metadata_json: row.metadata_json,
+    created_at: toIso(row.created_at),
   }
 }
 
@@ -966,6 +1097,281 @@ export async function findExtractionByIdForUser(input: { id: string; userId: str
     [input.id, input.userId]
   )
   return rows[0] ? mapExtractionRow(rows[0]) : null
+}
+
+export async function syncExtractionTasksForUser(input: {
+  userId: string
+  extractionId: string
+  phases: Array<{ id: number; title: string; items: string[] }>
+}) {
+  await ensureDbReady()
+
+  const normalizedRows = input.phases.flatMap((phase) => {
+    const phaseId = Number.parseInt(String(phase.id), 10)
+    if (!Number.isFinite(phaseId)) return []
+
+    return phase.items
+      .map((item, index) => {
+        const itemText = `${item ?? ''}`.trim()
+        if (!itemText) return null
+
+        return {
+          phaseId,
+          phaseTitle: `${phase.title ?? ''}`.trim() || `Fase ${phaseId}`,
+          itemIndex: index,
+          itemText,
+        }
+      })
+      .filter((row): row is { phaseId: number; phaseTitle: string; itemIndex: number; itemText: string } =>
+        Boolean(row)
+      )
+  })
+
+  if (normalizedRows.length === 0) {
+    return []
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    for (const row of normalizedRows) {
+      await client.query(
+        `
+          INSERT INTO extraction_tasks (
+            id,
+            extraction_id,
+            user_id,
+            phase_id,
+            phase_title,
+            item_index,
+            item_text,
+            checked,
+            status
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, 'pending')
+          ON CONFLICT (extraction_id, phase_id, item_index)
+          DO UPDATE SET
+            phase_title = EXCLUDED.phase_title,
+            item_text = EXCLUDED.item_text,
+            updated_at = NOW()
+        `,
+        [
+          randomUUID(),
+          input.extractionId,
+          input.userId,
+          row.phaseId,
+          row.phaseTitle,
+          row.itemIndex,
+          row.itemText,
+        ]
+      )
+    }
+
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+
+  return listExtractionTasksWithEventsForUser({
+    userId: input.userId,
+    extractionId: input.extractionId,
+  })
+}
+
+export async function listExtractionTasksWithEventsForUser(input: { userId: string; extractionId: string }) {
+  await ensureDbReady()
+
+  const taskRows = await pool.query<DbExtractionTaskRow>(
+    `
+      SELECT
+        id,
+        extraction_id,
+        user_id,
+        phase_id,
+        phase_title,
+        item_index,
+        item_text,
+        checked,
+        status,
+        due_at,
+        completed_at,
+        created_at,
+        updated_at
+      FROM extraction_tasks
+      WHERE user_id = $1 AND extraction_id = $2
+      ORDER BY phase_id ASC, item_index ASC
+    `,
+    [input.userId, input.extractionId]
+  )
+
+  const tasks = taskRows.rows.map(mapExtractionTaskRow)
+  if (tasks.length === 0) {
+    return [] as Array<DbExtractionTask & { events: DbExtractionTaskEvent[] }>
+  }
+
+  const taskIds = tasks.map((task) => task.id)
+  const eventRows = await pool.query<DbExtractionTaskEventRow>(
+    `
+      SELECT
+        id,
+        task_id,
+        user_id,
+        event_type,
+        content,
+        metadata_json,
+        created_at
+      FROM extraction_task_events
+      WHERE user_id = $1 AND task_id = ANY($2::text[])
+      ORDER BY created_at DESC
+    `,
+    [input.userId, taskIds]
+  )
+
+  const eventsByTaskId = new Map<string, DbExtractionTaskEvent[]>()
+  for (const row of eventRows.rows) {
+    const mapped = mapExtractionTaskEventRow(row)
+    const existing = eventsByTaskId.get(mapped.task_id) ?? []
+    existing.push(mapped)
+    eventsByTaskId.set(mapped.task_id, existing)
+  }
+
+  return tasks.map((task) => ({
+    ...task,
+    events: eventsByTaskId.get(task.id) ?? [],
+  }))
+}
+
+export async function findExtractionTaskByIdForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskRow>(
+    `
+      SELECT
+        id,
+        extraction_id,
+        user_id,
+        phase_id,
+        phase_title,
+        item_index,
+        item_text,
+        checked,
+        status,
+        due_at,
+        completed_at,
+        created_at,
+        updated_at
+      FROM extraction_tasks
+      WHERE id = $1 AND extraction_id = $2 AND user_id = $3
+      LIMIT 1
+    `,
+    [input.taskId, input.extractionId, input.userId]
+  )
+
+  return rows[0] ? mapExtractionTaskRow(rows[0]) : null
+}
+
+export async function updateExtractionTaskStateForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+  checked: boolean
+  status: ExtractionTaskStatus
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskRow>(
+    `
+      UPDATE extraction_tasks
+      SET
+        checked = $1,
+        status = $2,
+        completed_at = CASE
+          WHEN $2 = 'completed' THEN COALESCE(completed_at, NOW())
+          ELSE NULL
+        END,
+        updated_at = NOW()
+      WHERE id = $3 AND extraction_id = $4 AND user_id = $5
+      RETURNING
+        id,
+        extraction_id,
+        user_id,
+        phase_id,
+        phase_title,
+        item_index,
+        item_text,
+        checked,
+        status,
+        due_at,
+        completed_at,
+        created_at,
+        updated_at
+    `,
+    [input.checked, input.status, input.taskId, input.extractionId, input.userId]
+  )
+
+  return rows[0] ? mapExtractionTaskRow(rows[0]) : null
+}
+
+export async function createExtractionTaskEventForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+  eventType: ExtractionTaskEventType
+  content: string
+  metadataJson?: string
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskEventRow>(
+    `
+      WITH target_task AS (
+        SELECT id
+        FROM extraction_tasks
+        WHERE id = $1 AND extraction_id = $2 AND user_id = $3
+        LIMIT 1
+      )
+      INSERT INTO extraction_task_events (
+        id,
+        task_id,
+        user_id,
+        event_type,
+        content,
+        metadata_json
+      )
+      SELECT
+        $4,
+        target_task.id,
+        $3,
+        $5,
+        $6,
+        $7
+      FROM target_task
+      RETURNING
+        id,
+        task_id,
+        user_id,
+        event_type,
+        content,
+        metadata_json,
+        created_at
+    `,
+    [
+      input.taskId,
+      input.extractionId,
+      input.userId,
+      randomUUID(),
+      input.eventType,
+      input.content,
+      input.metadataJson ?? '{}',
+    ]
+  )
+
+  return rows[0] ? mapExtractionTaskEventRow(rows[0]) : null
 }
 
 export async function createOrGetShareToken(input: { extractionId: string; userId: string }) {

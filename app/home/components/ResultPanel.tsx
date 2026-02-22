@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AlertTriangle,
   Brain,
   CheckCircle2,
   ChevronDown,
@@ -7,6 +8,7 @@ import {
   Clock,
   Copy,
   Download,
+  Loader2,
   Share2,
   Zap,
 } from 'lucide-react'
@@ -17,7 +19,13 @@ import {
   normalizeExtractionMode,
   type ExtractionMode,
 } from '@/lib/extraction-modes'
-import type { ExtractResult, Phase } from '@/app/home/lib/types'
+import type {
+  ExtractResult,
+  InteractiveTask,
+  InteractiveTaskEventType,
+  InteractiveTaskStatus,
+  Phase,
+} from '@/app/home/lib/types'
 
 interface ResultPanelProps {
   result: ExtractResult
@@ -71,6 +79,68 @@ interface ResultPanelProps {
 
   onExportToGoogleDocs: () => void | Promise<void>
   onConnectGoogleDocs: () => void | Promise<void>
+}
+
+const TASK_STATUS_OPTIONS: Array<{
+  value: InteractiveTaskStatus
+  label: string
+  chipClassName: string
+}> = [
+  {
+    value: 'pending',
+    label: 'Pendiente',
+    chipClassName:
+      'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300',
+  },
+  {
+    value: 'in_progress',
+    label: 'En progreso',
+    chipClassName:
+      'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-900/25 dark:text-sky-300',
+  },
+  {
+    value: 'blocked',
+    label: 'Bloqueada',
+    chipClassName:
+      'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300',
+  },
+  {
+    value: 'completed',
+    label: 'Completada',
+    chipClassName:
+      'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300',
+  },
+]
+
+const TASK_EVENT_TYPE_OPTIONS: Array<{ value: InteractiveTaskEventType; label: string }> = [
+  { value: 'note', label: 'Nota' },
+  { value: 'pending_action', label: 'Acción pendiente' },
+  { value: 'blocker', label: 'Bloqueo' },
+]
+
+function getTaskStatusLabel(status: InteractiveTaskStatus) {
+  return TASK_STATUS_OPTIONS.find((option) => option.value === status)?.label ?? 'Pendiente'
+}
+
+function getTaskStatusChipClassName(status: InteractiveTaskStatus) {
+  return (
+    TASK_STATUS_OPTIONS.find((option) => option.value === status)?.chipClassName ??
+    TASK_STATUS_OPTIONS[0].chipClassName
+  )
+}
+
+function getTaskEventTypeLabel(eventType: InteractiveTaskEventType) {
+  return TASK_EVENT_TYPE_OPTIONS.find((option) => option.value === eventType)?.label ?? 'Nota'
+}
+
+function formatTaskEventDate(isoDate: string) {
+  const parsed = new Date(isoDate)
+  if (Number.isNaN(parsed.getTime())) return 'Fecha desconocida'
+
+  return new Intl.DateTimeFormat('es-ES', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(parsed)
 }
 
 export function ResultPanel({
@@ -134,6 +204,14 @@ export function ResultPanel({
   const [collapseAfterReextract, setCollapseAfterReextract] = useState(false)
   const reextractProcessingRef = useRef(false)
   const rightControlsRef = useRef<HTMLDivElement | null>(null)
+  const [interactiveTasks, setInteractiveTasks] = useState<InteractiveTask[]>([])
+  const [tasksLoading, setTasksLoading] = useState(false)
+  const [tasksError, setTasksError] = useState<string | null>(null)
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
+  const [taskMutationLoadingId, setTaskMutationLoadingId] = useState<string | null>(null)
+  const [eventDraftType, setEventDraftType] = useState<InteractiveTaskEventType>('note')
+  const [eventDraftContent, setEventDraftContent] = useState('')
+  const phasesSignature = useMemo(() => JSON.stringify(result.phases), [result.phases])
   const isAnyActionLoading =
     isExportingPdf ||
     shareLoading ||
@@ -199,6 +277,165 @@ export function ResultPanel({
       document.removeEventListener('pointerdown', handlePointerDown)
     }
   }, [isActionsExpanded, isReextractExpanded])
+
+  useEffect(() => {
+    const extractionId = result.id?.trim()
+    if (!extractionId) {
+      setInteractiveTasks([])
+      setTasksLoading(false)
+      setTasksError(null)
+      setActiveTaskId(null)
+      return
+    }
+
+    const controller = new AbortController()
+
+    const syncTasks = async () => {
+      setTasksLoading(true)
+      setTasksError(null)
+      try {
+        const response = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/tasks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'sync',
+            phases: result.phases,
+          }),
+          signal: controller.signal,
+        })
+
+        const payload = (await response.json().catch(() => null)) as
+          | { tasks?: unknown; error?: unknown }
+          | null
+
+        if (!response.ok) {
+          const message =
+            typeof payload?.error === 'string' && payload.error.trim()
+              ? payload.error
+              : 'No se pudo cargar el checklist interactivo.'
+          throw new Error(message)
+        }
+
+        const tasks = Array.isArray(payload?.tasks) ? (payload.tasks as InteractiveTask[]) : []
+        if (controller.signal.aborted) return
+
+        setInteractiveTasks(tasks)
+        setActiveTaskId((previous) => (tasks.some((task) => task.id === previous) ? previous : null))
+      } catch (error: unknown) {
+        if (controller.signal.aborted) return
+        const message =
+          error instanceof Error && error.message.trim()
+            ? error.message
+            : 'No se pudo cargar el checklist interactivo.'
+        setTasksError(message)
+      } finally {
+        if (!controller.signal.aborted) {
+          setTasksLoading(false)
+        }
+      }
+    }
+
+    void syncTasks()
+
+    return () => {
+      controller.abort()
+    }
+  }, [phasesSignature, result.id, result.phases])
+
+  useEffect(() => {
+    setEventDraftType('note')
+    setEventDraftContent('')
+  }, [activeTaskId])
+
+  const tasksByPhaseItem = useMemo(() => {
+    const map = new Map<string, InteractiveTask>()
+    for (const task of interactiveTasks) {
+      map.set(`${task.phaseId}:${task.itemIndex}`, task)
+    }
+    return map
+  }, [interactiveTasks])
+
+  const activeTask = useMemo(
+    () => interactiveTasks.find((task) => task.id === activeTaskId) ?? null,
+    [activeTaskId, interactiveTasks]
+  )
+
+  const refreshTaskCollection = async (payload: Record<string, unknown>) => {
+    const extractionId = result.id?.trim()
+    if (!extractionId) return false
+
+    const response = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    const data = (await response.json().catch(() => null)) as
+      | { tasks?: unknown; error?: unknown }
+      | null
+
+    if (!response.ok) {
+      const message =
+        typeof data?.error === 'string' && data.error.trim()
+          ? data.error
+          : 'No se pudo actualizar el checklist interactivo.'
+      setTasksError(message)
+      return false
+    }
+
+    const tasks = Array.isArray(data?.tasks) ? (data.tasks as InteractiveTask[]) : []
+    setInteractiveTasks(tasks)
+    setActiveTaskId((previous) => (tasks.some((task) => task.id === previous) ? previous : null))
+    setTasksError(null)
+    return true
+  }
+
+  const handleTaskToggle = async (task: InteractiveTask, checked: boolean) => {
+    setTaskMutationLoadingId(task.id)
+    try {
+      await refreshTaskCollection({
+        action: 'update',
+        taskId: task.id,
+        checked,
+      })
+    } finally {
+      setTaskMutationLoadingId(null)
+    }
+  }
+
+  const handleTaskStatusChange = async (task: InteractiveTask, status: InteractiveTaskStatus) => {
+    setTaskMutationLoadingId(task.id)
+    try {
+      await refreshTaskCollection({
+        action: 'update',
+        taskId: task.id,
+        status,
+      })
+    } finally {
+      setTaskMutationLoadingId(null)
+    }
+  }
+
+  const handleAddTaskEvent = async (task: InteractiveTask) => {
+    const content = eventDraftContent.trim()
+    if (!content) return
+
+    setTaskMutationLoadingId(task.id)
+    try {
+      const ok = await refreshTaskCollection({
+        action: 'add_event',
+        taskId: task.id,
+        eventType: eventDraftType,
+        content,
+      })
+
+      if (ok) {
+        setEventDraftContent('')
+      }
+    } finally {
+      setTaskMutationLoadingId(null)
+    }
+  }
 
   const collapseActionsSection = () => {
     setIsActionsExpanded(false)
@@ -636,25 +873,197 @@ export function ResultPanel({
 
               {activePhase === phase.id && (
                 <div className="p-4 pt-0 bg-slate-50/50 border-t border-slate-100 dark:bg-slate-800/40 dark:border-slate-800">
+                  <div className="mt-4 space-y-2">
+                    {tasksLoading && (
+                      <p className="inline-flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+                        <Loader2 size={13} className="animate-spin" />
+                        Sincronizando checklist interactivo...
+                      </p>
+                    )}
+                    {tasksError && (
+                      <p className="text-xs font-medium text-rose-600 dark:text-rose-300">{tasksError}</p>
+                    )}
+                    {!result.id && (
+                      <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                        Para guardar el avance necesitas una extracción persistida en historial.
+                      </p>
+                    )}
+                  </div>
+
                   <ul className="space-y-3 mt-4">
-                    {phase.items.map((item, idx) => (
-                      <li key={idx} className="flex items-start gap-3 group/item cursor-pointer">
-                        <div className="mt-0.5 relative flex-shrink-0">
-                          <input
-                            type="checkbox"
-                            className="peer w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer appearance-none border checked:bg-indigo-600 checked:border-indigo-600 transition-all"
-                          />
-                          <CheckCircle2
-                            size={12}
-                            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white opacity-0 peer-checked:opacity-100 pointer-events-none"
-                            strokeWidth={3}
-                          />
-                        </div>
-                        <span className="text-slate-600 group-hover/item:text-slate-900 transition-colors leading-relaxed text-sm dark:text-slate-300 dark:group-hover/item:text-slate-100">
-                          {item}
-                        </span>
-                      </li>
-                    ))}
+                    {phase.items.map((item, idx) => {
+                      const task = tasksByPhaseItem.get(`${phase.id}:${idx}`) ?? null
+                      const isTaskExpanded = task ? activeTaskId === task.id : false
+                      const isTaskMutating = task ? taskMutationLoadingId === task.id : false
+
+                      return (
+                        <li
+                          key={`${phase.id}-${idx}`}
+                          className="rounded-xl border border-slate-200 bg-white/80 dark:border-slate-700 dark:bg-slate-900/70"
+                        >
+                          <div className="flex items-start gap-3 p-3">
+                            <div className="mt-0.5 relative flex-shrink-0">
+                              <input
+                                type="checkbox"
+                                checked={task?.checked ?? false}
+                                disabled={!task || isTaskMutating}
+                                onChange={(event) => {
+                                  if (!task) return
+                                  void handleTaskToggle(task, event.target.checked)
+                                }}
+                                className="peer w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer appearance-none border checked:bg-indigo-600 checked:border-indigo-600 transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                              />
+                              <CheckCircle2
+                                size={12}
+                                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white opacity-0 peer-checked:opacity-100 pointer-events-none"
+                                strokeWidth={3}
+                              />
+                            </div>
+
+                            <button
+                              type="button"
+                              disabled={!task}
+                              onClick={() => {
+                                if (!task) return
+                                setActiveTaskId((previous) => (previous === task.id ? null : task.id))
+                              }}
+                              className="flex min-w-0 flex-1 items-start justify-between gap-3 text-left disabled:cursor-default"
+                            >
+                              <span className="text-slate-600 transition-colors leading-relaxed text-sm dark:text-slate-300">
+                                {item}
+                              </span>
+                              {task && (
+                                <span
+                                  className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(
+                                    task.status
+                                  )}`}
+                                >
+                                  {getTaskStatusLabel(task.status)}
+                                </span>
+                              )}
+                            </button>
+
+                            {isTaskMutating && (
+                              <Loader2
+                                size={14}
+                                className="mt-0.5 flex-shrink-0 animate-spin text-indigo-500 dark:text-indigo-300"
+                              />
+                            )}
+                          </div>
+
+                          {isTaskExpanded && task && (
+                            <div className="border-t border-slate-200 bg-slate-50/80 p-3 dark:border-slate-700 dark:bg-slate-900/80">
+                              <div className="grid gap-3 lg:grid-cols-[minmax(0,180px)_1fr]">
+                                <label className="block">
+                                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                                    Estado
+                                  </span>
+                                  <select
+                                    value={task.status}
+                                    onChange={(event) =>
+                                      void handleTaskStatusChange(
+                                        task,
+                                        event.target.value as InteractiveTaskStatus
+                                      )
+                                    }
+                                    disabled={isTaskMutating}
+                                    className="mt-1.5 h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                                  >
+                                    {TASK_STATUS_OPTIONS.map((option) => (
+                                      <option key={option.value} value={option.value}>
+                                        {option.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+
+                                <div>
+                                  <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                                    Registrar Evento
+                                  </p>
+                                  <div className="mt-1.5 flex flex-col gap-2 sm:flex-row">
+                                    <select
+                                      value={eventDraftType}
+                                      onChange={(event) =>
+                                        setEventDraftType(
+                                          event.target.value as InteractiveTaskEventType
+                                        )
+                                      }
+                                      disabled={isTaskMutating}
+                                      className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                                    >
+                                      {TASK_EVENT_TYPE_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>
+                                          {option.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input
+                                      type="text"
+                                      value={eventDraftContent}
+                                      onChange={(event) => setEventDraftContent(event.target.value)}
+                                      placeholder="Describe la novedad de este subítem..."
+                                      disabled={isTaskMutating}
+                                      className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleAddTaskEvent(task)}
+                                      disabled={isTaskMutating || eventDraftContent.trim().length === 0}
+                                      className="inline-flex h-9 items-center justify-center rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                                    >
+                                      Guardar
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="mt-3">
+                                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                                  Actividad
+                                </p>
+                                {task.events.length === 0 ? (
+                                  <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+                                    No hay eventos registrados todavía.
+                                  </p>
+                                ) : (
+                                  <ul className="mt-2 space-y-2">
+                                    {task.events.map((event) => (
+                                      <li
+                                        key={event.id}
+                                        className="rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900"
+                                      >
+                                        <div className="flex items-start gap-2">
+                                          <AlertTriangle
+                                            size={13}
+                                            className={`mt-0.5 ${
+                                              event.eventType === 'blocker'
+                                                ? 'text-rose-500 dark:text-rose-300'
+                                                : 'text-slate-400 dark:text-slate-500'
+                                            }`}
+                                          />
+                                          <div className="min-w-0 flex-1">
+                                            <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                                              {getTaskEventTypeLabel(event.eventType)}
+                                            </p>
+                                            <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
+                                              {event.content}
+                                            </p>
+                                            <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                                              {formatTaskEventDate(event.createdAt)}
+                                            </p>
+                                          </div>
+                                        </div>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </li>
+                      )
+                    })}
                   </ul>
                 </div>
               )}

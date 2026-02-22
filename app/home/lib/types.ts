@@ -34,6 +34,34 @@ export interface HistoryItem extends ExtractResult {
   createdAt: string
 }
 
+export type InteractiveTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed'
+export type InteractiveTaskEventType = 'note' | 'pending_action' | 'blocker'
+
+export interface InteractiveTaskEvent {
+  id: string
+  taskId: string
+  eventType: InteractiveTaskEventType
+  content: string
+  metadataJson: string
+  createdAt: string
+}
+
+export interface InteractiveTask {
+  id: string
+  extractionId: string
+  phaseId: number
+  phaseTitle: string
+  itemIndex: number
+  itemText: string
+  checked: boolean
+  status: InteractiveTaskStatus
+  dueAt: string | null
+  completedAt: string | null
+  createdAt: string
+  updatedAt: string
+  events: InteractiveTaskEvent[]
+}
+
 export interface SessionUser {
   id: string
   name: string
