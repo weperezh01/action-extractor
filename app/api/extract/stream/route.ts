@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
 import { YoutubeTranscript } from '@danielxceron/youtube-transcript'
 import { getUserFromRequest } from '@/lib/auth'
 import {
@@ -7,6 +6,8 @@ import {
   findExtractionOrderNumberForUser,
   findAnyVideoCacheByVideoId,
   findVideoCacheByVideoId,
+  getAppSetting,
+  logAiUsage,
   upsertVideoCache,
 } from '@/lib/db'
 import { classifyModelError, classifyTranscriptError, retryWithBackoff } from '@/lib/extract-resilience'
@@ -14,11 +15,12 @@ import {
   buildExtractionUserPrompt,
   buildExtractionSystemPrompt,
   estimateTime,
-  EXTRACTION_MODEL,
+  EXTRACTION_MODEL as EXTRACTION_MODEL_DEFAULT,
   extractVideoId,
   getExtractionPromptVersion,
   parseExtractionModelText,
 } from '@/lib/extract-core'
+import { type AiProvider, callAi, streamAi, estimateCostUsd, isProviderAvailable, PROVIDER_MODELS } from '@/lib/ai-client'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
 import {
   normalizeExtractionOutputLanguage,
@@ -32,7 +34,6 @@ import {
 } from '@/lib/rate-limit'
 import { resolveVideoPreview } from '@/lib/video-preview'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
@@ -172,13 +173,15 @@ ${rawText}`
 
 async function parseExtractionWithRepair(params: {
   modelText: string
+  provider: AiProvider
+  model: string
   mode: ReturnType<typeof normalizeExtractionMode>
   resolvedOutputLanguage: ResolvedExtractionOutputLanguage
   originalTime: string
   savedTime: string
   onRepair?: () => void
 }) {
-  const { modelText, mode, resolvedOutputLanguage, originalTime, savedTime, onRepair } = params
+  const { modelText, provider, model, mode, resolvedOutputLanguage, originalTime, savedTime, onRepair } = params
 
   const parseWithTime = (text: string) =>
     parseExtractionModelText(
@@ -209,18 +212,14 @@ async function parseExtractionWithRepair(params: {
     let lastError: unknown = error
     for (const repairPrompt of repairPrompts) {
       try {
-        const repairResponse = await retryWithBackoff(
+        const repairResult = await retryWithBackoff(
           () =>
-            anthropic.messages.create({
-              model: EXTRACTION_MODEL,
-              max_tokens: JSON_REPAIR_MAX_TOKENS,
+            callAi({
+              provider,
+              model,
               system: JSON_REPAIR_SYSTEM_PROMPT,
-              messages: [
-                {
-                  role: 'user',
-                  content: repairPrompt,
-                },
-              ],
+              messages: [{ role: 'user', content: repairPrompt }],
+              maxTokens: JSON_REPAIR_MAX_TOKENS,
             }),
           {
             maxAttempts: 2,
@@ -228,13 +227,21 @@ async function parseExtractionWithRepair(params: {
           }
         )
 
-        const repairBlock = repairResponse.content[0]
-        if (repairBlock.type !== 'text') {
+        if (!repairResult.text.trim()) {
           lastError = new Error('No se pudo normalizar la respuesta del modelo.')
           continue
         }
 
-        return parseWithTime(repairBlock.text)
+        void logAiUsage({
+          provider,
+          model,
+          useType: 'repair',
+          inputTokens: repairResult.inputTokens,
+          outputTokens: repairResult.outputTokens,
+          costUsd: estimateCostUsd(model, repairResult.inputTokens, repairResult.outputTokens),
+        })
+
+        return parseWithTime(repairResult.text)
       } catch (repairError: unknown) {
         lastError = repairError
       }
@@ -278,6 +285,14 @@ export async function POST(req: NextRequest) {
     )
   }
 
+  const [dbExtractionProvider, dbExtractionModel] = await Promise.all([
+    getAppSetting('extraction_provider').catch(() => null),
+    getAppSetting('extraction_model').catch(() => null),
+  ])
+  const EXTRACTION_PROVIDER: AiProvider =
+    (dbExtractionProvider as AiProvider | null) ?? 'anthropic'
+  const EXTRACTION_MODEL = dbExtractionModel || EXTRACTION_MODEL_DEFAULT
+
   const cachedVideo = await findVideoCacheByVideoId({
     videoId,
     promptVersion,
@@ -286,8 +301,8 @@ export async function POST(req: NextRequest) {
   const fallbackVideoCache = cachedVideo ?? (await findAnyVideoCacheByVideoId(videoId))
 
   if (!cachedVideo) {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return NextResponse.json({ error: 'Servicio de IA no configurado.' }, { status: 503 })
+    if (!isProviderAvailable(EXTRACTION_PROVIDER)) {
+      return NextResponse.json({ error: 'Servicio de IA no configurado. Falta la API key del proveedor seleccionado.' }, { status: 503 })
     }
 
     const rateLimit = await consumeUserExtractionRateLimit(user.id)
@@ -297,7 +312,7 @@ export async function POST(req: NextRequest) {
   }
 
   const encoder = new TextEncoder()
-  let modelStream: ReturnType<typeof anthropic.messages.stream> | null = null
+  const abortController = new AbortController()
   let closed = false
 
   const stream = new ReadableStream<Uint8Array>({
@@ -520,12 +535,12 @@ export async function POST(req: NextRequest) {
 
         let modelText = ''
         try {
-          modelText = await retryWithBackoff(
-            async () => {
-              const currentStream = anthropic.messages
-                .stream({
+          const aiResult = await retryWithBackoff(
+            () =>
+              streamAi(
+                {
+                  provider: EXTRACTION_PROVIDER,
                   model: EXTRACTION_MODEL,
-                  max_tokens: EXTRACTION_MAX_TOKENS,
                   system: buildExtractionSystemPrompt(mode, resolvedOutputLanguage),
                   messages: [
                     {
@@ -533,15 +548,13 @@ export async function POST(req: NextRequest) {
                       content: buildExtractionUserPrompt(finalTranscript, mode, resolvedOutputLanguage),
                     },
                   ],
-                })
-                .on('text', (chunk) => {
-                  if (!chunk) return
-                  send('text', { chunk })
-                })
-
-              modelStream = currentStream
-              return currentStream.finalText()
-            },
+                  maxTokens: EXTRACTION_MAX_TOKENS,
+                },
+                {
+                  onChunk: (chunk) => send('text', { chunk }),
+                  signal: abortController.signal,
+                }
+              ),
             {
               maxAttempts: 3,
               shouldRetry: (modelError) => classifyModelError(modelError).retryable,
@@ -554,6 +567,16 @@ export async function POST(req: NextRequest) {
                 }),
             }
           )
+          modelText = aiResult.text
+          void logAiUsage({
+            provider: EXTRACTION_PROVIDER,
+            model: EXTRACTION_MODEL,
+            useType: 'extraction',
+            userId: user.id,
+            inputTokens: aiResult.inputTokens,
+            outputTokens: aiResult.outputTokens,
+            costUsd: estimateCostUsd(EXTRACTION_MODEL, aiResult.inputTokens, aiResult.outputTokens),
+          })
         } catch (error: unknown) {
           const modelError = classifyModelError(error)
           send('error', { message: modelError.message })
@@ -566,6 +589,8 @@ export async function POST(req: NextRequest) {
         try {
           responsePayload = await parseExtractionWithRepair({
             modelText,
+            provider: EXTRACTION_PROVIDER,
+            model: EXTRACTION_MODEL,
             originalTime,
             savedTime,
             mode,
@@ -639,9 +664,7 @@ export async function POST(req: NextRequest) {
       }
     },
     cancel() {
-      if (modelStream) {
-        modelStream.abort()
-      }
+      abortController.abort()
     },
   })
 

@@ -113,8 +113,8 @@ export interface DbGoogleDocsConnection {
 export type ExtractionShareVisibility = 'private' | 'public'
 
 export type ExtractionTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed'
-export type ExtractionTaskEventType = 'note' | 'pending_action' | 'blocker'
-export type ExtractionTaskAttachmentType = 'pdf' | 'image' | 'audio' | 'youtube_link'
+export type ExtractionTaskEventType = 'note' | 'pending_action' | 'blocker' | 'resolved'
+export type ExtractionTaskAttachmentType = 'pdf' | 'image' | 'audio' | 'youtube_link' | 'note'
 export type ExtractionTaskAttachmentStorageProvider = 'cloudinary' | 'external'
 
 export interface DbExtractionTask {
@@ -141,6 +141,8 @@ export interface DbExtractionTaskEvent {
   content: string
   metadata_json: string
   created_at: string
+  user_name: string | null
+  user_email: string | null
 }
 
 export interface DbExtractionTaskAttachment {
@@ -158,6 +160,8 @@ export interface DbExtractionTaskAttachment {
   metadata_json: string
   created_at: string
   updated_at: string
+  user_name: string | null
+  user_email: string | null
 }
 
 export interface DbExtractionTaskComment {
@@ -177,6 +181,27 @@ export interface DbExtractionTaskLikeSummary {
   extraction_id: string
   likes_count: number
   liked_by_me: boolean
+}
+
+export type ChatMessageRole = 'user' | 'assistant'
+
+export interface DbChatConversation {
+  id: string
+  user_id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export interface DbChatMessage {
+  id: string
+  conversation_id: string
+  user_id: string
+  role: ChatMessageRole
+  content: string
+  metadata_json: string
+  created_at: string
+  updated_at: string
 }
 
 export interface UserExtractionRateLimitUsage {
@@ -229,6 +254,10 @@ export interface AdminUserListItem {
   blocked_at: string | null
   total_extractions: number
   last_extraction_at: string | null
+  ai_calls: number
+  ai_input_tokens: number
+  ai_output_tokens: number
+  ai_cost_usd: number
 }
 
 export interface AdminUserListResult {
@@ -380,6 +409,8 @@ interface DbExtractionTaskEventRow {
   content: string
   metadata_json: string
   created_at: Date | string
+  user_name: string | null
+  user_email: string | null
 }
 
 interface DbExtractionTaskAttachmentRow {
@@ -397,6 +428,8 @@ interface DbExtractionTaskAttachmentRow {
   metadata_json: string
   created_at: Date | string
   updated_at: Date | string
+  user_name: string | null
+  user_email: string | null
 }
 
 interface DbExtractionTaskCommentRow {
@@ -414,6 +447,25 @@ interface DbExtractionTaskCommentRow {
 interface DbExtractionTaskLikeSummaryRow {
   likes_count: number | string
   liked_by_me: boolean
+}
+
+interface DbChatConversationRow {
+  id: string
+  user_id: string
+  title: string
+  created_at: Date | string
+  updated_at: Date | string
+}
+
+interface DbChatMessageRow {
+  id: string
+  conversation_id: string
+  user_id: string
+  role: string
+  content: string
+  metadata_json: string
+  created_at: Date | string
+  updated_at: Date | string
 }
 
 interface DbExtractionRateLimitRow {
@@ -455,6 +507,10 @@ interface DbAdminUserListRow {
   blocked_at: Date | string | null
   total_extractions: number | string
   last_extraction_at: Date | string | null
+  ai_calls: number | string
+  ai_input_tokens: number | string
+  ai_output_tokens: number | string
+  ai_cost_usd: string | number
 }
 
 const globalForDb = globalThis as unknown as GlobalDb
@@ -673,6 +729,25 @@ const INIT_SQL = `
     UNIQUE (task_id, user_id)
   );
 
+  CREATE TABLE IF NOT EXISTS chat_conversations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT 'Asistente de Contenidos',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS checked BOOLEAN NOT NULL DEFAULT FALSE;
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS due_at TIMESTAMPTZ;
@@ -697,6 +772,14 @@ const INIT_SQL = `
   ALTER TABLE extraction_task_comments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   ALTER TABLE extraction_task_likes ADD COLUMN IF NOT EXISTS extraction_id TEXT REFERENCES extractions(id) ON DELETE CASCADE;
   ALTER TABLE extraction_task_likes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT 'Asistente de Contenidos';
+  ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
+  ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS content TEXT NOT NULL DEFAULT '';
+  ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS metadata_json TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS video_title TEXT;
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
@@ -742,9 +825,36 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_extraction_task_likes_task_id ON extraction_task_likes(task_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_task_likes_extraction_id ON extraction_task_likes(extraction_id);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_extraction_task_likes_task_user_unique ON extraction_task_likes(task_id, user_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_conversations_user_id ON chat_conversations(user_id);
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_created ON chat_messages(conversation_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_user_created ON chat_messages(user_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS ai_usage_log (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    use_type TEXT NOT NULL DEFAULT 'extraction',
+    user_id TEXT,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd NUMERIC(10,6) NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+  CREATE INDEX IF NOT EXISTS idx_ai_usage_log_created_at ON ai_usage_log(created_at);
+  CREATE INDEX IF NOT EXISTS idx_ai_usage_log_provider_model ON ai_usage_log(provider, model);
+  CREATE INDEX IF NOT EXISTS idx_ai_usage_log_user_id ON ai_usage_log(user_id);
 `
 
-const DB_INIT_SIGNATURE = '2026-02-22-task-community-v1'
+const DB_INIT_SIGNATURE = '2026-02-22-ai-usage-log-v2'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -843,6 +953,10 @@ function mapAdminUserListRow(row: DbAdminUserListRow): AdminUserListItem {
     blocked_at: row.blocked_at ? toIso(row.blocked_at) : null,
     total_extractions: parseDbInteger(row.total_extractions),
     last_extraction_at: row.last_extraction_at ? toIso(row.last_extraction_at) : null,
+    ai_calls: parseDbInteger(row.ai_calls),
+    ai_input_tokens: Number(row.ai_input_tokens ?? 0),
+    ai_output_tokens: Number(row.ai_output_tokens ?? 0),
+    ai_cost_usd: Number(row.ai_cost_usd ?? 0),
   }
 }
 
@@ -987,11 +1101,13 @@ function mapExtractionTaskEventRow(row: DbExtractionTaskEventRow): DbExtractionT
     content: row.content,
     metadata_json: row.metadata_json,
     created_at: toIso(row.created_at),
+    user_name: row.user_name ?? null,
+    user_email: row.user_email ?? null,
   }
 }
 
 function normalizeAttachmentType(value: unknown): ExtractionTaskAttachmentType {
-  if (value === 'image' || value === 'audio' || value === 'youtube_link') {
+  if (value === 'image' || value === 'audio' || value === 'youtube_link' || value === 'note') {
     return value
   }
   return 'pdf'
@@ -1017,6 +1133,8 @@ function mapExtractionTaskAttachmentRow(row: DbExtractionTaskAttachmentRow): DbE
     metadata_json: row.metadata_json || '{}',
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
+    user_name: row.user_name ?? null,
+    user_email: row.user_email ?? null,
   }
 }
 
@@ -1031,6 +1149,33 @@ function mapExtractionTaskCommentRow(row: DbExtractionTaskCommentRow): DbExtract
     updated_at: toIso(row.updated_at),
     user_name: row.user_name,
     user_email: row.user_email,
+  }
+}
+
+function normalizeChatMessageRole(value: unknown): ChatMessageRole {
+  return value === 'assistant' ? 'assistant' : 'user'
+}
+
+function mapChatConversationRow(row: DbChatConversationRow): DbChatConversation {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    title: row.title,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  }
+}
+
+function mapChatMessageRow(row: DbChatMessageRow): DbChatMessage {
+  return {
+    id: row.id,
+    conversation_id: row.conversation_id,
+    user_id: row.user_id,
+    role: normalizeChatMessageRole(row.role),
+    content: row.content,
+    metadata_json: row.metadata_json || '{}',
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
   }
 }
 
@@ -1445,6 +1590,156 @@ export async function updateExtractionPhasesForUser(input: {
   return rows[0] ? mapExtractionRow(rows[0]) : null
 }
 
+export async function findOrCreateChatConversationForUser(userId: string) {
+  await ensureDbReady()
+
+  const { rows } = await pool.query<DbChatConversationRow>(
+    `
+      INSERT INTO chat_conversations (
+        id,
+        user_id,
+        title
+      )
+      VALUES ($1, $2, 'Asistente de Contenidos')
+      ON CONFLICT (user_id)
+      DO UPDATE SET
+        updated_at = NOW()
+      RETURNING
+        id,
+        user_id,
+        title,
+        created_at,
+        updated_at
+    `,
+    [randomUUID(), userId]
+  )
+
+  return rows[0] ? mapChatConversationRow(rows[0]) : null
+}
+
+export async function listChatMessagesForUser(input: { userId: string; limit?: number }) {
+  await ensureDbReady()
+  const limit = Number.isFinite(input.limit)
+    ? Math.min(200, Math.max(1, Math.trunc(input.limit ?? 60)))
+    : 60
+
+  const conversation = await findOrCreateChatConversationForUser(input.userId)
+  if (!conversation) {
+    return [] as DbChatMessage[]
+  }
+
+  const { rows } = await pool.query<DbChatMessageRow>(
+    `
+      SELECT
+        m.id,
+        m.conversation_id,
+        m.user_id,
+        m.role,
+        m.content,
+        m.metadata_json,
+        m.created_at,
+        m.updated_at
+      FROM (
+        SELECT
+          id,
+          conversation_id,
+          user_id,
+          role,
+          content,
+          metadata_json,
+          created_at,
+          updated_at
+        FROM chat_messages
+        WHERE conversation_id = $1 AND user_id = $2
+        ORDER BY created_at DESC
+        LIMIT $3
+      ) AS m
+      ORDER BY m.created_at ASC
+    `,
+    [conversation.id, input.userId, limit]
+  )
+
+  return rows.map(mapChatMessageRow)
+}
+
+export async function createChatMessageForUser(input: {
+  userId: string
+  role: ChatMessageRole
+  content: string
+  metadataJson?: string
+}) {
+  await ensureDbReady()
+  const content = input.content.trim()
+  if (!content) return null
+
+  const conversation = await findOrCreateChatConversationForUser(input.userId)
+  if (!conversation) return null
+
+  const { rows } = await pool.query<DbChatMessageRow>(
+    `
+      INSERT INTO chat_messages (
+        id,
+        conversation_id,
+        user_id,
+        role,
+        content,
+        metadata_json
+      )
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING
+        id,
+        conversation_id,
+        user_id,
+        role,
+        content,
+        metadata_json,
+        created_at,
+        updated_at
+    `,
+    [
+      randomUUID(),
+      conversation.id,
+      input.userId,
+      input.role,
+      content,
+      input.metadataJson ?? '{}',
+    ]
+  )
+
+  await pool.query(
+    `
+      UPDATE chat_conversations
+      SET updated_at = NOW()
+      WHERE id = $1
+    `,
+    [conversation.id]
+  )
+
+  return rows[0] ? mapChatMessageRow(rows[0]) : null
+}
+
+export async function clearChatMessagesForUser(userId: string) {
+  await ensureDbReady()
+  const result = await pool.query(
+    `
+      DELETE FROM chat_messages
+      WHERE user_id = $1
+    `,
+    [userId]
+  )
+
+  await pool.query(
+    `
+      UPDATE chat_conversations
+      SET updated_at = NOW()
+      WHERE user_id = $1
+    `,
+    [userId]
+  )
+
+  return result.rowCount ?? 0
+}
+
 export async function syncExtractionTasksForUser(input: {
   userId: string
   extractionId: string
@@ -1477,6 +1772,8 @@ export async function syncExtractionTasksForUser(input: {
   try {
     await client.query('BEGIN')
 
+    const normalizeText = (value: string) => value.trim().toLocaleLowerCase()
+
     if (normalizedRows.length === 0) {
       await client.query(
         `
@@ -1490,55 +1787,162 @@ export async function syncExtractionTasksForUser(input: {
       return []
     }
 
-    for (const row of normalizedRows) {
+    const existingRows = await client.query<DbExtractionTaskRow>(
+      `
+        SELECT
+          id,
+          extraction_id,
+          user_id,
+          phase_id,
+          phase_title,
+          item_index,
+          item_text,
+          checked,
+          status,
+          due_at,
+          completed_at,
+          created_at,
+          updated_at
+        FROM extraction_tasks
+        WHERE extraction_id = $1 AND user_id = $2
+        ORDER BY phase_id ASC, item_index ASC, created_at ASC
+      `,
+      [input.extractionId, input.userId]
+    )
+
+    const existingTasks = existingRows.rows.map(mapExtractionTaskRow)
+    const availableExistingTasks = [...existingTasks]
+
+    const takeMatchingTask = (
+      predicate: (task: DbExtractionTask) => boolean
+    ): DbExtractionTask | null => {
+      const index = availableExistingTasks.findIndex((task) => predicate(task))
+      if (index < 0) return null
+      const [task] = availableExistingTasks.splice(index, 1)
+      return task ?? null
+    }
+
+    const resolvedRows = normalizedRows.map((row) => {
+      const normalizedItemText = normalizeText(row.itemText)
+      const normalizedPhaseTitle = normalizeText(row.phaseTitle)
+
+      let matchedTask =
+        takeMatchingTask(
+          (task) =>
+            task.phase_id === row.phaseId &&
+            task.item_index === row.itemIndex &&
+            normalizeText(task.item_text) === normalizedItemText
+        ) ??
+        takeMatchingTask(
+          (task) =>
+            normalizeText(task.item_text) === normalizedItemText &&
+            normalizeText(task.phase_title) === normalizedPhaseTitle
+        ) ??
+        takeMatchingTask((task) => normalizeText(task.item_text) === normalizedItemText) ??
+        takeMatchingTask((task) => task.phase_id === row.phaseId && task.item_index === row.itemIndex)
+
+      if (matchedTask) {
+        return {
+          ...row,
+          taskId: matchedTask.id,
+          reuseExistingTask: true,
+        }
+      }
+
+      return {
+        ...row,
+        taskId: randomUUID(),
+        reuseExistingTask: false,
+      }
+    })
+
+    const reusedTaskIds = new Set(
+      resolvedRows.filter((row) => row.reuseExistingTask).map((row) => row.taskId)
+    )
+    const taskIdsToDelete = existingTasks
+      .filter((task) => !reusedTaskIds.has(task.id))
+      .map((task) => task.id)
+
+    if (taskIdsToDelete.length > 0) {
       await client.query(
         `
-          INSERT INTO extraction_tasks (
-            id,
-            extraction_id,
-            user_id,
-            phase_id,
-            phase_title,
-            item_index,
-            item_text,
-            checked,
-            status
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, 'pending')
-          ON CONFLICT (extraction_id, phase_id, item_index)
-          DO UPDATE SET
-            phase_title = EXCLUDED.phase_title,
-            item_text = EXCLUDED.item_text,
-            updated_at = NOW()
+          DELETE FROM extraction_tasks
+          WHERE extraction_id = $1
+            AND user_id = $2
+            AND id = ANY($3::text[])
         `,
-        [
-          randomUUID(),
-          input.extractionId,
-          input.userId,
-          row.phaseId,
-          row.phaseTitle,
-          row.itemIndex,
-          row.itemText,
-        ]
+        [input.extractionId, input.userId, taskIdsToDelete]
       )
     }
 
-    const keepPhaseIds = normalizedRows.map((row) => row.phaseId)
-    const keepItemIndexes = normalizedRows.map((row) => row.itemIndex)
-    await client.query(
-      `
-        DELETE FROM extraction_tasks
-        WHERE extraction_id = $1
-          AND user_id = $2
-          AND NOT EXISTS (
-            SELECT 1
-            FROM unnest($3::int[], $4::int[]) AS keep(phase_id, item_index)
-            WHERE keep.phase_id = extraction_tasks.phase_id
-              AND keep.item_index = extraction_tasks.item_index
-          )
-      `,
-      [input.extractionId, input.userId, keepPhaseIds, keepItemIndexes]
-    )
+    const rowsReusingExistingTasks = resolvedRows.filter((row) => row.reuseExistingTask)
+    const temporaryBase = -1_000_000_000
+    for (let index = 0; index < rowsReusingExistingTasks.length; index += 1) {
+      const row = rowsReusingExistingTasks[index]
+      await client.query(
+        `
+          UPDATE extraction_tasks
+          SET
+            phase_id = $1,
+            item_index = $2,
+            updated_at = NOW()
+          WHERE id = $3 AND extraction_id = $4 AND user_id = $5
+        `,
+        [temporaryBase - index, temporaryBase - index, row.taskId, input.extractionId, input.userId]
+      )
+    }
+
+    for (const row of resolvedRows) {
+      if (row.reuseExistingTask) {
+        await client.query(
+          `
+            UPDATE extraction_tasks
+            SET
+              phase_id = $1,
+              phase_title = $2,
+              item_index = $3,
+              item_text = $4,
+              updated_at = NOW()
+            WHERE id = $5 AND extraction_id = $6 AND user_id = $7
+          `,
+          [
+            row.phaseId,
+            row.phaseTitle,
+            row.itemIndex,
+            row.itemText,
+            row.taskId,
+            input.extractionId,
+            input.userId,
+          ]
+        )
+      } else {
+        await client.query(
+          `
+            INSERT INTO extraction_tasks (
+              id,
+              extraction_id,
+              user_id,
+              phase_id,
+              phase_title,
+              item_index,
+              item_text,
+              checked,
+              status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, 'pending')
+          `,
+          [
+            row.taskId,
+            input.extractionId,
+            input.userId,
+            row.phaseId,
+            row.phaseTitle,
+            row.itemIndex,
+            row.itemText,
+          ]
+        )
+      }
+    }
 
     await client.query('COMMIT')
   } catch (error) {
@@ -1589,16 +1993,19 @@ export async function listExtractionTasksWithEventsForUser(input: { userId: stri
   const eventRows = await pool.query<DbExtractionTaskEventRow>(
     `
       SELECT
-        id,
-        task_id,
-        user_id,
-        event_type,
-        content,
-        metadata_json,
-        created_at
-      FROM extraction_task_events
-      WHERE user_id = $1 AND task_id = ANY($2::text[])
-      ORDER BY created_at DESC
+        e.id,
+        e.task_id,
+        e.user_id,
+        e.event_type,
+        e.content,
+        e.metadata_json,
+        e.created_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM extraction_task_events e
+      LEFT JOIN users u ON u.id = e.user_id
+      WHERE e.user_id = $1 AND e.task_id = ANY($2::text[])
+      ORDER BY e.created_at DESC
     `,
     [input.userId, taskIds]
   )
@@ -1652,16 +2059,19 @@ export async function listExtractionTasksWithEventsForSharedExtraction(extractio
   const eventRows = await pool.query<DbExtractionTaskEventRow>(
     `
       SELECT
-        id,
-        task_id,
-        user_id,
-        event_type,
-        content,
-        metadata_json,
-        created_at
-      FROM extraction_task_events
-      WHERE task_id = ANY($1::text[])
-      ORDER BY created_at DESC
+        e.id,
+        e.task_id,
+        e.user_id,
+        e.event_type,
+        e.content,
+        e.metadata_json,
+        e.created_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM extraction_task_events e
+      LEFT JOIN users u ON u.id = e.user_id
+      WHERE e.task_id = ANY($1::text[])
+      ORDER BY e.created_at DESC
     `,
     [taskIds]
   )
@@ -1831,9 +2241,12 @@ export async function listExtractionTaskAttachmentsForUser(input: {
         a.size_bytes,
         a.metadata_json,
         a.created_at,
-        a.updated_at
+        a.updated_at,
+        u.name AS user_name,
+        u.email AS user_email
       FROM extraction_task_attachments a
       INNER JOIN extraction_tasks t ON t.id = a.task_id
+      LEFT JOIN users u ON u.id = a.user_id
       WHERE
         a.task_id = $1
         AND a.extraction_id = $2
@@ -1842,6 +2255,41 @@ export async function listExtractionTaskAttachmentsForUser(input: {
       ORDER BY a.created_at DESC
     `,
     [input.taskId, input.extractionId, input.userId]
+  )
+
+  return rows.map(mapExtractionTaskAttachmentRow)
+}
+
+export async function listExtractionTaskAttachmentsForSharedExtraction(extractionId: string) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskAttachmentRow>(
+    `
+      SELECT
+        a.id,
+        a.task_id,
+        a.extraction_id,
+        a.user_id,
+        a.attachment_type,
+        a.storage_provider,
+        a.url,
+        a.thumbnail_url,
+        a.title,
+        a.mime_type,
+        a.size_bytes,
+        a.metadata_json,
+        a.created_at,
+        a.updated_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM extraction_task_attachments a
+      INNER JOIN extraction_tasks t ON t.id = a.task_id
+      LEFT JOIN users u ON u.id = a.user_id
+      WHERE
+        a.extraction_id = $1
+        AND t.extraction_id = $1
+      ORDER BY t.phase_id ASC, t.item_index ASC, a.created_at DESC
+    `,
+    [extractionId]
   )
 
   return rows.map(mapExtractionTaskAttachmentRow)
@@ -2918,10 +3366,25 @@ export async function listAdminUsers(input?: {
         u.created_at,
         u.email_verified_at,
         u.blocked_at,
-        COUNT(e.id)::int AS total_extractions,
-        MAX(e.created_at) AS last_extraction_at
+        COUNT(DISTINCT e.id)::int AS total_extractions,
+        MAX(e.created_at) AS last_extraction_at,
+        COALESCE(ai.ai_calls, 0)::int AS ai_calls,
+        COALESCE(ai.ai_input_tokens, 0)::bigint AS ai_input_tokens,
+        COALESCE(ai.ai_output_tokens, 0)::bigint AS ai_output_tokens,
+        COALESCE(ai.ai_cost_usd, 0) AS ai_cost_usd
       FROM users u
       LEFT JOIN extractions e ON e.user_id = u.id
+      LEFT JOIN (
+        SELECT
+          user_id,
+          COUNT(*)::int AS ai_calls,
+          SUM(input_tokens)::bigint AS ai_input_tokens,
+          SUM(output_tokens)::bigint AS ai_output_tokens,
+          SUM(cost_usd) AS ai_cost_usd
+        FROM ai_usage_log
+        WHERE user_id IS NOT NULL
+        GROUP BY user_id
+      ) ai ON ai.user_id = u.id
       WHERE
         ($1 = '' OR u.name ILIKE ('%' || $1 || '%') OR u.email ILIKE ('%' || $1 || '%'))
         AND (
@@ -2934,7 +3397,7 @@ export async function listAdminUsers(input?: {
           OR ($3 = 'blocked' AND u.blocked_at IS NOT NULL)
           OR ($3 = 'active' AND u.blocked_at IS NULL)
         )
-      GROUP BY u.id
+      GROUP BY u.id, ai.ai_calls, ai.ai_input_tokens, ai.ai_output_tokens, ai.ai_cost_usd
       ORDER BY u.created_at DESC
       LIMIT $4
       OFFSET $5
@@ -2960,12 +3423,27 @@ export async function findAdminUserById(userId: string): Promise<AdminUserListIt
         u.created_at,
         u.email_verified_at,
         u.blocked_at,
-        COUNT(e.id)::int AS total_extractions,
-        MAX(e.created_at) AS last_extraction_at
+        COUNT(DISTINCT e.id)::int AS total_extractions,
+        MAX(e.created_at) AS last_extraction_at,
+        COALESCE(ai.ai_calls, 0)::int AS ai_calls,
+        COALESCE(ai.ai_input_tokens, 0)::bigint AS ai_input_tokens,
+        COALESCE(ai.ai_output_tokens, 0)::bigint AS ai_output_tokens,
+        COALESCE(ai.ai_cost_usd, 0) AS ai_cost_usd
       FROM users u
       LEFT JOIN extractions e ON e.user_id = u.id
+      LEFT JOIN (
+        SELECT
+          user_id,
+          COUNT(*)::int AS ai_calls,
+          SUM(input_tokens)::bigint AS ai_input_tokens,
+          SUM(output_tokens)::bigint AS ai_output_tokens,
+          SUM(cost_usd) AS ai_cost_usd
+        FROM ai_usage_log
+        WHERE user_id = $1
+        GROUP BY user_id
+      ) ai ON ai.user_id = u.id
       WHERE u.id = $1
-      GROUP BY u.id
+      GROUP BY u.id, ai.ai_calls, ai.ai_input_tokens, ai.ai_output_tokens, ai.ai_cost_usd
       LIMIT 1
     `,
     [userId]
@@ -3298,6 +3776,25 @@ export async function updateUnverifiedUserRegistration(input: {
   return rows[0] ? mapUserRow(rows[0]) : null
 }
 
+export async function getAppSetting(key: string): Promise<string | null> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<{ value: string }>(
+    'SELECT value FROM app_settings WHERE key = $1',
+    [key]
+  )
+  return rows[0]?.value ?? null
+}
+
+export async function upsertAppSetting(key: string, value: string): Promise<void> {
+  await getDbReadyPromise()
+  await pool.query(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    [key, value]
+  )
+}
+
 export function mapUserForClient(user: Pick<DbUser, 'id' | 'name' | 'email'>) {
   return {
     id: user.id,
@@ -3311,5 +3808,314 @@ export function mapSessionUserForClient(session: DbSessionWithUser) {
     id: session.user_id,
     name: session.user_name,
     email: session.user_email,
+  }
+}
+
+// ─── AI Usage Log ────────────────────────────────────────────────────────────
+
+export interface AdminAiCostByModel {
+  provider: string
+  model: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+}
+
+export interface AdminAiCostByDay {
+  date: string
+  cost_usd: number
+  calls: number
+}
+
+export interface AdminAiCostStats {
+  period_days: number
+  total_calls: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost_usd: number
+  by_model: AdminAiCostByModel[]
+  by_day: AdminAiCostByDay[]
+}
+
+interface DbAiCostByModelRow {
+  provider: string
+  model: string
+  calls: number | string
+  input_tokens: number | string
+  output_tokens: number | string
+  cost_usd: string | number
+}
+
+interface DbAiCostByDayRow {
+  day: Date | string
+  cost_usd: string | number
+  calls: number | string
+}
+
+export async function logAiUsage(input: {
+  provider: string
+  model: string
+  useType: string
+  userId?: string | null
+  inputTokens: number
+  outputTokens: number
+  costUsd: number
+}): Promise<void> {
+  await ensureDbReady()
+  const id = randomUUID()
+  await pool.query(
+    `
+      INSERT INTO ai_usage_log (id, provider, model, use_type, user_id, input_tokens, output_tokens, cost_usd)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `,
+    [id, input.provider, input.model, input.useType, input.userId ?? null, input.inputTokens, input.outputTokens, input.costUsd]
+  )
+}
+
+export interface AdminUserAiCostDetail {
+  total_calls: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost_usd: number
+  by_model: AdminAiCostByModel[]
+  by_use_type: Array<{ use_type: string; calls: number; cost_usd: number }>
+}
+
+export async function getAdminUserAiCostDetail(userId: string): Promise<AdminUserAiCostDetail> {
+  await ensureDbReady()
+
+  const [totalsResult, byModelResult, byUseTypeResult] = await Promise.all([
+    pool.query<{ total_calls: number | string; total_input: number | string; total_output: number | string; total_cost: string | number }>(
+      `
+        SELECT
+          COUNT(*)::int AS total_calls,
+          COALESCE(SUM(input_tokens), 0)::bigint AS total_input,
+          COALESCE(SUM(output_tokens), 0)::bigint AS total_output,
+          COALESCE(SUM(cost_usd), 0) AS total_cost
+        FROM ai_usage_log
+        WHERE user_id = $1
+      `,
+      [userId]
+    ),
+    pool.query<DbAiCostByModelRow>(
+      `
+        SELECT
+          provider,
+          model,
+          COUNT(*)::int AS calls,
+          COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+          COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+          COALESCE(SUM(cost_usd), 0) AS cost_usd
+        FROM ai_usage_log
+        WHERE user_id = $1
+        GROUP BY provider, model
+        ORDER BY SUM(cost_usd) DESC
+      `,
+      [userId]
+    ),
+    pool.query<{ use_type: string; calls: number | string; cost_usd: string | number }>(
+      `
+        SELECT
+          use_type,
+          COUNT(*)::int AS calls,
+          COALESCE(SUM(cost_usd), 0) AS cost_usd
+        FROM ai_usage_log
+        WHERE user_id = $1
+        GROUP BY use_type
+        ORDER BY SUM(cost_usd) DESC
+      `,
+      [userId]
+    ),
+  ])
+
+  const totals = totalsResult.rows[0]
+  return {
+    total_calls: parseDbInteger(totals?.total_calls),
+    total_input_tokens: Number(totals?.total_input ?? 0),
+    total_output_tokens: Number(totals?.total_output ?? 0),
+    total_cost_usd: Number(totals?.total_cost ?? 0),
+    by_model: byModelResult.rows.map((row) => ({
+      provider: row.provider,
+      model: row.model,
+      calls: parseDbInteger(row.calls),
+      input_tokens: Number(row.input_tokens),
+      output_tokens: Number(row.output_tokens),
+      cost_usd: Number(row.cost_usd),
+    })),
+    by_use_type: byUseTypeResult.rows.map((row) => ({
+      use_type: row.use_type,
+      calls: parseDbInteger(row.calls),
+      cost_usd: Number(row.cost_usd),
+    })),
+  }
+}
+
+export interface AdminUserMonthStat {
+  month: string          // 'YYYY-MM'
+  month_label: string    // 'Feb 2026'
+  ai_calls: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+  extractions: number
+}
+
+export interface AdminUserMonthlyStats {
+  user_id: string
+  months: AdminUserMonthStat[]
+}
+
+export async function getAdminUserMonthlyStats(userId: string): Promise<AdminUserMonthlyStats> {
+  await ensureDbReady()
+
+  const [aiResult, extractionsResult] = await Promise.all([
+    pool.query<{
+      month: string
+      ai_calls: number | string
+      input_tokens: number | string
+      output_tokens: number | string
+      cost_usd: string | number
+    }>(
+      `
+        SELECT
+          TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
+          COUNT(*)::int AS ai_calls,
+          COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+          COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+          COALESCE(SUM(cost_usd), 0) AS cost_usd
+        FROM ai_usage_log
+        WHERE user_id = $1
+        GROUP BY DATE_TRUNC('month', created_at)
+        ORDER BY DATE_TRUNC('month', created_at) ASC
+      `,
+      [userId]
+    ),
+    pool.query<{ month: string; extractions: number | string }>(
+      `
+        SELECT
+          TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
+          COUNT(*)::int AS extractions
+        FROM extractions
+        WHERE user_id = $1
+        GROUP BY DATE_TRUNC('month', created_at)
+        ORDER BY DATE_TRUNC('month', created_at) ASC
+      `,
+      [userId]
+    ),
+  ])
+
+  // Merge AI stats and extractions by month
+  const extractionsByMonth = new Map(
+    extractionsResult.rows.map((r) => [r.month, parseDbInteger(r.extractions)])
+  )
+
+  const months: AdminUserMonthStat[] = aiResult.rows.map((row) => {
+    const [year, month] = row.month.split('-')
+    const date = new Date(Number(year), Number(month) - 1, 1)
+    const month_label = date.toLocaleDateString('es-ES', { month: 'short', year: 'numeric' })
+    return {
+      month: row.month,
+      month_label: month_label.charAt(0).toUpperCase() + month_label.slice(1),
+      ai_calls: parseDbInteger(row.ai_calls),
+      input_tokens: Number(row.input_tokens),
+      output_tokens: Number(row.output_tokens),
+      cost_usd: Number(row.cost_usd),
+      extractions: extractionsByMonth.get(row.month) ?? 0,
+    }
+  })
+
+  // Add months that have extractions but no AI calls (pre-tracking)
+  for (const [month, count] of Array.from(extractionsByMonth)) {
+    if (!months.find((m) => m.month === month)) {
+      const [year, mon] = month.split('-')
+      const date = new Date(Number(year), Number(mon) - 1, 1)
+      const month_label = date.toLocaleDateString('es-ES', { month: 'short', year: 'numeric' })
+      months.push({
+        month,
+        month_label: month_label.charAt(0).toUpperCase() + month_label.slice(1),
+        ai_calls: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_usd: 0,
+        extractions: count,
+      })
+    }
+  }
+
+  months.sort((a, b) => a.month.localeCompare(b.month))
+
+  return { user_id: userId, months }
+}
+
+export async function getAdminAiCostStats(periodDays = 30): Promise<AdminAiCostStats> {
+  await ensureDbReady()
+
+  const safeDays = Number.isFinite(periodDays) ? Math.min(90, Math.max(1, Math.trunc(periodDays))) : 30
+
+  const [totalsResult, byModelResult, byDayResult] = await Promise.all([
+    pool.query<{ total_calls: number | string; total_input: number | string; total_output: number | string; total_cost: string | number }>(
+      `
+        SELECT
+          COUNT(*)::int AS total_calls,
+          COALESCE(SUM(input_tokens), 0)::bigint AS total_input,
+          COALESCE(SUM(output_tokens), 0)::bigint AS total_output,
+          COALESCE(SUM(cost_usd), 0) AS total_cost
+        FROM ai_usage_log
+        WHERE created_at >= NOW() - ($1::int * INTERVAL '1 day')
+      `,
+      [safeDays]
+    ),
+    pool.query<DbAiCostByModelRow>(
+      `
+        SELECT
+          provider,
+          model,
+          COUNT(*)::int AS calls,
+          COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+          COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+          COALESCE(SUM(cost_usd), 0) AS cost_usd
+        FROM ai_usage_log
+        WHERE created_at >= NOW() - ($1::int * INTERVAL '1 day')
+        GROUP BY provider, model
+        ORDER BY SUM(cost_usd) DESC
+      `,
+      [safeDays]
+    ),
+    pool.query<DbAiCostByDayRow>(
+      `
+        SELECT
+          date_trunc('day', created_at) AS day,
+          COALESCE(SUM(cost_usd), 0) AS cost_usd,
+          COUNT(*)::int AS calls
+        FROM ai_usage_log
+        WHERE created_at >= date_trunc('day', NOW()) - (($1::int - 1) * INTERVAL '1 day')
+        GROUP BY 1
+        ORDER BY 1 ASC
+      `,
+      [safeDays]
+    ),
+  ])
+
+  const totals = totalsResult.rows[0]
+  return {
+    period_days: safeDays,
+    total_calls: parseDbInteger(totals?.total_calls),
+    total_input_tokens: Number(totals?.total_input ?? 0),
+    total_output_tokens: Number(totals?.total_output ?? 0),
+    total_cost_usd: Number(totals?.total_cost ?? 0),
+    by_model: byModelResult.rows.map((row) => ({
+      provider: row.provider,
+      model: row.model,
+      calls: parseDbInteger(row.calls),
+      input_tokens: Number(row.input_tokens),
+      output_tokens: Number(row.output_tokens),
+      cost_usd: Number(row.cost_usd),
+    })),
+    by_day: byDayResult.rows.map((row) => ({
+      date: toIso(row.day).slice(0, 10),
+      cost_usd: Number(row.cost_usd),
+      calls: parseDbInteger(row.calls),
+    })),
   }
 }

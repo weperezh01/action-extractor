@@ -25,7 +25,8 @@ export interface ExtractResultPayload {
   metadata: ExtractMetadata
 }
 
-export const EXTRACTION_MODEL = 'claude-sonnet-4-6'
+export const EXTRACTION_MODEL =
+  process.env.ACTION_EXTRACTOR_EXTRACTION_MODEL?.trim() || 'claude-sonnet-4-6'
 export const EXTRACTION_PROMPT_VERSION = 'multi-mode-v3'
 
 const MODE_PROMPT_VERSION: Record<ExtractionMode, string> = {

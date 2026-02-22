@@ -17,6 +17,59 @@ interface AdminUserItem {
   blocked_at: string | null
   total_extractions: number
   last_extraction_at: string | null
+  ai_calls: number
+  ai_input_tokens: number
+  ai_output_tokens: number
+  ai_cost_usd: number
+}
+
+interface UserAiCostByModel {
+  provider: string
+  model: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+}
+
+interface UserAiCostDetail {
+  total_calls: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost_usd: number
+  by_model: UserAiCostByModel[]
+  by_use_type: Array<{ use_type: string; calls: number; cost_usd: number }>
+}
+
+const MODEL_LABELS: Record<string, string> = {
+  'claude-opus-4-6': 'Claude Opus 4.6',
+  'claude-sonnet-4-6': 'Claude Sonnet 4.6',
+  'claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
+  'gpt-4o': 'GPT-4o',
+  'gpt-4o-mini': 'GPT-4o mini',
+  'o1-mini': 'o1-mini',
+  'gemini-2.0-flash': 'Gemini 2.0 Flash',
+  'gemini-2.0-flash-lite': 'Gemini 2.0 Flash Lite',
+  'gemini-1.5-pro': 'Gemini 1.5 Pro',
+  'gemini-1.5-flash': 'Gemini 1.5 Flash',
+}
+
+const PROVIDER_COLORS: Record<string, string> = {
+  anthropic: '#d97706',
+  openai: '#10b981',
+  google: '#3b82f6',
+}
+
+const USE_TYPE_LABELS: Record<string, string> = {
+  extraction: 'Extracción',
+  chat: 'Chat',
+  repair: 'Reparación JSON',
+}
+
+function formatTokens(n: number) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
 }
 
 interface AdminUsersResponse {
@@ -51,6 +104,15 @@ interface AdminUserExtractionsResponse {
   limit: number
 }
 
+function formatCurrencyUsd(value: number) {
+  return new Intl.NumberFormat('es-ES', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  }).format(value)
+}
+
 function formatDateTime(iso: string | null) {
   if (!iso) return 'N/A'
   const parsed = new Date(iso)
@@ -79,6 +141,8 @@ export default function AdminUsersPage() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [detailPayload, setDetailPayload] = useState<AdminUserExtractionsResponse | null>(null)
+  const [costDetail, setCostDetail] = useState<UserAiCostDetail | null>(null)
+  const [costLoading, setCostLoading] = useState(false)
 
   const [togglingUserId, setTogglingUserId] = useState<string | null>(null)
 
@@ -185,12 +249,29 @@ export default function AdminUsersPage() {
     }
   }, [loadUsers])
 
+  const loadUserCostDetail = useCallback(async (userId: string) => {
+    setCostLoading(true)
+    setCostDetail(null)
+    try {
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/costs`, { cache: 'no-store' })
+      const data = (await res.json().catch(() => null)) as (UserAiCostDetail & { error?: string }) | null
+      if (res.ok && data && !data.error) {
+        setCostDetail(data)
+      }
+    } catch {
+      // silencioso — el panel de costo simplemente no muestra datos
+    } finally {
+      setCostLoading(false)
+    }
+  }, [])
+
   const handleSelectUser = useCallback(
     (userId: string) => {
       setSelectedUserId(userId)
       void loadUserExtractions(userId)
+      void loadUserCostDetail(userId)
     },
-    [loadUserExtractions]
+    [loadUserExtractions, loadUserCostDetail]
   )
 
   const handleToggleBlock = useCallback(
@@ -340,10 +421,10 @@ export default function AdminUsersPage() {
                   <tr>
                     <th className="px-4 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Usuario</th>
                     <th className="px-4 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Registro</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Verificación</th>
                     <th className="px-4 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Estado</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Extracciones</th>
-                    <th className="px-4 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Última extracción</th>
+                    <th className="px-4 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Extracciones</th>
+                    <th className="px-4 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Llamadas IA</th>
+                    <th className="px-4 py-3 text-right font-semibold text-indigo-600 dark:text-indigo-400">Costo IA</th>
                     <th className="px-4 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Acciones</th>
                   </tr>
                 </thead>
@@ -359,35 +440,46 @@ export default function AdminUsersPage() {
                         className={isSelected ? 'bg-indigo-50/50 dark:bg-indigo-950/20' : ''}
                       >
                         <td className="px-4 py-3">
-                          <p className="font-medium text-slate-900 dark:text-slate-100">{user.name}</p>
+                          <Link
+                            href={`/admin/users/${user.id}`}
+                            className="font-medium text-slate-900 hover:text-indigo-600 dark:text-slate-100 dark:hover:text-indigo-400 hover:underline"
+                          >
+                            {user.name}
+                          </Link>
                           <p className="text-xs text-slate-500 dark:text-slate-400">{user.email}</p>
                         </td>
-                        <td className="px-4 py-3 text-slate-700 dark:text-slate-300">{formatDateTime(user.created_at)}</td>
+                        <td className="px-4 py-3 text-slate-600 dark:text-slate-400 text-xs">{formatDateTime(user.created_at)}</td>
                         <td className="px-4 py-3">
-                          {user.email_verified_at ? (
-                            <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-                              Verificado
-                            </span>
-                          ) : (
-                            <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-                              No verificado
-                            </span>
-                          )}
+                          <div className="flex flex-col gap-1">
+                            {isBlocked ? (
+                              <span className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+                                Bloqueado
+                              </span>
+                            ) : (
+                              <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700 dark:border-sky-700 dark:bg-sky-950/40 dark:text-sky-300">
+                                Activo
+                              </span>
+                            )}
+                            {user.email_verified_at ? (
+                              <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                                Verificado
+                              </span>
+                            ) : (
+                              <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+                                Sin verificar
+                              </span>
+                            )}
+                          </div>
                         </td>
-                        <td className="px-4 py-3">
-                          {isBlocked ? (
-                            <span className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
-                              Bloqueado
-                            </span>
-                          ) : (
-                            <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700 dark:border-sky-700 dark:bg-sky-950/40 dark:text-sky-300">
-                              Activo
-                            </span>
-                          )}
+                        <td className="px-4 py-3 text-right font-mono text-sm text-slate-700 dark:text-slate-300">{user.total_extractions}</td>
+                        <td className="px-4 py-3 text-right">
+                          <p className="font-mono text-sm text-slate-700 dark:text-slate-300">{user.ai_calls}</p>
+                          <p className="text-[10px] text-slate-400">{formatTokens(user.ai_input_tokens + user.ai_output_tokens)} tok</p>
                         </td>
-                        <td className="px-4 py-3 text-slate-700 dark:text-slate-300">{user.total_extractions}</td>
-                        <td className="px-4 py-3 text-slate-700 dark:text-slate-300">
-                          {formatDateTime(user.last_extraction_at)}
+                        <td className="px-4 py-3 text-right">
+                          <p className={`font-mono text-sm font-semibold ${user.ai_cost_usd > 0 ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-400'}`}>
+                            {user.ai_cost_usd > 0 ? formatCurrencyUsd(user.ai_cost_usd) : '$0.0000'}
+                          </p>
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex justify-end gap-2">
@@ -431,6 +523,126 @@ export default function AdminUsersPage() {
           <p className="text-xs text-slate-500 dark:text-slate-400">
             Mostrando {payload.users.length} de {payload.pagination.total} usuarios.
           </p>
+        )}
+
+        {/* Cost detail panel — shown when a user is selected */}
+        {selectedUserId && (costLoading || costDetail) && (
+          <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 dark:border-indigo-800/50 dark:bg-indigo-950/20 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+              <div>
+                <h2 className="text-base font-semibold text-indigo-900 dark:text-indigo-200">Consumo IA del usuario</h2>
+                {detailPayload?.user && (
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    {detailPayload.user.name} · {detailPayload.user.email}
+                  </p>
+                )}
+              </div>
+              {costLoading && (
+                <div className="w-4 h-4 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
+              )}
+            </div>
+
+            {costDetail && (
+              <>
+                {/* Summary row */}
+                <div className="grid gap-3 sm:grid-cols-4 mb-4">
+                  <div className="rounded-lg border border-indigo-100 bg-white p-3 dark:border-indigo-900/50 dark:bg-slate-900">
+                    <p className="text-[10px] uppercase text-slate-400 font-semibold">Costo total</p>
+                    <p className={`text-xl font-bold mt-0.5 ${costDetail.total_cost_usd > 0 ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-400'}`}>
+                      {formatCurrencyUsd(costDetail.total_cost_usd)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-indigo-100 bg-white p-3 dark:border-indigo-900/50 dark:bg-slate-900">
+                    <p className="text-[10px] uppercase text-slate-400 font-semibold">Llamadas API</p>
+                    <p className="text-xl font-bold mt-0.5 text-slate-800 dark:text-slate-100">{costDetail.total_calls}</p>
+                  </div>
+                  <div className="rounded-lg border border-indigo-100 bg-white p-3 dark:border-indigo-900/50 dark:bg-slate-900">
+                    <p className="text-[10px] uppercase text-slate-400 font-semibold">Tokens entrada</p>
+                    <p className="text-xl font-bold mt-0.5 text-slate-800 dark:text-slate-100">{formatTokens(costDetail.total_input_tokens)}</p>
+                  </div>
+                  <div className="rounded-lg border border-indigo-100 bg-white p-3 dark:border-indigo-900/50 dark:bg-slate-900">
+                    <p className="text-[10px] uppercase text-slate-400 font-semibold">Tokens salida</p>
+                    <p className="text-xl font-bold mt-0.5 text-slate-800 dark:text-slate-100">{formatTokens(costDetail.total_output_tokens)}</p>
+                  </div>
+                </div>
+
+                {costDetail.total_calls === 0 ? (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Este usuario aún no ha generado llamadas a la IA desde que se activó el tracking.
+                  </p>
+                ) : (
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    {/* By model */}
+                    <div>
+                      <p className="text-xs font-semibold text-slate-500 uppercase mb-2">Desglose por modelo</p>
+                      <div className="space-y-2">
+                        {costDetail.by_model.map((m) => {
+                          const providerColor = PROVIDER_COLORS[m.provider] ?? '#6366f1'
+                          const pct = costDetail.total_cost_usd > 0 ? (m.cost_usd / costDetail.total_cost_usd) * 100 : 0
+                          return (
+                            <div key={`${m.provider}-${m.model}`} className="rounded-lg border border-slate-100 bg-white p-2.5 dark:border-slate-700 dark:bg-slate-900">
+                              <div className="flex items-center justify-between text-xs mb-1.5">
+                                <span className="font-medium text-slate-700 dark:text-slate-200">
+                                  {MODEL_LABELS[m.model] ?? m.model}
+                                </span>
+                                <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                                  {formatCurrencyUsd(m.cost_usd)}
+                                </span>
+                              </div>
+                              <div className="h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden mb-1.5">
+                                <div
+                                  className="h-full rounded-full"
+                                  style={{ width: `${Math.max(2, pct)}%`, backgroundColor: providerColor }}
+                                />
+                              </div>
+                              <div className="flex gap-3 text-[10px] text-slate-400">
+                                <span style={{ color: providerColor }}>{m.provider}</span>
+                                <span>{m.calls} calls</span>
+                                <span>↑{formatTokens(m.input_tokens)}</span>
+                                <span>↓{formatTokens(m.output_tokens)}</span>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+
+                    {/* By use type */}
+                    <div>
+                      <p className="text-xs font-semibold text-slate-500 uppercase mb-2">Por tipo de uso</p>
+                      <div className="space-y-2">
+                        {costDetail.by_use_type.map((t) => (
+                          <div key={t.use_type} className="flex items-center justify-between rounded-lg border border-slate-100 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+                            <div>
+                              <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                                {USE_TYPE_LABELS[t.use_type] ?? t.use_type}
+                              </p>
+                              <p className="text-xs text-slate-400">{t.calls} llamadas</p>
+                            </div>
+                            <p className="font-mono font-semibold text-sm text-slate-900 dark:text-slate-100">
+                              {formatCurrencyUsd(t.cost_usd)}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* ROI hint */}
+                      {costDetail.total_cost_usd > 0 && (
+                        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-950/20">
+                          <p className="text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Punto de equilibrio</p>
+                          <p className="text-xs text-amber-700 dark:text-amber-400">
+                            Para cubrir costos, este usuario debería pagar al menos{' '}
+                            <span className="font-bold">{formatCurrencyUsd(costDetail.total_cost_usd)}</span>.
+                            Con un margen del 3×: <span className="font-bold">{formatCurrencyUsd(costDetail.total_cost_usd * 3)}</span>/período.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
         )}
 
         <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
