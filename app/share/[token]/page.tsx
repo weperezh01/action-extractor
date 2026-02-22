@@ -3,9 +3,11 @@ import Image from 'next/image'
 import { cache } from 'react'
 import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
-import { findSharedExtractionByToken } from '@/lib/db'
+import { findSharedExtractionByToken, listExtractionTasksWithEventsForSharedExtraction } from '@/lib/db'
+import type { InteractiveTask } from '@/app/home/lib/types'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
 import { buildYoutubeThumbnailUrl } from '@/lib/video-preview'
+import { SharedTaskTimeline } from './SharedTaskTimeline'
 import { ShareSignupCTA } from './ShareSignupCTA'
 
 export const runtime = 'nodejs'
@@ -18,6 +20,9 @@ const DEFAULT_SOCIAL_IMAGE = '/roi-logo.png'
 
 // React cache deduplica la consulta DB entre generateMetadata y el componente
 const getSharedExtraction = cache((token: string) => findSharedExtractionByToken(token))
+const getSharedTasks = cache((extractionId: string) =>
+  listExtractionTasksWithEventsForSharedExtraction(extractionId)
+)
 
 function resolveAppUrl() {
   const candidate =
@@ -134,6 +139,33 @@ function formatHistoryDate(isoDate: string) {
   }).format(parsed)
 }
 
+function mapSharedTasksToInteractiveTasks(
+  tasks: Awaited<ReturnType<typeof listExtractionTasksWithEventsForSharedExtraction>>
+): InteractiveTask[] {
+  return tasks.map((task) => ({
+    id: task.id,
+    extractionId: task.extraction_id,
+    phaseId: task.phase_id,
+    phaseTitle: task.phase_title,
+    itemIndex: task.item_index,
+    itemText: task.item_text,
+    checked: task.checked,
+    status: task.status,
+    dueAt: task.due_at,
+    completedAt: task.completed_at,
+    createdAt: task.created_at,
+    updatedAt: task.updated_at,
+    events: task.events.map((event) => ({
+      id: event.id,
+      taskId: event.task_id,
+      eventType: event.event_type,
+      content: event.content,
+      metadataJson: event.metadata_json,
+      createdAt: event.created_at,
+    })),
+  }))
+}
+
 export default async function SharePage({
   params,
 }: {
@@ -150,6 +182,8 @@ export default async function SharePage({
   }
 
   const phases = safeParse<Phase[]>(extraction.phases_json, [])
+  const tasks = await getSharedTasks(extraction.id)
+  const interactiveTasks = mapSharedTasksToInteractiveTasks(tasks)
   const metadata = safeParse<ExtractionMetadata>(extraction.metadata_json, {
     readingTime: '3 min',
     difficulty: 'Media',
@@ -161,6 +195,9 @@ export default async function SharePage({
   const thumbnailUrl =
     extraction.thumbnail_url ||
     (extraction.video_id ? buildYoutubeThumbnailUrl(extraction.video_id) : null)
+  const googleStartHref = `/api/auth/google/start?${new URLSearchParams({
+    next: `/share/${token}`,
+  }).toString()}`
 
   return (
     <main className="min-h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
@@ -216,7 +253,7 @@ export default async function SharePage({
               </div>
               <div className="flex flex-wrap gap-2">
                 <Link
-                  href="/api/auth/google/start?next=/"
+                  href={googleStartHref}
                   className="inline-flex items-center justify-center rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm ring-1 ring-slate-200 transition-colors hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-800"
                 >
                   Continuar con Google
@@ -311,6 +348,14 @@ export default async function SharePage({
                 </section>
               ))}
             </div>
+
+            {interactiveTasks.length > 0 && (
+              <SharedTaskTimeline
+                extractionId={extraction.id}
+                shareToken={token}
+                tasks={interactiveTasks}
+              />
+            )}
 
             <div className="mx-6 mb-6 rounded-xl border border-amber-100 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/20 md:mx-7 md:mb-7">
               <h3 className="mb-1 text-sm font-bold text-amber-800 dark:text-amber-200">Consejo Pro</h3>

@@ -4,6 +4,7 @@ import { YoutubeTranscript } from '@danielxceron/youtube-transcript'
 import { getUserFromRequest } from '@/lib/auth'
 import {
   createExtraction,
+  findExtractionOrderNumberForUser,
   findAnyVideoCacheByVideoId,
   findVideoCacheByVideoId,
   upsertVideoCache,
@@ -329,6 +330,7 @@ export async function POST(req: NextRequest) {
         proTip: responsePayload.proTip,
         metadataJson: JSON.stringify(responsePayload.metadata),
       })
+      const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
 
       return NextResponse.json({
         ...responsePayload,
@@ -339,6 +341,8 @@ export async function POST(req: NextRequest) {
         outputLanguageRequested: outputLanguage,
         outputLanguageResolved: outputLanguage === 'auto' ? null : outputLanguage,
         id: saved.id,
+        orderNumber: orderNumber ?? undefined,
+        shareVisibility: saved.share_visibility,
         createdAt: saved.created_at,
         cached: true,
       })
@@ -494,6 +498,7 @@ export async function POST(req: NextRequest) {
       proTip: responsePayload.proTip,
       metadataJson: JSON.stringify(responsePayload.metadata),
     })
+    const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
 
     return NextResponse.json({
       ...responsePayload,
@@ -504,6 +509,8 @@ export async function POST(req: NextRequest) {
       outputLanguageRequested: outputLanguage,
       outputLanguageResolved: resolvedOutputLanguage,
       id: saved.id,
+      orderNumber: orderNumber ?? undefined,
+      shareVisibility: saved.share_visibility,
       createdAt: saved.created_at,
       cached: false,
     })

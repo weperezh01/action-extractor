@@ -28,6 +28,8 @@ export async function GET(req: NextRequest) {
   const rows = await listExtractionsByUser(user.id, 50)
   const history = rows.map((row) => ({
     id: row.id,
+    orderNumber: row.order_number ?? 0,
+    shareVisibility: row.share_visibility ?? 'private',
     url: row.url,
     videoId: row.video_id,
     videoTitle: row.video_title,

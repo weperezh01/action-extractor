@@ -44,7 +44,7 @@ import {
   parseSseFrame,
   resolveInitialTheme,
 } from '@/app/home/lib/utils'
-import type { ExtractResult, HistoryItem, Theme } from '@/app/home/lib/types'
+import type { ExtractResult, HistoryItem, Phase, ShareVisibility, Theme } from '@/app/home/lib/types'
 
 function slowScrollToElement(element: HTMLElement, durationMs = 1400) {
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -80,6 +80,33 @@ function slowScrollToElement(element: HTMLElement, durationMs = 1400) {
   }
 
   window.requestAnimationFrame(animate)
+}
+
+function normalizePersistedPhases(payload: unknown, fallback: Phase[]): Phase[] {
+  if (!Array.isArray(payload)) return fallback
+
+  const normalized = payload
+    .map((phase, index) => {
+      if (!phase || typeof phase !== 'object') return null
+
+      const rawTitle = (phase as { title?: unknown }).title
+      const rawItems = (phase as { items?: unknown }).items
+      const title = typeof rawTitle === 'string' ? rawTitle.trim() : ''
+      const items = Array.isArray(rawItems)
+        ? rawItems.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
+        : []
+
+      if (!title || items.length === 0) return null
+
+      return {
+        id: index + 1,
+        title,
+        items,
+      }
+    })
+    .filter((phase): phase is Phase => Boolean(phase))
+
+  return normalized.length > 0 ? normalized : fallback
 }
 
 function ValueHighlights() {
@@ -133,6 +160,9 @@ function ActionExtractor() {
   const [isExportingPdf, setIsExportingPdf] = useState(false)
   const [shareLoading, setShareLoading] = useState(false)
   const [shareCopied, setShareCopied] = useState(false)
+  const [shareVisibilityLoading, setShareVisibilityLoading] = useState(false)
+  const [historyShareLoadingItemId, setHistoryShareLoadingItemId] = useState<string | null>(null)
+  const [historyShareCopiedItemId, setHistoryShareCopiedItemId] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [streamStatus, setStreamStatus] = useState<string | null>(null)
   const [streamPreview, setStreamPreview] = useState('')
@@ -171,6 +201,9 @@ function ActionExtractor() {
     setNotice(null)
     setActivePhase(null)
     setShareCopied(false)
+    setShareVisibilityLoading(false)
+    setHistoryShareCopiedItemId(null)
+    setHistoryShareLoadingItemId(null)
     setStreamStatus(null)
     setStreamPreview('')
     setShouldScrollToResult(false)
@@ -608,10 +641,15 @@ function ActionExtractor() {
       if (parsed.event === 'result') {
         if (payload && typeof payload === 'object') {
           const resolvedMode = normalizeExtractionMode((payload as { mode?: unknown }).mode)
+          const resolvedShareVisibility: ShareVisibility =
+            (payload as { shareVisibility?: unknown }).shareVisibility === 'public'
+              ? 'public'
+              : 'private'
           const fromCache = (payload as { cached?: unknown }).cached === true
           setResult({
             ...(payload as ExtractResult),
             mode: resolvedMode,
+            shareVisibility: resolvedShareVisibility,
           })
           setExtractionMode(resolvedMode)
           setShareCopied(false)
@@ -724,17 +762,18 @@ function ActionExtractor() {
     setActivePhase(activePhase === id ? null : id)
   }
 
-  const handleCopyNotion = async () => {
-    if (!result) return
+  const handleCopyMarkdown = async (source?: ExtractResult | HistoryItem) => {
+    const markdownSource = source ?? result
+    if (!markdownSource) return
 
     const markdown = buildExtractionMarkdown({
-      extractionMode: result.mode ?? extractionMode,
-      objective: result.objective,
-      phases: result.phases,
-      proTip: result.proTip,
-      metadata: result.metadata,
-      videoTitle: result.videoTitle ?? null,
-      videoUrl: (result.url ?? url).trim(),
+      extractionMode: markdownSource.mode ?? extractionMode,
+      objective: markdownSource.objective,
+      phases: markdownSource.phases,
+      proTip: markdownSource.proTip,
+      metadata: markdownSource.metadata,
+      videoTitle: markdownSource.videoTitle ?? null,
+      videoUrl: (markdownSource.url ?? url).trim(),
     })
 
     await navigator.clipboard.writeText(markdown)
@@ -743,6 +782,10 @@ function ActionExtractor() {
 
   const handleCopyShareLink = async () => {
     if (!result?.id || shareLoading) return
+    if (result.shareVisibility !== 'public') {
+      setError('Este contenido está privado. Cámbialo a Público para compartirlo.')
+      return
+    }
 
     setShareLoading(true)
     setShareCopied(false)
@@ -767,6 +810,8 @@ function ActionExtractor() {
         const message =
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
+            : res.status === 409
+              ? 'Este contenido está privado. Cámbialo a Público para compartirlo.'
             : 'No se pudo generar el enlace compartible.'
         setError(message)
         return
@@ -788,6 +833,214 @@ function ActionExtractor() {
       setShareLoading(false)
     }
   }
+
+  const handleCopyShareLinkFromHistory = async (item: HistoryItem) => {
+    const extractionId = item.id?.trim()
+    if (!extractionId || historyShareLoadingItemId) return
+    if (item.shareVisibility !== 'public') {
+      setError('Este contenido está privado. Cámbialo a Público para compartirlo.')
+      return
+    }
+
+    setHistoryShareLoadingItemId(extractionId)
+    setHistoryShareCopiedItemId(null)
+    try {
+      const res = await fetch('/api/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extractionId }),
+      })
+
+      if (res.status === 401) {
+        handleUnauthorized()
+        setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+        return
+      }
+
+      const data = (await res.json().catch(() => null)) as
+        | { token?: unknown; error?: unknown }
+        | null
+
+      if (!res.ok) {
+        const message =
+          typeof data?.error === 'string' && data.error.trim()
+            ? data.error
+            : res.status === 409
+              ? 'Este contenido está privado. Cámbialo a Público para compartirlo.'
+            : 'No se pudo generar el enlace compartible.'
+        setError(message)
+        return
+      }
+
+      const token = typeof data?.token === 'string' ? data.token : ''
+      if (!token) {
+        setError('No se pudo generar el enlace compartible.')
+        return
+      }
+
+      const shareUrl = `${window.location.origin}/share/${token}`
+      await navigator.clipboard.writeText(shareUrl)
+      setHistoryShareCopiedItemId(extractionId)
+      setNotice('Enlace compartible copiado.')
+      window.setTimeout(() => {
+        setHistoryShareCopiedItemId((current) => (current === extractionId ? null : current))
+      }, 2500)
+    } catch {
+      setError('No se pudo copiar el enlace compartible. Intenta de nuevo.')
+    } finally {
+      setHistoryShareLoadingItemId((current) => (current === extractionId ? null : current))
+    }
+  }
+
+  const handleUpdateShareVisibility = async (nextVisibility: ShareVisibility) => {
+    const extractionId = result?.id?.trim()
+    if (!extractionId || shareVisibilityLoading) return
+
+    const currentVisibility: ShareVisibility = result?.shareVisibility === 'public' ? 'public' : 'private'
+    if (currentVisibility === nextVisibility) return
+
+    setError(null)
+    setNotice(null)
+    setShareVisibilityLoading(true)
+    setResult((previous) => {
+      if (!previous || previous.id !== extractionId) return previous
+      return {
+        ...previous,
+        shareVisibility: nextVisibility,
+      }
+    })
+
+    try {
+      const res = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/visibility`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shareVisibility: nextVisibility }),
+      })
+
+      if (res.status === 401) {
+        handleUnauthorized()
+        setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+        setResult((previous) => {
+          if (!previous || previous.id !== extractionId) return previous
+          return {
+            ...previous,
+            shareVisibility: currentVisibility,
+          }
+        })
+        return
+      }
+
+      const data = (await res.json().catch(() => null)) as
+        | { shareVisibility?: unknown; error?: unknown }
+        | null
+
+      if (!res.ok) {
+        const message =
+          typeof data?.error === 'string' && data.error.trim()
+            ? data.error
+            : 'No se pudo actualizar la visibilidad del contenido.'
+        setError(message)
+        setResult((previous) => {
+          if (!previous || previous.id !== extractionId) return previous
+          return {
+            ...previous,
+            shareVisibility: currentVisibility,
+          }
+        })
+        return
+      }
+
+      const persistedVisibility: ShareVisibility =
+        data?.shareVisibility === 'public' ? 'public' : 'private'
+
+      setResult((previous) => {
+        if (!previous || previous.id !== extractionId) return previous
+        return {
+          ...previous,
+          shareVisibility: persistedVisibility,
+        }
+      })
+
+      if (persistedVisibility !== 'public') {
+        setShareCopied(false)
+      }
+
+      setNotice(
+        persistedVisibility === 'public'
+          ? 'Contenido marcado como Público. Ya puedes compartir su enlace.'
+          : 'Contenido marcado como Privado. El enlace compartido dejará de estar disponible.'
+      )
+      void loadHistory()
+    } catch {
+      setError('No se pudo actualizar la visibilidad. Intenta nuevamente.')
+      setResult((previous) => {
+        if (!previous || previous.id !== extractionId) return previous
+        return {
+          ...previous,
+          shareVisibility: currentVisibility,
+        }
+      })
+    } finally {
+      setShareVisibilityLoading(false)
+    }
+  }
+
+  const handleSaveResultPhases = useCallback(
+    async (phases: Phase[]) => {
+      const extractionId = result?.id?.trim()
+      if (!extractionId) {
+        setError('No se puede guardar: esta extracción no está en historial.')
+        return false
+      }
+
+      setError(null)
+      setNotice(null)
+
+      try {
+        const res = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/content`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phases }),
+        })
+
+        if (res.status === 401) {
+          handleUnauthorized()
+          setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+          return false
+        }
+
+        const data = (await res.json().catch(() => null)) as
+          | { phases?: unknown; error?: unknown }
+          | null
+
+        if (!res.ok) {
+          const message =
+            typeof data?.error === 'string' && data.error.trim()
+              ? data.error
+              : 'No se pudo guardar la edición del contenido.'
+          setError(message)
+          return false
+        }
+
+        const persistedPhases = normalizePersistedPhases(data?.phases, phases)
+        setResult((previous) => {
+          if (!previous || previous.id !== extractionId) return previous
+          return {
+            ...previous,
+            phases: persistedPhases,
+          }
+        })
+        setActivePhase(null)
+        setNotice('Contenido actualizado correctamente.')
+        void loadHistory()
+        return true
+      } catch {
+        setError('No se pudo guardar la edición del contenido.')
+        return false
+      }
+    },
+    [handleUnauthorized, loadHistory, result]
+  )
 
   const handleDownloadPdf = async (source?: ExtractResult | HistoryItem) => {
     const exportSource = source ?? result
@@ -927,6 +1180,8 @@ function ActionExtractor() {
     setExtractionMode(mode)
     setResult({
       id: item.id,
+      orderNumber: item.orderNumber,
+      shareVisibility: item.shareVisibility === 'public' ? 'public' : 'private',
       createdAt: item.createdAt,
       url: item.url,
       videoId: item.videoId ?? null,
@@ -941,6 +1196,7 @@ function ActionExtractor() {
     setActivePhase(null)
     setError(null)
     setShareCopied(false)
+    setShareVisibilityLoading(false)
     setStreamStatus(null)
     setStreamPreview('')
     setShouldScrollToResult(true)
@@ -954,6 +1210,8 @@ function ActionExtractor() {
       return {
         ...previous,
         id: undefined,
+        orderNumber: undefined,
+        shareVisibility: undefined,
         createdAt: undefined,
       }
     })
@@ -1019,10 +1277,14 @@ function ActionExtractor() {
       return {
         ...previous,
         id: undefined,
+        orderNumber: undefined,
+        shareVisibility: undefined,
         createdAt: undefined,
       }
     })
     setShareCopied(false)
+    setHistoryShareCopiedItemId(null)
+    setHistoryShareLoadingItemId(null)
 
     const deletedCount =
       typeof result.deletedCount === 'number' && result.deletedCount > 0
@@ -1279,6 +1541,8 @@ function ActionExtractor() {
                   isExportingPdf={isExportingPdf}
                   shareLoading={shareLoading}
                   shareCopied={shareCopied}
+                  shareVisibility={result.shareVisibility === 'public' ? 'public' : 'private'}
+                  shareVisibilityLoading={shareVisibilityLoading}
                   notionConfigured={notionConfigured}
                   notionConnected={notionConnected}
                   notionWorkspaceName={notionWorkspaceName}
@@ -1301,7 +1565,9 @@ function ActionExtractor() {
                   googleDocsExportLoading={googleDocsExportLoading}
                   onDownloadPdf={handleDownloadPdf}
                   onCopyShareLink={handleCopyShareLink}
-                  onCopyMarkdown={handleCopyNotion}
+                  onCopyMarkdown={() => handleCopyMarkdown()}
+                  onShareVisibilityChange={handleUpdateShareVisibility}
+                  onSavePhases={handleSaveResultPhases}
                   onExportToNotion={() => handleExportToNotion(result.id)}
                   onConnectNotion={handleConnectNotion}
                   onExportToTrello={() => handleExportToTrello(result.id)}
@@ -1328,6 +1594,8 @@ function ActionExtractor() {
                 historyLoading={historyLoading}
                 historyQuery={historyQuery}
                 pdfExportLoading={isExportingPdf}
+                historyShareLoadingItemId={historyShareLoadingItemId}
+                historyShareCopiedItemId={historyShareCopiedItemId}
                 notionConfigured={notionConfigured}
                 notionConnected={notionConnected}
                 notionLoading={notionLoading}
@@ -1349,16 +1617,18 @@ function ActionExtractor() {
                 onHistoryQueryChange={setHistoryQuery}
                 onRefresh={() => void loadHistory()}
                 onSelectItem={openHistoryItem}
-                onDownloadPdf={(item) => void handleDownloadPdf(item)}
-                onExportToNotion={(item) => void handleExportToNotion(item.id)}
+                onDownloadPdf={(item) => handleDownloadPdf(item)}
+                onCopyShareLink={handleCopyShareLinkFromHistory}
+                onCopyMarkdown={handleCopyMarkdown}
+                onExportToNotion={(item) => handleExportToNotion(item.id)}
                 onConnectNotion={handleConnectNotion}
-                onExportToTrello={(item) => void handleExportToTrello(item.id)}
+                onExportToTrello={(item) => handleExportToTrello(item.id)}
                 onConnectTrello={handleConnectTrello}
-                onExportToTodoist={(item) => void handleExportToTodoist(item.id)}
+                onExportToTodoist={(item) => handleExportToTodoist(item.id)}
                 onConnectTodoist={handleConnectTodoist}
-                onExportToGoogleDocs={(item) => void handleExportToGoogleDocs(item.id)}
+                onExportToGoogleDocs={(item) => handleExportToGoogleDocs(item.id)}
                 onConnectGoogleDocs={handleConnectGoogleDocs}
-                onDeleteItem={(item) => void handleDeleteHistoryItem(item)}
+                onDeleteItem={handleDeleteHistoryItem}
                 onClearHistory={() => void handleClearHistory()}
               />
             </div>

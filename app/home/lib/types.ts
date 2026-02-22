@@ -1,5 +1,7 @@
 import type { ExtractionMode } from '@/lib/extraction-modes'
 
+export type ShareVisibility = 'private' | 'public'
+
 export interface Phase {
   id: number
   title: string
@@ -15,6 +17,8 @@ export interface ExtractMetadata {
 
 export interface ExtractResult {
   id?: string
+  orderNumber?: number
+  shareVisibility?: ShareVisibility
   createdAt?: string
   cached?: boolean
   url?: string
@@ -30,12 +34,16 @@ export interface ExtractResult {
 
 export interface HistoryItem extends ExtractResult {
   id: string
+  orderNumber: number
+  shareVisibility: ShareVisibility
   url: string
   createdAt: string
 }
 
 export type InteractiveTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed'
 export type InteractiveTaskEventType = 'note' | 'pending_action' | 'blocker'
+export type InteractiveTaskAttachmentType = 'pdf' | 'image' | 'audio' | 'youtube_link'
+export type InteractiveTaskAttachmentStorageProvider = 'cloudinary' | 'external'
 
 export interface InteractiveTaskEvent {
   id: string
@@ -60,6 +68,42 @@ export interface InteractiveTask {
   createdAt: string
   updatedAt: string
   events: InteractiveTaskEvent[]
+}
+
+export interface InteractiveTaskAttachment {
+  id: string
+  taskId: string
+  extractionId: string
+  attachmentType: InteractiveTaskAttachmentType
+  storageProvider: InteractiveTaskAttachmentStorageProvider
+  url: string
+  thumbnailUrl: string | null
+  title: string | null
+  mimeType: string | null
+  sizeBytes: number | null
+  metadataJson: string
+  metadata?: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+}
+
+export interface InteractiveTaskComment {
+  id: string
+  taskId: string
+  extractionId: string
+  userId: string
+  userName: string | null
+  userEmail: string | null
+  content: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface InteractiveTaskLikeSummary {
+  taskId: string
+  extractionId: string
+  likesCount: number
+  likedByMe: boolean
 }
 
 export interface SessionUser {

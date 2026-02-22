@@ -33,6 +33,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
     }
 
+    if (extraction.share_visibility !== 'public') {
+      return NextResponse.json(
+        {
+          error:
+            'Este contenido está privado. Cámbialo a Público para generar un enlace compartible.',
+        },
+        { status: 409 }
+      )
+    }
+
     const shareToken = await createOrGetShareToken({
       extractionId: extraction.id,
       userId: user.id,

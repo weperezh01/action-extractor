@@ -8,8 +8,21 @@ import {
   Clock,
   Copy,
   Download,
+  ExternalLink,
+  FileText,
+  ImageIcon,
+  Link2,
   Loader2,
+  MessageSquare,
+  Music2,
+  Pencil,
+  Plus,
+  Save,
   Share2,
+  ThumbsUp,
+  Trash2,
+  Upload,
+  X,
   Zap,
 } from 'lucide-react'
 import Image from 'next/image'
@@ -21,10 +34,14 @@ import {
 } from '@/lib/extraction-modes'
 import type {
   ExtractResult,
+  InteractiveTaskAttachment,
+  InteractiveTaskComment,
+  InteractiveTaskLikeSummary,
   InteractiveTask,
   InteractiveTaskEventType,
   InteractiveTaskStatus,
   Phase,
+  ShareVisibility,
 } from '@/app/home/lib/types'
 
 interface ResultPanelProps {
@@ -37,6 +54,8 @@ interface ResultPanelProps {
   isExportingPdf: boolean
   shareLoading: boolean
   shareCopied: boolean
+  shareVisibility: ShareVisibility
+  shareVisibilityLoading: boolean
   isProcessing: boolean
 
   notionConfigured: boolean
@@ -66,6 +85,8 @@ interface ResultPanelProps {
   onDownloadPdf: () => void | Promise<void>
   onCopyShareLink: () => void | Promise<void>
   onCopyMarkdown: () => void | Promise<void>
+  onShareVisibilityChange: (visibility: ShareVisibility) => void | Promise<void>
+  onSavePhases: (phases: Phase[]) => Promise<boolean>
   onReExtractMode: (mode: ExtractionMode) => void
 
   onExportToNotion: () => void | Promise<void>
@@ -143,6 +164,21 @@ function formatTaskEventDate(isoDate: string) {
   }).format(parsed)
 }
 
+function formatAttachmentSize(sizeBytes: number | null) {
+  if (typeof sizeBytes !== 'number' || !Number.isFinite(sizeBytes) || sizeBytes <= 0) return null
+  const kb = 1024
+  const mb = kb * 1024
+  if (sizeBytes >= mb) return `${(sizeBytes / mb).toFixed(1)} MB`
+  return `${Math.max(1, Math.round(sizeBytes / kb))} KB`
+}
+
+function getAttachmentTypeLabel(type: InteractiveTaskAttachment['attachmentType']) {
+  if (type === 'image') return 'Imagen'
+  if (type === 'audio') return 'Audio'
+  if (type === 'youtube_link') return 'YouTube'
+  return 'PDF'
+}
+
 export function ResultPanel({
   result,
   url,
@@ -152,6 +188,8 @@ export function ResultPanel({
   isExportingPdf,
   shareLoading,
   shareCopied,
+  shareVisibility,
+  shareVisibilityLoading,
   isProcessing,
 
   notionConfigured,
@@ -181,6 +219,8 @@ export function ResultPanel({
   onDownloadPdf,
   onCopyShareLink,
   onCopyMarkdown,
+  onShareVisibilityChange,
+  onSavePhases,
   onReExtractMode,
 
   onExportToNotion,
@@ -211,6 +251,35 @@ export function ResultPanel({
   const [taskMutationLoadingId, setTaskMutationLoadingId] = useState<string | null>(null)
   const [eventDraftType, setEventDraftType] = useState<InteractiveTaskEventType>('note')
   const [eventDraftContent, setEventDraftContent] = useState('')
+  const [idCopied, setIdCopied] = useState(false)
+  const [isStructureEditing, setIsStructureEditing] = useState(false)
+  const [phaseDrafts, setPhaseDrafts] = useState<Phase[]>(result.phases)
+  const [structureSaving, setStructureSaving] = useState(false)
+  const [structureError, setStructureError] = useState<string | null>(null)
+  const [taskAttachmentsByTaskId, setTaskAttachmentsByTaskId] = useState<
+    Record<string, InteractiveTaskAttachment[]>
+  >({})
+  const [taskAttachmentLoadingId, setTaskAttachmentLoadingId] = useState<string | null>(null)
+  const [taskAttachmentMutationId, setTaskAttachmentMutationId] = useState<string | null>(null)
+  const [taskAttachmentErrorByTaskId, setTaskAttachmentErrorByTaskId] = useState<
+    Record<string, string | null>
+  >({})
+  const [youtubeAttachmentDraftByTaskId, setYoutubeAttachmentDraftByTaskId] = useState<
+    Record<string, string>
+  >({})
+  const [taskCommentsByTaskId, setTaskCommentsByTaskId] = useState<
+    Record<string, InteractiveTaskComment[]>
+  >({})
+  const [taskLikeSummaryByTaskId, setTaskLikeSummaryByTaskId] = useState<
+    Record<string, InteractiveTaskLikeSummary>
+  >({})
+  const [taskCommunityLoadingId, setTaskCommunityLoadingId] = useState<string | null>(null)
+  const [taskCommunityMutationId, setTaskCommunityMutationId] = useState<string | null>(null)
+  const [taskCommunityErrorByTaskId, setTaskCommunityErrorByTaskId] = useState<
+    Record<string, string | null>
+  >({})
+  const [taskCommentDraftByTaskId, setTaskCommentDraftByTaskId] = useState<Record<string, string>>({})
+  const taskFileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const phasesSignature = useMemo(() => JSON.stringify(result.phases), [result.phases])
   const isAnyActionLoading =
     isExportingPdf ||
@@ -277,6 +346,31 @@ export function ResultPanel({
       document.removeEventListener('pointerdown', handlePointerDown)
     }
   }, [isActionsExpanded, isReextractExpanded])
+
+  useEffect(() => {
+    setIdCopied(false)
+  }, [result.id])
+
+  useEffect(() => {
+    setTaskAttachmentsByTaskId({})
+    setTaskAttachmentErrorByTaskId({})
+    setYoutubeAttachmentDraftByTaskId({})
+    setTaskAttachmentLoadingId(null)
+    setTaskAttachmentMutationId(null)
+    setTaskCommentsByTaskId({})
+    setTaskLikeSummaryByTaskId({})
+    setTaskCommunityLoadingId(null)
+    setTaskCommunityMutationId(null)
+    setTaskCommunityErrorByTaskId({})
+    setTaskCommentDraftByTaskId({})
+    taskFileInputRefs.current = {}
+  }, [result.id])
+
+  useEffect(() => {
+    if (isStructureEditing) return
+    setPhaseDrafts(result.phases.map((phase) => ({ ...phase, items: [...phase.items] })))
+    setStructureError(null)
+  }, [isStructureEditing, result.phases])
 
   useEffect(() => {
     const extractionId = result.id?.trim()
@@ -355,10 +449,129 @@ export function ResultPanel({
     return map
   }, [interactiveTasks])
 
-  const activeTask = useMemo(
-    () => interactiveTasks.find((task) => task.id === activeTaskId) ?? null,
-    [activeTaskId, interactiveTasks]
-  )
+  const fetchTaskAttachments = async (taskId: string) => {
+    const extractionId = result.id?.trim()
+    if (!extractionId) return false
+
+    setTaskAttachmentLoadingId(taskId)
+    setTaskAttachmentErrorByTaskId((previous) => ({
+      ...previous,
+      [taskId]: null,
+    }))
+
+    try {
+      const response = await fetch(
+        `/api/extractions/${encodeURIComponent(extractionId)}/tasks/${encodeURIComponent(
+          taskId
+        )}/attachments`,
+        { cache: 'no-store' }
+      )
+      const payload = (await response.json().catch(() => null)) as
+        | { attachments?: unknown; error?: unknown }
+        | null
+
+      if (!response.ok) {
+        const message =
+          typeof payload?.error === 'string' && payload.error.trim()
+            ? payload.error
+            : 'No se pudieron cargar las evidencias.'
+        setTaskAttachmentErrorByTaskId((previous) => ({
+          ...previous,
+          [taskId]: message,
+        }))
+        return false
+      }
+
+      const attachments = Array.isArray(payload?.attachments)
+        ? (payload.attachments as InteractiveTaskAttachment[])
+        : []
+      setTaskAttachmentsByTaskId((previous) => ({
+        ...previous,
+        [taskId]: attachments,
+      }))
+      return true
+    } catch {
+      setTaskAttachmentErrorByTaskId((previous) => ({
+        ...previous,
+        [taskId]: 'No se pudieron cargar las evidencias.',
+      }))
+      return false
+    } finally {
+      setTaskAttachmentLoadingId((previous) => (previous === taskId ? null : previous))
+    }
+  }
+
+  const fetchTaskCommunity = async (taskId: string) => {
+    const extractionId = result.id?.trim()
+    if (!extractionId) return false
+
+    setTaskCommunityLoadingId(taskId)
+    setTaskCommunityErrorByTaskId((previous) => ({
+      ...previous,
+      [taskId]: null,
+    }))
+
+    try {
+      const response = await fetch(
+        `/api/extractions/${encodeURIComponent(extractionId)}/tasks/${encodeURIComponent(
+          taskId
+        )}/community`,
+        { cache: 'no-store' }
+      )
+      const payload = (await response.json().catch(() => null)) as
+        | { comments?: unknown; likeSummary?: unknown; error?: unknown }
+        | null
+
+      if (!response.ok) {
+        const message =
+          typeof payload?.error === 'string' && payload.error.trim()
+            ? payload.error
+            : 'No se pudo cargar la comunidad.'
+        setTaskCommunityErrorByTaskId((previous) => ({
+          ...previous,
+          [taskId]: message,
+        }))
+        return false
+      }
+
+      const comments = Array.isArray(payload?.comments)
+        ? (payload.comments as InteractiveTaskComment[])
+        : []
+      const likeSummary =
+        payload?.likeSummary && typeof payload.likeSummary === 'object'
+          ? (payload.likeSummary as InteractiveTaskLikeSummary)
+          : {
+              taskId,
+              extractionId,
+              likesCount: 0,
+              likedByMe: false,
+            }
+
+      setTaskCommentsByTaskId((previous) => ({
+        ...previous,
+        [taskId]: comments,
+      }))
+      setTaskLikeSummaryByTaskId((previous) => ({
+        ...previous,
+        [taskId]: likeSummary,
+      }))
+      return true
+    } catch {
+      setTaskCommunityErrorByTaskId((previous) => ({
+        ...previous,
+        [taskId]: 'No se pudo cargar la comunidad.',
+      }))
+      return false
+    } finally {
+      setTaskCommunityLoadingId((previous) => (previous === taskId ? null : previous))
+    }
+  }
+
+  useEffect(() => {
+    const extractionId = result.id?.trim()
+    if (!extractionId || !activeTaskId) return
+    void Promise.all([fetchTaskAttachments(activeTaskId), fetchTaskCommunity(activeTaskId)])
+  }, [activeTaskId, result.id])
 
   const refreshTaskCollection = async (payload: Record<string, unknown>) => {
     const extractionId = result.id?.trim()
@@ -437,6 +650,290 @@ export function ResultPanel({
     }
   }
 
+  const handleOpenTaskFilePicker = (taskId: string) => {
+    const node = taskFileInputRefs.current[taskId]
+    if (!node) return
+    node.click()
+  }
+
+  const handleTaskFileSelected = async (task: InteractiveTask, file: File | null) => {
+    if (!file) return
+    const extractionId = result.id?.trim()
+    if (!extractionId) return
+
+    setTaskAttachmentMutationId(task.id)
+    setTaskAttachmentErrorByTaskId((previous) => ({
+      ...previous,
+      [task.id]: null,
+    }))
+
+    try {
+      const formData = new FormData()
+      formData.set('file', file)
+
+      const response = await fetch(
+        `/api/extractions/${encodeURIComponent(extractionId)}/tasks/${encodeURIComponent(
+          task.id
+        )}/attachments`,
+        {
+          method: 'POST',
+          body: formData,
+        }
+      )
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: unknown }
+        | null
+
+      if (!response.ok) {
+        const message =
+          typeof payload?.error === 'string' && payload.error.trim()
+            ? payload.error
+            : 'No se pudo subir la evidencia.'
+        setTaskAttachmentErrorByTaskId((previous) => ({
+          ...previous,
+          [task.id]: message,
+        }))
+        return
+      }
+
+      await fetchTaskAttachments(task.id)
+    } catch {
+      setTaskAttachmentErrorByTaskId((previous) => ({
+        ...previous,
+        [task.id]: 'No se pudo subir la evidencia.',
+      }))
+    } finally {
+      setTaskAttachmentMutationId((previous) => (previous === task.id ? null : previous))
+      const node = taskFileInputRefs.current[task.id]
+      if (node) node.value = ''
+    }
+  }
+
+  const handleTaskYoutubeDraftChange = (taskId: string, value: string) => {
+    setYoutubeAttachmentDraftByTaskId((previous) => ({
+      ...previous,
+      [taskId]: value,
+    }))
+  }
+
+  const handleAddTaskYoutubeLink = async (task: InteractiveTask) => {
+    const extractionId = result.id?.trim()
+    if (!extractionId) return
+
+    const youtubeUrl = (youtubeAttachmentDraftByTaskId[task.id] ?? '').trim()
+    if (!youtubeUrl) return
+
+    setTaskAttachmentMutationId(task.id)
+    setTaskAttachmentErrorByTaskId((previous) => ({
+      ...previous,
+      [task.id]: null,
+    }))
+
+    try {
+      const response = await fetch(
+        `/api/extractions/${encodeURIComponent(extractionId)}/tasks/${encodeURIComponent(
+          task.id
+        )}/attachments`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ youtubeUrl }),
+        }
+      )
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: unknown }
+        | null
+
+      if (!response.ok) {
+        const message =
+          typeof payload?.error === 'string' && payload.error.trim()
+            ? payload.error
+            : 'No se pudo guardar el enlace.'
+        setTaskAttachmentErrorByTaskId((previous) => ({
+          ...previous,
+          [task.id]: message,
+        }))
+        return
+      }
+
+      setYoutubeAttachmentDraftByTaskId((previous) => ({
+        ...previous,
+        [task.id]: '',
+      }))
+      await fetchTaskAttachments(task.id)
+    } catch {
+      setTaskAttachmentErrorByTaskId((previous) => ({
+        ...previous,
+        [task.id]: 'No se pudo guardar el enlace.',
+      }))
+    } finally {
+      setTaskAttachmentMutationId((previous) => (previous === task.id ? null : previous))
+    }
+  }
+
+  const handleDeleteTaskAttachment = async (
+    task: InteractiveTask,
+    attachment: InteractiveTaskAttachment
+  ) => {
+    const extractionId = result.id?.trim()
+    if (!extractionId) return
+
+    const confirmed =
+      typeof window === 'undefined'
+        ? false
+        : window.confirm('¿Eliminar esta evidencia del subítem?')
+    if (!confirmed) return
+
+    setTaskAttachmentMutationId(task.id)
+    setTaskAttachmentErrorByTaskId((previous) => ({
+      ...previous,
+      [task.id]: null,
+    }))
+
+    try {
+      const response = await fetch(
+        `/api/extractions/${encodeURIComponent(extractionId)}/tasks/${encodeURIComponent(
+          task.id
+        )}/attachments/${encodeURIComponent(attachment.id)}`,
+        {
+          method: 'DELETE',
+        }
+      )
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: unknown }
+        | null
+
+      if (!response.ok) {
+        const message =
+          typeof payload?.error === 'string' && payload.error.trim()
+            ? payload.error
+            : 'No se pudo eliminar la evidencia.'
+        setTaskAttachmentErrorByTaskId((previous) => ({
+          ...previous,
+          [task.id]: message,
+        }))
+        return
+      }
+
+      await fetchTaskAttachments(task.id)
+    } catch {
+      setTaskAttachmentErrorByTaskId((previous) => ({
+        ...previous,
+        [task.id]: 'No se pudo eliminar la evidencia.',
+      }))
+    } finally {
+      setTaskAttachmentMutationId((previous) => (previous === task.id ? null : previous))
+    }
+  }
+
+  const handleTaskCommentDraftChange = (taskId: string, value: string) => {
+    setTaskCommentDraftByTaskId((previous) => ({
+      ...previous,
+      [taskId]: value,
+    }))
+  }
+
+  const mutateTaskCommunity = async (taskId: string, payload: Record<string, unknown>) => {
+    const extractionId = result.id?.trim()
+    if (!extractionId) return false
+
+    setTaskCommunityMutationId(taskId)
+    setTaskCommunityErrorByTaskId((previous) => ({
+      ...previous,
+      [taskId]: null,
+    }))
+
+    try {
+      const response = await fetch(
+        `/api/extractions/${encodeURIComponent(extractionId)}/tasks/${encodeURIComponent(
+          taskId
+        )}/community`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }
+      )
+      const data = (await response.json().catch(() => null)) as
+        | { comments?: unknown; likeSummary?: unknown; error?: unknown }
+        | null
+
+      if (!response.ok) {
+        const message =
+          typeof data?.error === 'string' && data.error.trim()
+            ? data.error
+            : 'No se pudo actualizar la comunidad.'
+        setTaskCommunityErrorByTaskId((previous) => ({
+          ...previous,
+          [taskId]: message,
+        }))
+        return false
+      }
+
+      const comments = Array.isArray(data?.comments) ? (data.comments as InteractiveTaskComment[]) : []
+      const likeSummary =
+        data?.likeSummary && typeof data.likeSummary === 'object'
+          ? (data.likeSummary as InteractiveTaskLikeSummary)
+          : {
+              taskId,
+              extractionId,
+              likesCount: 0,
+              likedByMe: false,
+            }
+
+      setTaskCommentsByTaskId((previous) => ({
+        ...previous,
+        [taskId]: comments,
+      }))
+      setTaskLikeSummaryByTaskId((previous) => ({
+        ...previous,
+        [taskId]: likeSummary,
+      }))
+      return true
+    } catch {
+      setTaskCommunityErrorByTaskId((previous) => ({
+        ...previous,
+        [taskId]: 'No se pudo actualizar la comunidad.',
+      }))
+      return false
+    } finally {
+      setTaskCommunityMutationId((previous) => (previous === taskId ? null : previous))
+    }
+  }
+
+  const handleAddTaskComment = async (task: InteractiveTask) => {
+    const content = (taskCommentDraftByTaskId[task.id] ?? '').trim()
+    if (!content) return
+
+    const ok = await mutateTaskCommunity(task.id, {
+      action: 'add_comment',
+      content,
+    })
+    if (ok) {
+      setTaskCommentDraftByTaskId((previous) => ({
+        ...previous,
+        [task.id]: '',
+      }))
+    }
+  }
+
+  const handleDeleteTaskComment = async (task: InteractiveTask, commentId: string) => {
+    const confirmed =
+      typeof window === 'undefined' ? false : window.confirm('¿Eliminar este comentario?')
+    if (!confirmed) return
+
+    await mutateTaskCommunity(task.id, {
+      action: 'delete_comment',
+      commentId,
+    })
+  }
+
+  const handleToggleTaskLike = async (task: InteractiveTask) => {
+    await mutateTaskCommunity(task.id, {
+      action: 'toggle_like',
+    })
+  }
+
   const collapseActionsSection = () => {
     setIsActionsExpanded(false)
     setCollapseAfterAsyncAction(false)
@@ -502,6 +999,129 @@ export function ResultPanel({
     })
   }
 
+  const handleCopyExtractionId = async () => {
+    const extractionId = result.id?.trim()
+    if (!extractionId) return
+
+    try {
+      await navigator.clipboard.writeText(extractionId)
+      setIdCopied(true)
+      window.setTimeout(() => setIdCopied(false), 2200)
+    } catch {
+      setIdCopied(false)
+    }
+  }
+
+  const handleStartStructureEditing = () => {
+    setPhaseDrafts(result.phases.map((phase) => ({ ...phase, items: [...phase.items] })))
+    setStructureError(null)
+    setIsStructureEditing(true)
+  }
+
+  const handleCancelStructureEditing = () => {
+    setPhaseDrafts(result.phases.map((phase) => ({ ...phase, items: [...phase.items] })))
+    setStructureError(null)
+    setIsStructureEditing(false)
+  }
+
+  const handleDraftPhaseTitleChange = (phaseId: number, title: string) => {
+    setPhaseDrafts((previous) =>
+      previous.map((phase) => (phase.id === phaseId ? { ...phase, title } : phase))
+    )
+  }
+
+  const handleDraftSubItemChange = (phaseId: number, itemIndex: number, value: string) => {
+    setPhaseDrafts((previous) =>
+      previous.map((phase) => {
+        if (phase.id !== phaseId) return phase
+        return {
+          ...phase,
+          items: phase.items.map((item, idx) => (idx === itemIndex ? value : item)),
+        }
+      })
+    )
+  }
+
+  const handleAddDraftPhase = () => {
+    setPhaseDrafts((previous) => {
+      const nextId = previous.reduce((max, phase) => Math.max(max, phase.id), 0) + 1
+      return [
+        ...previous,
+        {
+          id: nextId,
+          title: `Ítem principal ${previous.length + 1}`,
+          items: ['Nuevo subítem'],
+        },
+      ]
+    })
+  }
+
+  const handleDeleteDraftPhase = (phaseId: number) => {
+    setPhaseDrafts((previous) => previous.filter((phase) => phase.id !== phaseId))
+  }
+
+  const handleAddDraftSubItem = (phaseId: number) => {
+    setPhaseDrafts((previous) =>
+      previous.map((phase) =>
+        phase.id === phaseId
+          ? {
+              ...phase,
+              items: [...phase.items, 'Nuevo subítem'],
+            }
+          : phase
+      )
+    )
+  }
+
+  const handleDeleteDraftSubItem = (phaseId: number, itemIndex: number) => {
+    setPhaseDrafts((previous) =>
+      previous.map((phase) => {
+        if (phase.id !== phaseId) return phase
+        return {
+          ...phase,
+          items: phase.items.filter((_, idx) => idx !== itemIndex),
+        }
+      })
+    )
+  }
+
+  const handleSaveStructure = async () => {
+    const normalized = phaseDrafts
+      .map((phase, index) => ({
+        id: index + 1,
+        title: phase.title.trim(),
+        items: phase.items.map((item) => item.trim()).filter((item) => item.length > 0),
+      }))
+      .filter((phase) => phase.title.length > 0 || phase.items.length > 0)
+
+    if (normalized.length === 0) {
+      setStructureError('Debes conservar al menos un ítem principal.')
+      return
+    }
+
+    const hasInvalidPhase = normalized.some((phase) => !phase.title || phase.items.length === 0)
+    if (hasInvalidPhase) {
+      setStructureError('Cada ítem principal debe tener título y al menos un subítem.')
+      return
+    }
+
+    setStructureSaving(true)
+    setStructureError(null)
+    try {
+      const ok = await onSavePhases(normalized)
+      if (!ok) {
+        setStructureError('No se pudo guardar la edición del contenido.')
+        return
+      }
+
+      setIsStructureEditing(false)
+      setPhaseDrafts(normalized)
+      setActiveTaskId(null)
+    } finally {
+      setStructureSaving(false)
+    }
+  }
+
   return (
     <div className="animate-fade-slide">
       <div className="flex flex-wrap gap-4 mb-6">
@@ -544,6 +1164,81 @@ export function ResultPanel({
                   <p className="text-xs text-slate-500 mt-2 break-all dark:text-slate-400">
                     {sourceUrl}
                   </p>
+                )}
+                {(result.orderNumber || result.id) && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {result.orderNumber && result.orderNumber > 0 && (
+                      <p className="inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300">
+                        #{result.orderNumber}
+                      </p>
+                    )}
+                    {result.id && (
+                      <p className="inline-flex max-w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                        <span className="truncate" title={result.id}>
+                          ID: {result.id}
+                        </span>
+                      </p>
+                    )}
+                    {result.id && (
+                      <div className="inline-flex h-7 items-center overflow-hidden rounded-md border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+                        <button
+                          type="button"
+                          onClick={() => onShareVisibilityChange('private')}
+                          disabled={shareVisibilityLoading}
+                          className={`h-full px-2 text-[11px] font-semibold transition-colors ${
+                            shareVisibility === 'private'
+                              ? 'bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900'
+                              : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                          }`}
+                          aria-label="Marcar contenido como privado"
+                        >
+                          Privado
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onShareVisibilityChange('public')}
+                          disabled={shareVisibilityLoading}
+                          className={`h-full px-2 text-[11px] font-semibold transition-colors ${
+                            shareVisibility === 'public'
+                              ? 'bg-emerald-600 text-white dark:bg-emerald-500 dark:text-emerald-950'
+                              : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                          }`}
+                          aria-label="Marcar contenido como público"
+                        >
+                          Público
+                        </button>
+                      </div>
+                    )}
+                    {result.id && (
+                      <button
+                        type="button"
+                        onClick={handleCopyExtractionId}
+                        className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                        aria-label="Copiar ID único"
+                      >
+                        <Copy size={12} />
+                        {idCopied ? 'Copiado' : 'Copiar'}
+                      </button>
+                    )}
+                    {result.id && (
+                      <button
+                        type="button"
+                        onClick={onCopyShareLink}
+                        disabled={shareLoading || shareVisibility !== 'public'}
+                        className="inline-flex h-7 items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2 text-[11px] font-semibold text-violet-700 transition-colors hover:bg-violet-100 disabled:cursor-wait disabled:opacity-70 dark:border-violet-700 dark:bg-violet-900/25 dark:text-violet-300 dark:hover:bg-violet-900/40"
+                        aria-label="Compartir extracción"
+                      >
+                        <Share2 size={12} />
+                        {shareLoading
+                          ? 'Compartiendo...'
+                          : shareVisibility !== 'public'
+                            ? 'Solo público'
+                            : shareCopied
+                              ? 'Compartido'
+                              : 'Compartir'}
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -601,11 +1296,17 @@ export function ResultPanel({
 
                         <button
                           onClick={() => triggerAsyncAction(onCopyShareLink)}
-                          disabled={!result.id || shareLoading}
+                          disabled={!result.id || shareLoading || shareVisibility !== 'public'}
                           className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-wait disabled:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
                         >
                           <Share2 size={15} />
-                          {shareLoading ? 'Generando...' : shareCopied ? 'Copiado' : 'Compartir'}
+                          {shareLoading
+                            ? 'Generando...'
+                            : shareVisibility !== 'public'
+                              ? 'Público requerido'
+                              : shareCopied
+                                ? 'Copiado'
+                                : 'Compartir'}
                         </button>
 
                         <button
@@ -843,232 +1544,749 @@ export function ResultPanel({
         </div>
 
         <div className="p-6 space-y-4">
-          {result.phases.map((phase: Phase) => (
-            <div
-              key={phase.id}
-              className="border border-slate-200 rounded-xl overflow-hidden transition-all hover:border-indigo-200 hover:shadow-sm group dark:border-slate-700 dark:hover:border-indigo-700"
-            >
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Ítems y Subítems</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Define y organiza la estructura accionable del contenido.
+              </p>
+            </div>
+            {result.id && !isStructureEditing && (
               <button
-                onClick={() => onTogglePhase(phase.id)}
-                className="w-full flex items-center justify-between p-4 bg-white hover:bg-slate-50 transition-colors text-left dark:bg-slate-900 dark:hover:bg-slate-800"
+                type="button"
+                onClick={handleStartStructureEditing}
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
               >
-                <div className="flex items-center gap-3">
+                <Pencil size={14} />
+                Editar contenido
+              </button>
+            )}
+          </div>
+
+          {isStructureEditing && (
+            <div className="space-y-3 rounded-xl border border-indigo-200 bg-indigo-50/50 p-4 dark:border-indigo-800 dark:bg-indigo-900/20">
+              {structureError && (
+                <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
+                  {structureError}
+                </p>
+              )}
+
+              <div className="space-y-3">
+                {phaseDrafts.map((phase) => (
                   <div
-                    className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold ${
-                      activePhase === phase.id
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-slate-100 text-slate-500 group-hover:bg-indigo-100 group-hover:text-indigo-600 dark:bg-slate-700 dark:text-slate-300 dark:group-hover:bg-indigo-900/40 dark:group-hover:text-indigo-300'
+                    key={phase.id}
+                    className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900"
+                  >
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={phase.title}
+                        onChange={(event) => handleDraftPhaseTitleChange(phase.id, event.target.value)}
+                        placeholder="Título del ítem principal"
+                        className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteDraftPhase(phase.id)}
+                        disabled={phaseDrafts.length <= 1 || structureSaving}
+                        className="inline-flex h-9 items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40"
+                        aria-label={`Eliminar ítem principal ${phase.title || phase.id}`}
+                      >
+                        <Trash2 size={13} />
+                        Borrar
+                      </button>
+                    </div>
+
+                    <div className="mt-3 rounded-lg border border-slate-200/80 bg-slate-50/70 p-2.5 dark:border-slate-700 dark:bg-slate-800/30">
+                      <p className="mb-2 pl-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                        Subítems
+                      </p>
+                      <div className="ml-2 space-y-2 border-l border-dashed border-slate-300 pl-3 dark:border-slate-600">
+                        {phase.items.map((item, idx) => {
+                          const subItemNumber = `${phase.id}.${idx + 1}`
+
+                          return (
+                            <div key={`${phase.id}-draft-item-${idx}`} className="flex items-center gap-2">
+                              <span className="inline-flex h-6 min-w-[2.3rem] items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 px-1.5 font-mono text-[11px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                                {subItemNumber}
+                              </span>
+                              <span
+                                aria-hidden="true"
+                                className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-indigo-400/80 dark:bg-indigo-300/70"
+                              />
+                              <input
+                                type="text"
+                                value={item}
+                                onChange={(event) =>
+                                  handleDraftSubItemChange(phase.id, idx, event.target.value)
+                                }
+                                placeholder="Texto del subítem"
+                                className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteDraftSubItem(phase.id, idx)}
+                                disabled={phase.items.length <= 1 || structureSaving}
+                                className="inline-flex h-9 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-2 text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40"
+                                aria-label="Eliminar subítem"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleAddDraftSubItem(phase.id)}
+                      disabled={structureSaving}
+                      className="mt-3 ml-2 inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                    >
+                      <Plus size={13} />
+                      Agregar subítem
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleAddDraftPhase}
+                  disabled={structureSaving}
+                  className="inline-flex h-9 items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300 dark:hover:bg-emerald-900/40"
+                >
+                  <Plus size={14} />
+                  Agregar ítem principal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveStructure()}
+                  disabled={structureSaving}
+                  className="inline-flex h-9 items-center gap-1 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                >
+                  {structureSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                  Guardar cambios
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelStructureEditing}
+                  disabled={structureSaving}
+                  className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                >
+                  <X size={14} />
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!isStructureEditing &&
+            result.phases.map((phase: Phase) => {
+              const isPhaseExpanded = activePhase === phase.id
+
+              return (
+                <div
+                  key={phase.id}
+                  className="border border-slate-200 rounded-xl overflow-hidden transition-all hover:border-indigo-200 hover:shadow-sm group dark:border-slate-700 dark:hover:border-indigo-700"
+                >
+                  <button
+                    onClick={() => onTogglePhase(phase.id)}
+                    className="w-full flex items-center justify-between p-4 bg-white hover:bg-slate-50 transition-colors text-left dark:bg-slate-900 dark:hover:bg-slate-800"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold ${
+                          isPhaseExpanded
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-100 text-slate-500 group-hover:bg-indigo-100 group-hover:text-indigo-600 dark:bg-slate-700 dark:text-slate-300 dark:group-hover:bg-indigo-900/40 dark:group-hover:text-indigo-300'
+                        }`}
+                      >
+                        {phase.id}
+                      </div>
+                      <span className="font-bold text-slate-800 dark:text-slate-100">{phase.title}</span>
+                    </div>
+                    {isPhaseExpanded ? (
+                      <ChevronUp size={20} className="text-slate-400" />
+                    ) : (
+                      <ChevronDown size={20} className="text-slate-400" />
+                    )}
+                  </button>
+
+                  <div
+                    aria-hidden={!isPhaseExpanded}
+                    className={`grid transition-[grid-template-rows,opacity] duration-700 ease-out ${
+                      isPhaseExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
                     }`}
                   >
-                    {phase.id}
-                  </div>
-                  <span className="font-bold text-slate-800 dark:text-slate-100">{phase.title}</span>
-                </div>
-                {activePhase === phase.id ? (
-                  <ChevronUp size={20} className="text-slate-400" />
-                ) : (
-                  <ChevronDown size={20} className="text-slate-400" />
-                )}
-              </button>
+                    <div className="overflow-hidden">
+                      <div
+                        className={`border-t border-slate-100 bg-slate-50/50 p-4 pt-0 transition-transform duration-700 ease-out dark:border-slate-800 dark:bg-slate-800/40 ${
+                          isPhaseExpanded ? 'translate-y-0' : '-translate-y-2 pointer-events-none'
+                        }`}
+                      >
+                        <div className="mt-4 space-y-2">
+                          {tasksLoading && (
+                            <p className="inline-flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+                              <Loader2 size={13} className="animate-spin" />
+                              Sincronizando checklist interactivo...
+                            </p>
+                          )}
+                          {tasksError && (
+                            <p className="text-xs font-medium text-rose-600 dark:text-rose-300">{tasksError}</p>
+                          )}
+                          {!result.id && (
+                            <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                              Para guardar el avance necesitas una extracción persistida en historial.
+                            </p>
+                          )}
+                        </div>
 
-              {activePhase === phase.id && (
-                <div className="p-4 pt-0 bg-slate-50/50 border-t border-slate-100 dark:bg-slate-800/40 dark:border-slate-800">
-                  <div className="mt-4 space-y-2">
-                    {tasksLoading && (
-                      <p className="inline-flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
-                        <Loader2 size={13} className="animate-spin" />
-                        Sincronizando checklist interactivo...
-                      </p>
-                    )}
-                    {tasksError && (
-                      <p className="text-xs font-medium text-rose-600 dark:text-rose-300">{tasksError}</p>
-                    )}
-                    {!result.id && (
-                      <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                        Para guardar el avance necesitas una extracción persistida en historial.
-                      </p>
-                    )}
-                  </div>
+                        <div className="mt-4">
+                          <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                            Subítems
+                          </p>
+                          <ul className="ml-2 space-y-3 border-l border-dashed border-slate-300 pl-4 dark:border-slate-700">
+                            {phase.items.map((item, idx) => {
+                              const subItemNumber = `${phase.id}.${idx + 1}`
+                              const task = tasksByPhaseItem.get(`${phase.id}:${idx}`) ?? null
+                              const isTaskExpanded = task ? activeTaskId === task.id : false
+                              const isTaskMutating = task ? taskMutationLoadingId === task.id : false
+                              const taskAttachments = task ? (taskAttachmentsByTaskId[task.id] ?? []) : []
+                              const taskAttachmentError = task
+                                ? (taskAttachmentErrorByTaskId[task.id] ?? null)
+                                : null
+                              const taskYoutubeDraft = task
+                                ? (youtubeAttachmentDraftByTaskId[task.id] ?? '')
+                                : ''
+                              const isTaskAttachmentLoading = task
+                                ? taskAttachmentLoadingId === task.id
+                                : false
+                              const isTaskAttachmentMutating = task
+                                ? taskAttachmentMutationId === task.id
+                                : false
+                              const taskComments = task ? (taskCommentsByTaskId[task.id] ?? []) : []
+                              const taskLikeSummary = task
+                                ? (taskLikeSummaryByTaskId[task.id] ?? {
+                                    taskId: task.id,
+                                    extractionId: task.extractionId,
+                                    likesCount: 0,
+                                    likedByMe: false,
+                                  })
+                                : null
+                              const taskCommentDraft = task ? (taskCommentDraftByTaskId[task.id] ?? '') : ''
+                              const taskCommunityError = task
+                                ? (taskCommunityErrorByTaskId[task.id] ?? null)
+                                : null
+                              const isTaskCommunityLoading = task
+                                ? taskCommunityLoadingId === task.id
+                                : false
+                              const isTaskCommunityMutating = task
+                                ? taskCommunityMutationId === task.id
+                                : false
 
-                  <ul className="space-y-3 mt-4">
-                    {phase.items.map((item, idx) => {
-                      const task = tasksByPhaseItem.get(`${phase.id}:${idx}`) ?? null
-                      const isTaskExpanded = task ? activeTaskId === task.id : false
-                      const isTaskMutating = task ? taskMutationLoadingId === task.id : false
-
-                      return (
-                        <li
-                          key={`${phase.id}-${idx}`}
-                          className="rounded-xl border border-slate-200 bg-white/80 dark:border-slate-700 dark:bg-slate-900/70"
-                        >
-                          <div className="flex items-start gap-3 p-3">
-                            <div className="mt-0.5 relative flex-shrink-0">
-                              <input
-                                type="checkbox"
-                                checked={task?.checked ?? false}
-                                disabled={!task || isTaskMutating}
-                                onChange={(event) => {
-                                  if (!task) return
-                                  void handleTaskToggle(task, event.target.checked)
-                                }}
-                                className="peer w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer appearance-none border checked:bg-indigo-600 checked:border-indigo-600 transition-all disabled:cursor-not-allowed disabled:opacity-60"
-                              />
-                              <CheckCircle2
-                                size={12}
-                                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white opacity-0 peer-checked:opacity-100 pointer-events-none"
-                                strokeWidth={3}
-                              />
-                            </div>
-
-                            <button
-                              type="button"
-                              disabled={!task}
-                              onClick={() => {
-                                if (!task) return
-                                setActiveTaskId((previous) => (previous === task.id ? null : task.id))
-                              }}
-                              className="flex min-w-0 flex-1 items-start justify-between gap-3 text-left disabled:cursor-default"
-                            >
-                              <span className="text-slate-600 transition-colors leading-relaxed text-sm dark:text-slate-300">
-                                {item}
-                              </span>
-                              {task && (
-                                <span
-                                  className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(
-                                    task.status
-                                  )}`}
+                              return (
+                                <li
+                                  key={`${phase.id}-${idx}`}
+                                  className="relative rounded-xl border border-slate-200 bg-white/80 dark:border-slate-700 dark:bg-slate-900/70"
                                 >
-                                  {getTaskStatusLabel(task.status)}
-                                </span>
-                              )}
-                            </button>
+                                  <span
+                                    aria-hidden="true"
+                                    className="absolute -left-[1.05rem] top-5 h-2 w-2 rounded-full border border-indigo-200 bg-white dark:border-indigo-700 dark:bg-slate-900"
+                                  />
+                                  <div className="flex items-start gap-3 p-3">
+                                    <div className="mt-0.5 relative flex-shrink-0">
+                                      <input
+                                        type="checkbox"
+                                        checked={task?.checked ?? false}
+                                        disabled={!task || isTaskMutating}
+                                        onChange={(event) => {
+                                          if (!task) return
+                                          void handleTaskToggle(task, event.target.checked)
+                                        }}
+                                        className="peer w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer appearance-none border checked:bg-indigo-600 checked:border-indigo-600 transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                                      />
+                                      <CheckCircle2
+                                        size={12}
+                                        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white opacity-0 peer-checked:opacity-100 pointer-events-none"
+                                        strokeWidth={3}
+                                      />
+                                    </div>
 
-                            {isTaskMutating && (
-                              <Loader2
-                                size={14}
-                                className="mt-0.5 flex-shrink-0 animate-spin text-indigo-500 dark:text-indigo-300"
-                              />
-                            )}
-                          </div>
-
-                          {isTaskExpanded && task && (
-                            <div className="border-t border-slate-200 bg-slate-50/80 p-3 dark:border-slate-700 dark:bg-slate-900/80">
-                              <div className="grid gap-3 lg:grid-cols-[minmax(0,180px)_1fr]">
-                                <label className="block">
-                                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
-                                    Estado
-                                  </span>
-                                  <select
-                                    value={task.status}
-                                    onChange={(event) =>
-                                      void handleTaskStatusChange(
-                                        task,
-                                        event.target.value as InteractiveTaskStatus
-                                      )
-                                    }
-                                    disabled={isTaskMutating}
-                                    className="mt-1.5 h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
-                                  >
-                                    {TASK_STATUS_OPTIONS.map((option) => (
-                                      <option key={option.value} value={option.value}>
-                                        {option.label}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-
-                                <div>
-                                  <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
-                                    Registrar Evento
-                                  </p>
-                                  <div className="mt-1.5 flex flex-col gap-2 sm:flex-row">
-                                    <select
-                                      value={eventDraftType}
-                                      onChange={(event) =>
-                                        setEventDraftType(
-                                          event.target.value as InteractiveTaskEventType
-                                        )
-                                      }
-                                      disabled={isTaskMutating}
-                                      className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
-                                    >
-                                      {TASK_EVENT_TYPE_OPTIONS.map((option) => (
-                                        <option key={option.value} value={option.value}>
-                                          {option.label}
-                                        </option>
-                                      ))}
-                                    </select>
-                                    <input
-                                      type="text"
-                                      value={eventDraftContent}
-                                      onChange={(event) => setEventDraftContent(event.target.value)}
-                                      placeholder="Describe la novedad de este subítem..."
-                                      disabled={isTaskMutating}
-                                      className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
-                                    />
                                     <button
                                       type="button"
-                                      onClick={() => void handleAddTaskEvent(task)}
-                                      disabled={isTaskMutating || eventDraftContent.trim().length === 0}
-                                      className="inline-flex h-9 items-center justify-center rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                                      disabled={!task}
+                                      onClick={() => {
+                                        if (!task) return
+                                        setActiveTaskId((previous) =>
+                                          previous === task.id ? null : task.id
+                                        )
+                                      }}
+                                      className="flex min-w-0 flex-1 items-start justify-between gap-3 text-left disabled:cursor-default"
                                     >
-                                      Guardar
+                                      <span className="text-slate-600 transition-colors leading-relaxed text-sm dark:text-slate-300">
+                                        <span className="mr-2 inline-flex h-6 min-w-[2.3rem] items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 px-1.5 font-mono text-[11px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                                          {subItemNumber}
+                                        </span>
+                                        {item}
+                                      </span>
+                                      {task && (
+                                        <span
+                                          className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(
+                                            task.status
+                                          )}`}
+                                        >
+                                          {getTaskStatusLabel(task.status)}
+                                        </span>
+                                      )}
                                     </button>
-                                  </div>
-                                </div>
-                              </div>
 
-                              <div className="mt-3">
-                                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
-                                  Actividad
-                                </p>
-                                {task.events.length === 0 ? (
-                                  <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
-                                    No hay eventos registrados todavía.
-                                  </p>
-                                ) : (
-                                  <ul className="mt-2 space-y-2">
-                                    {task.events.map((event) => (
-                                      <li
-                                        key={event.id}
-                                        className="rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900"
+                                    {isTaskMutating && (
+                                      <Loader2
+                                        size={14}
+                                        className="mt-0.5 flex-shrink-0 animate-spin text-indigo-500 dark:text-indigo-300"
+                                      />
+                                    )}
+                                  </div>
+
+                                  <div
+                                    aria-hidden={!isTaskExpanded || !task}
+                                    className={`grid transition-[grid-template-rows,opacity] duration-700 ease-out ${
+                                      isTaskExpanded && task
+                                        ? 'grid-rows-[1fr] opacity-100'
+                                        : 'grid-rows-[0fr] opacity-0'
+                                    }`}
+                                  >
+                                    <div className="overflow-hidden">
+                                      <div
+                                        className={`border-t border-slate-200 bg-slate-50/80 p-3 transition-transform duration-700 ease-out dark:border-slate-700 dark:bg-slate-900/80 ${
+                                          isTaskExpanded && task
+                                            ? 'translate-y-0'
+                                            : '-translate-y-2 pointer-events-none'
+                                        }`}
                                       >
-                                        <div className="flex items-start gap-2">
-                                          <AlertTriangle
-                                            size={13}
-                                            className={`mt-0.5 ${
-                                              event.eventType === 'blocker'
-                                                ? 'text-rose-500 dark:text-rose-300'
-                                                : 'text-slate-400 dark:text-slate-500'
-                                            }`}
-                                          />
-                                          <div className="min-w-0 flex-1">
-                                            <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                                              {getTaskEventTypeLabel(event.eventType)}
-                                            </p>
-                                            <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
-                                              {event.content}
-                                            </p>
-                                            <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
-                                              {formatTaskEventDate(event.createdAt)}
-                                            </p>
-                                          </div>
-                                        </div>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </li>
-                      )
-                    })}
-                  </ul>
+                                        {task && (
+                                          <>
+                                            <div className="grid gap-3 lg:grid-cols-[minmax(0,180px)_1fr]">
+                                              <label className="block">
+                                                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                                                  Estado
+                                                </span>
+                                                <select
+                                                  value={task.status}
+                                                  onChange={(event) =>
+                                                    void handleTaskStatusChange(
+                                                      task,
+                                                      event.target.value as InteractiveTaskStatus
+                                                    )
+                                                  }
+                                                  disabled={isTaskMutating}
+                                                  className="mt-1.5 h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                                                >
+                                                  {TASK_STATUS_OPTIONS.map((option) => (
+                                                    <option key={option.value} value={option.value}>
+                                                      {option.label}
+                                                    </option>
+                                                  ))}
+                                                </select>
+                                              </label>
+
+                                              <div>
+                                                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                                                  Registrar Evento
+                                                </p>
+                                                <div className="mt-1.5 flex flex-col gap-2 sm:flex-row">
+                                                  <select
+                                                    value={eventDraftType}
+                                                    onChange={(event) =>
+                                                      setEventDraftType(
+                                                        event.target.value as InteractiveTaskEventType
+                                                      )
+                                                    }
+                                                    disabled={isTaskMutating}
+                                                    className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                                                  >
+                                                    {TASK_EVENT_TYPE_OPTIONS.map((option) => (
+                                                      <option key={option.value} value={option.value}>
+                                                        {option.label}
+                                                      </option>
+                                                    ))}
+                                                  </select>
+                                                  <input
+                                                    type="text"
+                                                    value={eventDraftContent}
+                                                    onChange={(event) =>
+                                                      setEventDraftContent(event.target.value)
+                                                    }
+                                                    placeholder="Describe la novedad de este subítem..."
+                                                    disabled={isTaskMutating}
+                                                    className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                                                  />
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => void handleAddTaskEvent(task)}
+                                                    disabled={
+                                                      isTaskMutating ||
+                                                      eventDraftContent.trim().length === 0
+                                                    }
+                                                    className="inline-flex h-9 items-center justify-center rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                                                  >
+                                                    Guardar
+                                                  </button>
+                                                </div>
+                                              </div>
+                                            </div>
+
+                                            <div className="mt-3 rounded-xl border border-slate-200 bg-white/80 p-3 dark:border-slate-700 dark:bg-slate-900/70">
+                                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                                                  Evidencias
+                                                </p>
+                                                {(isTaskAttachmentLoading || isTaskAttachmentMutating) && (
+                                                  <p className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400">
+                                                    <Loader2 size={12} className="animate-spin" />
+                                                    Procesando...
+                                                  </p>
+                                                )}
+                                              </div>
+
+                                              {taskAttachmentError && (
+                                                <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
+                                                  {taskAttachmentError}
+                                                </p>
+                                              )}
+
+                                              <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
+                                                <input
+                                                  ref={(node) => {
+                                                    taskFileInputRefs.current[task.id] = node
+                                                  }}
+                                                  type="file"
+                                                  accept=".pdf,application/pdf,image/*,audio/*"
+                                                  className="hidden"
+                                                  disabled={isTaskAttachmentMutating}
+                                                  onChange={(event) => {
+                                                    const file = event.target.files?.[0] ?? null
+                                                    void handleTaskFileSelected(task, file)
+                                                  }}
+                                                />
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleOpenTaskFilePicker(task.id)}
+                                                  disabled={isTaskAttachmentMutating}
+                                                  className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800"
+                                                >
+                                                  <Upload size={13} />
+                                                  Subir PDF / imagen / audio
+                                                </button>
+                                                <div className="flex min-w-0 gap-2 sm:col-span-2">
+                                                  <input
+                                                    type="text"
+                                                    value={taskYoutubeDraft}
+                                                    onChange={(event) =>
+                                                      handleTaskYoutubeDraftChange(task.id, event.target.value)
+                                                    }
+                                                    placeholder="Pega URL de YouTube para asociar evidencia..."
+                                                    disabled={isTaskAttachmentMutating}
+                                                    className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                                                  />
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => void handleAddTaskYoutubeLink(task)}
+                                                    disabled={
+                                                      isTaskAttachmentMutating ||
+                                                      taskYoutubeDraft.trim().length === 0
+                                                    }
+                                                    className="inline-flex h-9 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
+                                                  >
+                                                    Agregar YouTube
+                                                  </button>
+                                                </div>
+                                              </div>
+
+                                              {isTaskAttachmentLoading ? (
+                                                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                                  Cargando evidencias...
+                                                </p>
+                                              ) : taskAttachments.length === 0 ? (
+                                                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                                  Este subítem aún no tiene evidencias.
+                                                </p>
+                                              ) : (
+                                                <ul className="mt-3 space-y-2">
+                                                  {taskAttachments.map((attachment) => {
+                                                    const attachmentLabel = getAttachmentTypeLabel(
+                                                      attachment.attachmentType
+                                                    )
+                                                    const attachmentSize = formatAttachmentSize(
+                                                      attachment.sizeBytes
+                                                    )
+                                                    const previewUrl =
+                                                      attachment.attachmentType === 'image' ||
+                                                      attachment.attachmentType === 'youtube_link'
+                                                        ? attachment.thumbnailUrl || attachment.url
+                                                        : null
+
+                                                    return (
+                                                      <li
+                                                        key={attachment.id}
+                                                        className="rounded-lg border border-slate-200 bg-white p-2.5 dark:border-slate-700 dark:bg-slate-900"
+                                                      >
+                                                        <div className="flex items-start gap-3">
+                                                          {previewUrl ? (
+                                                            <a
+                                                              href={attachment.url}
+                                                              target="_blank"
+                                                              rel="noreferrer"
+                                                              className="block h-14 w-20 flex-shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800"
+                                                            >
+                                                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                              <img
+                                                                src={previewUrl}
+                                                                alt={attachment.title || attachmentLabel}
+                                                                className="h-full w-full object-cover"
+                                                              />
+                                                            </a>
+                                                          ) : (
+                                                            <div className="flex h-14 w-20 flex-shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                                                              {attachment.attachmentType === 'audio' ? (
+                                                                <Music2 size={16} />
+                                                              ) : attachment.attachmentType === 'youtube_link' ? (
+                                                                <Link2 size={16} />
+                                                              ) : attachment.attachmentType === 'image' ? (
+                                                                <ImageIcon size={16} />
+                                                              ) : (
+                                                                <FileText size={16} />
+                                                              )}
+                                                            </div>
+                                                          )}
+
+                                                          <div className="min-w-0 flex-1">
+                                                            <p className="truncate text-sm font-semibold text-slate-700 dark:text-slate-200">
+                                                              {attachment.title?.trim() ||
+                                                                attachment.url ||
+                                                                'Evidencia'}
+                                                            </p>
+                                                            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                                                              <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 dark:border-slate-700 dark:bg-slate-800">
+                                                                {attachmentLabel}
+                                                              </span>
+                                                              {attachmentSize && <span>{attachmentSize}</span>}
+                                                            </div>
+                                                            {attachment.attachmentType === 'audio' && (
+                                                              <audio
+                                                                controls
+                                                                preload="none"
+                                                                src={attachment.url}
+                                                                className="mt-2 w-full"
+                                                              />
+                                                            )}
+                                                          </div>
+
+                                                          <div className="flex flex-shrink-0 items-center gap-1">
+                                                            <a
+                                                              href={attachment.url}
+                                                              target="_blank"
+                                                              rel="noreferrer"
+                                                              className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                                                            >
+                                                              <ExternalLink size={12} />
+                                                              Abrir
+                                                            </a>
+                                                            <button
+                                                              type="button"
+                                                              onClick={() =>
+                                                                void handleDeleteTaskAttachment(task, attachment)
+                                                              }
+                                                              disabled={isTaskAttachmentMutating}
+                                                              className="inline-flex h-8 items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40"
+                                                            >
+                                                              <Trash2 size={12} />
+                                                              Quitar
+                                                            </button>
+                                                          </div>
+                                                        </div>
+                                                      </li>
+                                                    )
+                                                  })}
+                                                </ul>
+                                              )}
+                                            </div>
+
+                                            <div className="mt-3 rounded-xl border border-slate-200 bg-white/80 p-3 dark:border-slate-700 dark:bg-slate-900/70">
+                                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <p className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                                                  <MessageSquare size={12} />
+                                                  Comunidad
+                                                </p>
+                                                {(isTaskCommunityLoading || isTaskCommunityMutating) && (
+                                                  <p className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400">
+                                                    <Loader2 size={12} className="animate-spin" />
+                                                    Actualizando...
+                                                  </p>
+                                                )}
+                                              </div>
+
+                                              {taskCommunityError && (
+                                                <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
+                                                  {taskCommunityError}
+                                                </p>
+                                              )}
+
+                                              {taskLikeSummary && (
+                                                <div className="mt-2">
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => void handleToggleTaskLike(task)}
+                                                    disabled={isTaskCommunityMutating}
+                                                    className={`inline-flex h-8 items-center gap-1 rounded-md border px-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                                                      taskLikeSummary.likedByMe
+                                                        ? 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50'
+                                                        : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
+                                                    }`}
+                                                  >
+                                                    <ThumbsUp size={12} />
+                                                    {taskLikeSummary.likedByMe ? 'Te gusta' : 'Me gusta'}
+                                                    <span className="rounded bg-slate-200/60 px-1 py-0.5 text-[10px] dark:bg-slate-700/80">
+                                                      {taskLikeSummary.likesCount}
+                                                    </span>
+                                                  </button>
+                                                </div>
+                                              )}
+
+                                              <div className="mt-2 flex gap-2">
+                                                <input
+                                                  type="text"
+                                                  value={taskCommentDraft}
+                                                  onChange={(event) =>
+                                                    handleTaskCommentDraftChange(task.id, event.target.value)
+                                                  }
+                                                  placeholder="Escribe un comentario para este subítem..."
+                                                  disabled={isTaskCommunityMutating}
+                                                  className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                                                />
+                                                <button
+                                                  type="button"
+                                                  onClick={() => void handleAddTaskComment(task)}
+                                                  disabled={
+                                                    isTaskCommunityMutating ||
+                                                    taskCommentDraft.trim().length === 0
+                                                  }
+                                                  className="inline-flex h-9 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
+                                                >
+                                                  Comentar
+                                                </button>
+                                              </div>
+
+                                              {isTaskCommunityLoading ? (
+                                                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                                  Cargando comentarios...
+                                                </p>
+                                              ) : taskComments.length === 0 ? (
+                                                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                                  Aún no hay comentarios en este subítem.
+                                                </p>
+                                              ) : (
+                                                <ul className="mt-3 space-y-2">
+                                                  {taskComments.map((comment) => (
+                                                    <li
+                                                      key={comment.id}
+                                                      className="rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900"
+                                                    >
+                                                      <div className="flex items-start gap-2">
+                                                        <MessageSquare
+                                                          size={13}
+                                                          className="mt-0.5 text-slate-400 dark:text-slate-500"
+                                                        />
+                                                        <div className="min-w-0 flex-1">
+                                                          <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                                                            {comment.userName?.trim() ||
+                                                              comment.userEmail?.trim() ||
+                                                              'Usuario'}
+                                                          </p>
+                                                          <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
+                                                            {comment.content}
+                                                          </p>
+                                                          <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                                                            {formatTaskEventDate(comment.createdAt)}
+                                                          </p>
+                                                        </div>
+                                                        <button
+                                                          type="button"
+                                                          onClick={() =>
+                                                            void handleDeleteTaskComment(task, comment.id)
+                                                          }
+                                                          disabled={isTaskCommunityMutating}
+                                                          className="inline-flex h-7 items-center rounded-md border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40"
+                                                        >
+                                                          Borrar
+                                                        </button>
+                                                      </div>
+                                                    </li>
+                                                  ))}
+                                                </ul>
+                                              )}
+                                            </div>
+
+                                            <div className="mt-3">
+                                              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                                                Actividad
+                                              </p>
+                                              {task.events.length === 0 ? (
+                                                <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+                                                  No hay eventos registrados todavía.
+                                                </p>
+                                              ) : (
+                                                <ul className="mt-2 space-y-2">
+                                                  {task.events.map((event) => (
+                                                    <li
+                                                      key={event.id}
+                                                      className="rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900"
+                                                    >
+                                                      <div className="flex items-start gap-2">
+                                                        <AlertTriangle
+                                                          size={13}
+                                                          className={`mt-0.5 ${
+                                                            event.eventType === 'blocker'
+                                                              ? 'text-rose-500 dark:text-rose-300'
+                                                              : 'text-slate-400 dark:text-slate-500'
+                                                          }`}
+                                                        />
+                                                        <div className="min-w-0 flex-1">
+                                                          <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                                                            {getTaskEventTypeLabel(event.eventType)}
+                                                          </p>
+                                                          <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
+                                                            {event.content}
+                                                          </p>
+                                                          <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                                                            {formatTaskEventDate(event.createdAt)}
+                                                          </p>
+                                                        </div>
+                                                      </div>
+                                                    </li>
+                                                  ))}
+                                                </ul>
+                                              )}
+                                            </div>
+                                          </>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              )}
-            </div>
-          ))}
+              )
+            })}
         </div>
 
         <div className="mx-6 mb-6 bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-4 dark:bg-amber-900/20 dark:border-amber-800">

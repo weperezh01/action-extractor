@@ -1,0 +1,263 @@
+Ahora tengo el cuadro completo. Aquí está el análisis exhaustivo:                                                
+                                                                                                                   
+  ---                                                                                                              
+  Estado Real del Proyecto — Análisis Completo                                                                     
+                                                                                                                   
+  Primero lo más importante: las 16 mejoras del plan original ya están implementadas — y algunas extras (Trello,   
+  Todoist, Google Docs, privacy policy, terms). El proyecto está funcionalmente avanzado. Lo que sigue son los     
+  problemas que aún existen, organizados por impacto en tu negocio.
+
+  ---
+  🔴 CRÍTICO — Impacto directo en usuarios nuevos y conversión
+
+  1. La página de resultado compartido no convierte visitantes en usuarios
+
+  Archivo: app/share/[token]/page.tsx
+
+  Este es el problema más costoso en términos de negocio. Cuando un usuario comparte su resultado y alguien hace
+  clic en el enlace, esa persona llega a una página bien hecha... y solo tiene un link diminuto que dice "Abrir
+  ActionExtractor". No hay hero, no hay propuesta de valor, no hay formulario de registro. Ese visitante tiene alta
+   intención de uso (ya vio el resultado, ya sabe qué hace el producto) y lo estás dejando ir sin capturarlo.
+
+  Lo que falta: Un banner llamativo al final de la página de resultados compartidos con: "¿Quieres analizar tus
+  propios videos? Regístrate gratis" + formulario de registro en la misma página o CTA prominente.
+
+  ---
+  2. Sin Google OAuth — fricción de registro innecesaria
+
+  Sin archivos existentes para esto
+
+  Actualmente para registrarse: ingresar nombre + email + contraseña → esperar email de verificación → confirmar
+  email → volver a la app. Son 4 pasos. Con Google OAuth serían: 1 clic + autorizar. La verificación de email se
+  elimina completamente porque Google ya verificó la identidad.
+
+  El registro con email/password más verificación es el principal motivo por el que usuarios que llegan (ya sea
+  orgánico o por enlace compartido) no completan el proceso.
+
+  ---
+  3. La página de admin no tiene dark mode
+
+  Archivo: app/admin/page.tsx
+
+  Hardcodea bg-slate-50 text-slate-900 sin clases dark:. Si usas la app en modo oscuro y vas a /admin, el admin se
+  ve roto (fondo blanco sobre temas oscuros). Es un bug de consistencia visual que afecta la credibilidad del
+  producto cuando muestras el dashboard a alguien.
+
+  ---
+  4. El PDF hardcodea el título como "Plan de Accion" siempre
+
+  Archivo: app/page.tsx, línea 1514
+
+  pdf.text('ActionExtractor - Plan de Accion', marginX, y)
+
+  Cuando el usuario genera un Resumen Ejecutivo, Ideas de Negocio, o Frases Clave y descarga el PDF, el encabezado
+  dice "Plan de Acción". Esto es un bug visible que destruye la confianza en el producto.
+
+  ---
+  🟠 ALTA PRIORIDAD — Retención y calidad
+
+  5. page.tsx es un componente "dios" insostenible
+
+  Archivo: app/page.tsx (más de 1,700 líneas)
+
+  Este es el mayor riesgo técnico del proyecto. Un solo archivo con:
+  - +35 variables de estado (useState)
+  - Manejo de autenticación, historial, 4 integraciones OAuth, tema, PDF, share links, streaming SSE, reset de
+  contraseña, verificación de email, Trello hash parsing...
+
+  Consecuencias concretas:
+  - Un bug en handleLogout puede romper el estado de Notion, Trello, Todoist, y Google Docs simultáneamente (y de
+  hecho tiene que resetear 20 estados manualmente)
+  - Cualquier cambio pequeño requiere entender el archivo completo
+  - Es casi imposible agregar features sin crear bugs colaterales
+  - Dificulta que cualquier otro desarrollador ayude
+
+  Solución: Separar en componentes y hooks: useAuth(), useHistory(), useIntegrations(), ExtractionForm,
+  ResultPanel, HistoryPanel, IntegrationsPanel.
+
+  ---
+  6. Sin posibilidad de eliminar elementos del historial
+
+  Los usuarios no pueden borrar extracciones individuales ni limpiar su historial. Esto es una expectativa básica
+  de cualquier usuario y una preocupación de privacidad. Si alguien procesó un video que no quiere que aparezca en
+  su historial, no tiene forma de eliminarlo.
+
+  ---
+  7. No hay página de configuración de cuenta
+
+  Los usuarios no pueden:
+  - Cambiar su contraseña estando logueados (solo via "olvidé contraseña")
+  - Cambiar su nombre
+  - Ver su consumo del rate limit actual
+  - Eliminar su cuenta (GDPR)
+
+  La única forma de cambiar la contraseña es hacer logout → "Olvidé mi contraseña" → esperar email → hacer el
+  cambio. Esto es innecesariamente complicado.
+
+  ---
+  8. Las páginas compartidas no tienen Open Graph meta tags
+
+  Archivo: app/share/[token]/page.tsx
+
+  Cuando alguien comparte /share/token123 en WhatsApp, LinkedIn, o Twitter/X, el preview que aparece es un recuadro
+   vacío o genérico. No se muestra el título del video, ni la descripción, ni imagen. Esto reduce drásticamente la
+  tasa de clics en enlaces compartidos.
+
+  Lo que se necesita: Agregar generateMetadata() al servidor con og:title (título del video), og:description
+  (objetivo de la extracción), og:image (thumbnail del video de YouTube).
+
+  ---
+  9. next.config.js está completamente vacío
+
+  Archivo: next.config.js
+
+  Consecuencias:
+  - Imágenes externas sin configurar: Se usa <Image> de Next.js con src="/roi-logo.png" pero las miniaturas de
+  YouTube (i.ytimg.com) se cargan con <img> regular. Sin images.remotePatterns, el componente <Image> de Next no
+  puede optimizar imágenes de dominios externos.
+  - Sin cabeceras de seguridad HTTP: No hay X-Content-Type-Options, X-Frame-Options, Referrer-Policy, ni
+  Content-Security-Policy. Esto puede afectar auditorías de seguridad y SEO.
+
+  ---
+  10. Sin monitoreo de errores en producción
+
+  No hay integración con Sentry, LogRocket, ni ningún servicio equivalente. Solo hay console.error() en algunos
+  puntos. Si la app falla en producción para un usuario, solo te enterarás si ese usuario te lo reporta
+  manualmente. Puedes estar perdiendo usuarios por errores silenciosos que nunca sabes que ocurren.
+
+  ---
+  🟡 MEDIA PRIORIDAD — UX y eficiencia
+
+  11. No hay botón "Re-extraer con otro modo" en el historial
+
+  Cuando un usuario abre un resultado desde el historial (por ejemplo un "Plan de Acción"), no hay un botón para
+  "Extraer este mismo video como Resumen Ejecutivo". Tiene que copiar la URL, cambiar el selector de modo, y volver
+   a ejecutar. Esta fricción hace que los usuarios no descubran los otros 3 modos.
+
+  ---
+  12. No se puede exportar directamente desde el historial
+
+  Para exportar a Notion/Trello/Todoist/Google Docs o descargar PDF desde un item del historial, el usuario debe
+  primero hacer clic en el item para cargarlo en la vista principal, y luego exportar. Deberían existir botones de
+  acción rápida en cada item del historial.
+
+  ---
+  13. Sin validación de URL en el cliente
+
+  La URL de YouTube solo se valida cuando llega al servidor. El usuario escribe una URL inválida, presiona el
+  botón, espera el request... y recibe el error. Una validación básica del formato youtube.com/watch?v= en el
+  cliente daría feedback instantáneo.
+
+  ---
+  14. El handleCopyNotion en page.tsx duplica lógica de lib/export-content.ts
+
+  Archivo: app/page.tsx, línea ~1003
+
+  La función que genera el markdown para "Copiar al portapapeles" está reimplementada directamente en page.tsx en
+  lugar de usar buildExtractionMarkdown() de lib/export-content.ts. Si se actualiza el formato en
+  export-content.ts, el copy manual quedará desactualizado.
+
+  ---
+  15. El header del layout duplica los links de la página principal
+
+  Archivo: app/layout.tsx + app/page.tsx
+
+  Los links de "Política de Privacidad" y "Términos de Uso" aparecen en:
+  1. El header del layout.tsx
+  2. La nav de page.tsx (líneas ~1626-1631)
+  3. El centro del main de page.tsx (líneas ~1668-1675)
+  4. El footer del layout.tsx
+
+  Cuatro veces los mismos links. El header del layout debería eliminarse ya que page.tsx ya tiene su propia nav
+  sticky.
+
+  ---
+  🟢 MENOR PRIORIDAD — Escalabilidad futura
+
+  16. Sin tests automatizados
+
+  No existe ningún test unitario, de integración, ni E2E. Toda la lógica crítica (autenticación, extracción,
+  parsing de JSON de Claude, rate limiting) está sin cobertura. Esto significa que cualquier refactorización (como
+  separar page.tsx) conlleva riesgo de romper algo sin detectarlo.
+
+  ---
+  17. Sin gestión de usuarios en el admin
+
+  El panel de admin muestra métricas agregadas pero no hay:
+  - Lista de usuarios registrados con fecha de registro
+  - Capacidad de ver extracciones de un usuario específico
+  - Bloquear un usuario que abusa del rate limit
+  - Ver cuáles usuarios no verificaron su email
+
+  ---
+  18. La sesión expirada pierde el resultado actual
+
+  Cuando la sesión del usuario expira mientras está usando la app, cualquier extracción en la vista principal se
+  borra (setResult(null) en el handler de 401). El usuario pierde el resultado. Sería mejor conservar el resultado
+  visible pero pedir reautenticación en un modal.
+
+  ---
+  Resumen por impacto de negocio
+
+  ┌─────┬──────────────────────────────────────┬────────────────────┬──────────┐
+  │  #  │               Problema               │      Impacto       │ Esfuerzo │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 1   │ Share page sin conversión a registro │ Muy alto           │ Bajo     │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 2   │ Sin Google OAuth                     │ Muy alto           │ Alto     │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 3   │ Admin sin dark mode                  │ Medio              │ Muy bajo │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 4   │ PDF título hardcodeado               │ Medio              │ Muy bajo │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 5   │ page.tsx dios                        │ Alto (técnico)     │ Alto     │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 6   │ Sin eliminar historial               │ Alto               │ Bajo     │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 7   │ Sin página de cuenta                 │ Alto               │ Medio    │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 8   │ Sin OG tags en share                 │ Alto (viral)       │ Bajo     │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 9   │ next.config.js vacío                 │ Medio              │ Bajo     │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 10  │ Sin monitoreo de errores             │ Alto (operacional) │ Bajo     │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 11  │ Re-extraer con otro modo             │ Medio              │ Bajo     │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 12  │ Exportar desde historial             │ Medio              │ Medio    │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 13  │ URL sin validación cliente           │ Bajo               │ Muy bajo │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 14  │ Código duplicado markdown            │ Bajo               │ Muy bajo │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 15  │ Links duplicados en header           │ Bajo               │ Muy bajo │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 16  │ Sin tests                            │ Alto (técnico)     │ Alto     │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 17  │ Admin sin gestión usuarios           │ Medio              │ Medio    │
+  ├─────┼──────────────────────────────────────┼────────────────────┼──────────┤
+  │ 18  │ Resultado se pierde en 401           │ Medio              │ Medio    │
+  └─────┴──────────────────────────────────────┴────────────────────┴──────────┘
+
+  ---
+  Mi recomendación de orden de ejecución
+
+  Esta semana (bajo esfuerzo, alto impacto):
+  - Fix #4 — PDF título hardcodeado (15 minutos)
+  - Fix #3 — Admin dark mode (20 minutos)
+  - Fix #13 — Validación URL cliente (30 minutos)
+  - Fix #15 — Eliminar links duplicados del header (15 minutos)
+  - Mejora #1 — CTA de registro en share page (1-2 horas)
+  - Mejora #8 — OG tags en share page (2 horas)
+  - Fix #9 — next.config.js con headers y dominios de imagen (1 hora)
+
+  Próximas 2 semanas:
+  - Mejora #6 — Eliminar items del historial
+  - Mejora #7 — Página de configuración de cuenta
+  - Mejora #10 — Integrar Sentry o similar
+  - Mejora #11 — Botón "re-extraer con otro modo"
+
+  Largo plazo (mayor impacto estratégico):
+  - Mejora #2 — Google OAuth (el mayor multiplicador de conversión)
+  - Mejora #5 — Refactorizar page.tsx (antes de escalar el equipo)
+  - Mejora #16 — Tests automatizados
