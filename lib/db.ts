@@ -4267,6 +4267,6 @@ export async function consumeGuestExtractionRateLimit(guestId: string): Promise<
      RETURNING request_count`,
     [guestId]
   )
-  const used = Number(rows[0]?.request_count ?? 2)
-  return { allowed: used <= 1, used }
+  const used = Number(rows[0]?.request_count ?? 4)
+  return { allowed: used <= 3, used }
 }

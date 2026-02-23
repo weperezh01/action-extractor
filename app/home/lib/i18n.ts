@@ -106,16 +106,17 @@ const dict = {
     // ── landing · guest extractor ──
     'landing.hero.tryGuest': 'Try it free — no account needed',
     'landing.guest.title': 'Try it right now',
-    'landing.guest.sub': '1 free extraction. No sign-up required. Results are not saved.',
-    'guest.warning': '1 free extraction · No account needed · Results are not saved',
+    'landing.guest.sub': '3 free extractions. No sign-up required. Results are not saved.',
+    'guest.warning': '3 free extractions · No account needed · Results are not saved',
     'guest.placeholder': 'Paste a YouTube URL or any article link…',
     'guest.extract': 'Extract for free',
     'guest.extracting': 'Extracting…',
     'guest.resultTitle': 'Your free extraction',
-    'guest.afterResult': 'Liked the result? Create a free account to save, export, and get more extractions.',
+    'guest.afterResult': 'Liked it? Create a free account to save, export, and get unlimited extractions.',
     'guest.createAccount': 'Create free account',
-    'guest.limitReached': 'You already used your free extraction today. Create an account to continue.',
+    'guest.limitReached': "You've used your 3 free extractions. Create an account to continue.",
     'guest.limitCta': 'Create account',
+    'guest.newExtraction': 'New extraction',
   },
   es: {
     // ── nav ──
@@ -215,16 +216,17 @@ const dict = {
     // ── landing · guest extractor ──
     'landing.hero.tryGuest': 'Pruébalo gratis — sin cuenta',
     'landing.guest.title': 'Pruébalo ahora mismo',
-    'landing.guest.sub': '1 extracción gratuita. Sin registro. El resultado no se guarda.',
-    'guest.warning': '1 extracción gratuita · Sin registro · No se guarda el resultado',
+    'landing.guest.sub': '3 extracciones gratuitas. Sin registro. Los resultados no se guardan.',
+    'guest.warning': '3 extracciones gratuitas · Sin registro · No se guarda el resultado',
     'guest.placeholder': 'Pega una URL de YouTube o cualquier artículo…',
     'guest.extract': 'Extraer gratis',
     'guest.extracting': 'Extrayendo…',
     'guest.resultTitle': 'Tu extracción gratuita',
-    'guest.afterResult': '¿Te gustó el resultado? Crea una cuenta gratis para guardar, exportar y hacer más extracciones.',
+    'guest.afterResult': '¿Te gustó? Crea una cuenta gratis para guardar, exportar y hacer extracciones ilimitadas.',
     'guest.createAccount': 'Crear cuenta gratis',
-    'guest.limitReached': 'Ya usaste tu extracción gratuita de hoy. Crea una cuenta para continuar.',
+    'guest.limitReached': 'Ya usaste tus 3 extracciones gratuitas. Crea una cuenta para continuar.',
     'guest.limitCta': 'Crear cuenta',
+    'guest.newExtraction': 'Nueva extracción',
   },
 } as const
 
