@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# reset-guest-limits — Borra los contadores de extracción guest del día actual.
+# Uso: ./tools/reset-guest-limits
+
+set -euo pipefail
+
+DB_CONTAINER="postgres-db"
+DB_NAME="action_extractor_db"
+DB_USER="postgres"
+
+deleted=$(docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -tAc \
+  "DELETE FROM guest_extraction_limits WHERE window_date = CURRENT_DATE; SELECT COUNT(*) FROM guest_extraction_limits WHERE window_date = CURRENT_DATE;")
+
+echo "✓ Límites guest reseteados. Registros restantes hoy: $deleted"
