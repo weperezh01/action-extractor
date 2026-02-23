@@ -161,6 +161,9 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
       setExtractionMode(extractionModeToUse)
     }
 
+    // Save current result — restored if the request returns 429
+    const previousResult = result
+
     setIsProcessing(true)
     setError(null)
     setResult(null)
@@ -237,6 +240,7 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
       })
 
       if (res.status === 429) {
+        setResult(previousResult)   // restore the result the user already had
         setLimitReached(true)
         return
       }
@@ -306,81 +310,90 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
     } catch { /* noop */ }
   }, [result, extractionMode, url])
 
-  if (limitReached) {
+  // ── State C: limit reached, no result → show only the CTA
+  if (limitReached && !result) {
     return (
-      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-8 text-center dark:border-amber-500/30 dark:bg-amber-500/10">
-        <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
-          {t(lang, 'guest.limitReached')}
-        </p>
-        <Link
-          href="/app?mode=register"
-          className="mt-4 inline-flex items-center gap-2 rounded-xl bg-violet-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-violet-700"
-        >
-          <UserPlus size={15} />
-          {t(lang, 'guest.limitCta')}
-          <ArrowRight size={14} />
-        </Link>
+      <div className="mx-auto w-full max-w-4xl">
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-8 text-center dark:border-amber-500/30 dark:bg-amber-500/10">
+          <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+            {t(lang, 'guest.limitReached')}
+          </p>
+          <Link
+            href="/app?mode=register"
+            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-violet-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-violet-700"
+          >
+            <UserPlus size={15} />
+            {t(lang, 'guest.limitCta')}
+            <ArrowRight size={14} />
+          </Link>
+        </div>
       </div>
     )
   }
 
   return (
     <div className="mx-auto w-full max-w-4xl">
-      <ExtractionForm
-        url={url}
-        isProcessing={isProcessing}
-        urlError={urlError}
-        onUrlChange={(value) => {
-          setUrl(value)
-          if (uploadedFile) setUploadedFile(null)
-        }}
-        onExtract={handleExtract}
-        onScrollToHistory={NOOP}
-        hasHistory={false}
-        uploadedFile={uploadedFile}
-        isUploading={isUploading}
-        uploadError={uploadError}
-        onFileSelect={handleFileSelect}
-        onClearFile={handleClearFile}
-        onManualResult={NOOP}
-        onManualToggle={NOOP}
-      />
 
-      <WorkspaceControlsDock
-        extractionMode={extractionMode}
-        outputLanguage={outputLanguage}
-        isProcessing={isProcessing}
-        onExtractionModeChange={setExtractionMode}
-        onOutputLanguageChange={setOutputLanguage}
-        notionConfigured={false}
-        notionConnected={false}
-        notionWorkspaceName={null}
-        notionLoading={false}
-        notionDisconnectLoading={false}
-        onConnectNotion={NOOP}
-        onDisconnectNotion={NOOP}
-        trelloConfigured={false}
-        trelloConnected={false}
-        trelloUsername={null}
-        trelloLoading={false}
-        trelloDisconnectLoading={false}
-        onConnectTrello={NOOP}
-        onDisconnectTrello={NOOP}
-        todoistConfigured={false}
-        todoistConnected={false}
-        todoistUserLabel={null}
-        todoistLoading={false}
-        todoistDisconnectLoading={false}
-        onConnectTodoist={NOOP}
-        onDisconnectTodoist={NOOP}
-        googleDocsConfigured={false}
-        googleDocsConnected={false}
-        googleDocsUserEmail={null}
-        googleDocsLoading={false}
-        googleDocsDisconnectLoading={false}
-        onConnectGoogleDocs={NOOP}
-        onDisconnectGoogleDocs={NOOP}
-      />
+      {/* ── States A / B: show form when limit not yet reached ── */}
+      {!limitReached && (
+        <>
+          <ExtractionForm
+            url={url}
+            isProcessing={isProcessing}
+            urlError={urlError}
+            onUrlChange={(value) => {
+              setUrl(value)
+              if (uploadedFile) setUploadedFile(null)
+            }}
+            onExtract={handleExtract}
+            onScrollToHistory={NOOP}
+            hasHistory={false}
+            uploadedFile={uploadedFile}
+            isUploading={isUploading}
+            uploadError={uploadError}
+            onFileSelect={handleFileSelect}
+            onClearFile={handleClearFile}
+            onManualResult={NOOP}
+            onManualToggle={NOOP}
+          />
+
+          <WorkspaceControlsDock
+            extractionMode={extractionMode}
+            outputLanguage={outputLanguage}
+            isProcessing={isProcessing}
+            onExtractionModeChange={setExtractionMode}
+            onOutputLanguageChange={setOutputLanguage}
+            notionConfigured={false}
+            notionConnected={false}
+            notionWorkspaceName={null}
+            notionLoading={false}
+            notionDisconnectLoading={false}
+            onConnectNotion={NOOP}
+            onDisconnectNotion={NOOP}
+            trelloConfigured={false}
+            trelloConnected={false}
+            trelloUsername={null}
+            trelloLoading={false}
+            trelloDisconnectLoading={false}
+            onConnectTrello={NOOP}
+            onDisconnectTrello={NOOP}
+            todoistConfigured={false}
+            todoistConnected={false}
+            todoistUserLabel={null}
+            todoistLoading={false}
+            todoistDisconnectLoading={false}
+            onConnectTodoist={NOOP}
+            onDisconnectTodoist={NOOP}
+            googleDocsConfigured={false}
+            googleDocsConnected={false}
+            googleDocsUserEmail={null}
+            googleDocsLoading={false}
+            googleDocsDisconnectLoading={false}
+            onConnectGoogleDocs={NOOP}
+            onDisconnectGoogleDocs={NOOP}
+          />
+        </>
+      )}
 
       {error && (
         <div className="mx-auto mt-1 mb-8 w-full max-w-3xl rounded-xl border border-red-200 bg-red-50 p-4 flex items-start gap-3 dark:border-red-800 dark:bg-red-900/20">
@@ -500,7 +513,7 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
               onShareVisibilityChange={NOOP}
               onSavePhases={NOOP_SAVE as (phases: Phase[]) => Promise<boolean>}
               onSaveMeta={NOOP_SAVE as (meta: { title: string; thumbnailUrl: string | null; objective: string }) => Promise<boolean>}
-              onClose={() => setResult(null)}
+              onClose={() => { setResult(null); setError(null) }}
               onExportToNotion={NOOP_ASYNC}
               onConnectNotion={NOOP}
               onExportToTrello={NOOP_ASYNC}
@@ -515,10 +528,19 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
             />
           </div>
 
-          {/* Create account CTA — shown below the result */}
-          <div className="mt-6 rounded-2xl border border-violet-200 bg-violet-50 p-6 text-center dark:border-violet-500/30 dark:bg-violet-500/10">
-            <p className="text-sm font-semibold text-violet-900 dark:text-violet-200">
-              {t(lang, 'guest.afterResult')}
+          {/* ── State D: limit reached + result visible → show limit banner ── */}
+          {/* ── State B: not limit reached → show "create account" CTA ── */}
+          <div className={`mt-6 rounded-2xl border p-6 text-center ${
+            limitReached
+              ? 'border-amber-200 bg-amber-50 dark:border-amber-500/30 dark:bg-amber-500/10'
+              : 'border-violet-200 bg-violet-50 dark:border-violet-500/30 dark:bg-violet-500/10'
+          }`}>
+            <p className={`text-sm font-semibold ${
+              limitReached
+                ? 'text-amber-900 dark:text-amber-200'
+                : 'text-violet-900 dark:text-violet-200'
+            }`}>
+              {limitReached ? t(lang, 'guest.limitReached') : t(lang, 'guest.afterResult')}
             </p>
             <div className="mt-4 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
               <Link
@@ -529,12 +551,6 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
                 {t(lang, 'guest.createAccount')}
                 <ArrowRight size={14} />
               </Link>
-              <button
-                onClick={() => { setResult(null); setError(null) }}
-                className="text-xs text-violet-600 underline underline-offset-2 hover:text-violet-800 dark:text-violet-400 dark:hover:text-violet-200"
-              >
-                {lang === 'es' ? 'Probar con otra URL' : 'Try another URL'}
-              </button>
             </div>
           </div>
         </>
