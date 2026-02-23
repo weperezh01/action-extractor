@@ -9,12 +9,58 @@ import {
   listExtractionTaskCommentsForUser,
   toggleExtractionTaskLikeForUser,
 } from '@/lib/db'
+import {
+  addGuestTaskComment,
+  deleteGuestTaskComment,
+  findGuestTaskById,
+  getGuestTaskLikeSummary,
+  listGuestTaskComments,
+  toggleGuestTaskLike,
+  type GuestTaskComment,
+} from '@/lib/guest-tasks'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+const GUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 function parseId(raw: unknown) {
   return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function toGuestClientComment(comment: GuestTaskComment, extractionId: string) {
+  return {
+    id: comment.id,
+    taskId: comment.taskId,
+    extractionId,
+    userId: comment.guestId,
+    userName: null,
+    userEmail: null,
+    content: comment.content,
+    createdAt: comment.createdAt,
+    updatedAt: comment.updatedAt,
+  }
+}
+
+async function buildGuestCommunityPayload(input: {
+  guestId: string
+  taskId: string
+  extractionId: string
+}) {
+  const [comments, likeSummary] = await Promise.all([
+    listGuestTaskComments({ guestId: input.guestId, taskId: input.taskId }),
+    getGuestTaskLikeSummary({ guestId: input.guestId, taskId: input.taskId }),
+  ])
+
+  return {
+    comments: comments.map((c) => toGuestClientComment(c, input.extractionId)),
+    likeSummary: {
+      taskId: input.taskId,
+      extractionId: input.extractionId,
+      likesCount: likeSummary.likesCount,
+      likedByMe: likeSummary.likedByMe,
+    },
+  }
 }
 
 function toClientComment(
@@ -86,15 +132,29 @@ export async function GET(
   context: { params: { extractionId: string; taskId: string } }
 ) {
   try {
-    const user = await getUserFromRequest(req)
-    if (!user) {
-      return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
-    }
-
     const extractionId = parseId(context.params?.extractionId)
     const taskId = parseId(context.params?.taskId)
     if (!extractionId || !taskId) {
       return NextResponse.json({ error: 'Parámetros inválidos.' }, { status: 400 })
+    }
+
+    // ── Guest mode ──────────────────────────────────────────────────────────
+    if (extractionId.startsWith('g-')) {
+      const guestId = extractionId.slice(2)
+      if (!GUEST_ID_RE.test(guestId)) {
+        return NextResponse.json({ error: 'guestId inválido.' }, { status: 400 })
+      }
+      const task = await findGuestTaskById({ guestId, taskId })
+      if (!task) {
+        return NextResponse.json({ error: 'No se encontró el subítem solicitado.' }, { status: 404 })
+      }
+      return NextResponse.json(await buildGuestCommunityPayload({ guestId, taskId, extractionId }))
+    }
+
+    // ── Authenticated mode ──────────────────────────────────────────────────
+    const user = await getUserFromRequest(req)
+    if (!user) {
+      return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
 
     const access = await resolveCommunityAccess({
@@ -119,24 +179,10 @@ export async function POST(
   context: { params: { extractionId: string; taskId: string } }
 ) {
   try {
-    const user = await getUserFromRequest(req)
-    if (!user) {
-      return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
-    }
-
     const extractionId = parseId(context.params?.extractionId)
     const taskId = parseId(context.params?.taskId)
     if (!extractionId || !taskId) {
       return NextResponse.json({ error: 'Parámetros inválidos.' }, { status: 400 })
-    }
-
-    const access = await resolveCommunityAccess({
-      extractionId,
-      taskId,
-      actorUserId: user.id,
-    })
-    if (!access.ok) {
-      return NextResponse.json({ error: access.error }, { status: access.status })
     }
 
     let body: unknown
@@ -150,6 +196,72 @@ export async function POST(
       typeof (body as { action?: unknown })?.action === 'string'
         ? (body as { action: string }).action.trim()
         : ''
+
+    // ── Guest mode ──────────────────────────────────────────────────────────
+    if (extractionId.startsWith('g-')) {
+      const guestId = extractionId.slice(2)
+      if (!GUEST_ID_RE.test(guestId)) {
+        return NextResponse.json({ error: 'guestId inválido.' }, { status: 400 })
+      }
+
+      const task = await findGuestTaskById({ guestId, taskId })
+      if (!task) {
+        return NextResponse.json({ error: 'No se encontró el subítem solicitado.' }, { status: 404 })
+      }
+
+      const guestCommunity = async () =>
+        NextResponse.json(await buildGuestCommunityPayload({ guestId, taskId, extractionId }))
+
+      if (action === 'add_comment') {
+        const content =
+          typeof (body as { content?: unknown }).content === 'string'
+            ? (body as { content: string }).content.trim()
+            : ''
+        if (!content) return NextResponse.json({ error: 'content es requerido.' }, { status: 400 })
+        if (content.length > 1500) {
+          return NextResponse.json({ error: 'content no puede superar 1500 caracteres.' }, { status: 400 })
+        }
+        const created = await addGuestTaskComment({ guestId, taskId, content })
+        if (!created) return NextResponse.json({ error: 'No se pudo guardar el comentario.' }, { status: 404 })
+        return guestCommunity()
+      }
+
+      if (action === 'delete_comment') {
+        const commentId =
+          typeof (body as { commentId?: unknown }).commentId === 'string'
+            ? (body as { commentId: string }).commentId.trim()
+            : ''
+        if (!commentId) return NextResponse.json({ error: 'commentId es requerido.' }, { status: 400 })
+        const deleted = await deleteGuestTaskComment({ guestId, taskId, commentId })
+        if (!deleted) {
+          return NextResponse.json({ error: 'No se encontró el comentario solicitado.' }, { status: 404 })
+        }
+        return guestCommunity()
+      }
+
+      if (action === 'toggle_like') {
+        const ok = await toggleGuestTaskLike({ guestId, taskId })
+        if (!ok) return NextResponse.json({ error: 'No se pudo actualizar el like.' }, { status: 404 })
+        return guestCommunity()
+      }
+
+      return NextResponse.json({ error: 'Acción no soportada.' }, { status: 400 })
+    }
+
+    // ── Authenticated mode ──────────────────────────────────────────────────
+    const user = await getUserFromRequest(req)
+    if (!user) {
+      return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
+    }
+
+    const access = await resolveCommunityAccess({
+      extractionId,
+      taskId,
+      actorUserId: user.id,
+    })
+    if (!access.ok) {
+      return NextResponse.json({ error: access.error }, { status: access.status })
+    }
 
     if (action === 'add_comment') {
       const content =

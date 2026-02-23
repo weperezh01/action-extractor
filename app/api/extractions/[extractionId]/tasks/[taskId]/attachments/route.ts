@@ -8,21 +8,46 @@ import {
   type DbExtractionTaskAttachment,
   type ExtractionTaskAttachmentType,
 } from '@/lib/db'
+import {
+  createGuestTaskAttachment,
+  findGuestTaskById,
+  listGuestTaskAttachments,
+  type GuestTaskAttachment,
+} from '@/lib/guest-tasks'
 import { buildYoutubeThumbnailUrl, fetchYoutubeVideoTitle } from '@/lib/video-preview'
 import { buildYoutubeWatchUrl, extractYoutubeVideoId } from '@/lib/youtube'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+const GUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 function parseId(raw: unknown) {
   return typeof raw === 'string' ? raw.trim() : ''
 }
 
 function safeParseJson(value: string) {
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return {}
+  try { return JSON.parse(value) as unknown } catch { return {} }
+}
+
+function toGuestClientAttachment(att: GuestTaskAttachment, extractionId: string) {
+  return {
+    id: att.id,
+    taskId: att.taskId,
+    extractionId,
+    attachmentType: att.attachmentType,
+    storageProvider: att.storageProvider,
+    url: att.url,
+    thumbnailUrl: att.thumbnailUrl,
+    title: att.title,
+    mimeType: att.mimeType,
+    sizeBytes: null,
+    metadataJson: att.metadataJson,
+    metadata: safeParseJson(att.metadataJson),
+    createdAt: att.createdAt,
+    updatedAt: att.updatedAt,
+    userName: null,
+    userEmail: null,
   }
 }
 
@@ -68,15 +93,30 @@ export async function GET(
   context: { params: { extractionId: string; taskId: string } }
 ) {
   try {
-    const user = await getUserFromRequest(req)
-    if (!user) {
-      return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
-    }
-
     const extractionId = parseId(context.params?.extractionId)
     const taskId = parseId(context.params?.taskId)
     if (!extractionId || !taskId) {
       return NextResponse.json({ error: 'Parámetros inválidos.' }, { status: 400 })
+    }
+
+    // ── Guest mode ──────────────────────────────────────────────────────────
+    if (extractionId.startsWith('g-')) {
+      const guestId = extractionId.slice(2)
+      if (!GUEST_ID_RE.test(guestId)) {
+        return NextResponse.json({ error: 'guestId inválido.' }, { status: 400 })
+      }
+      const task = await findGuestTaskById({ guestId, taskId })
+      if (!task) {
+        return NextResponse.json({ error: 'No se encontró el subítem solicitado.' }, { status: 404 })
+      }
+      const attachments = await listGuestTaskAttachments({ guestId, taskId })
+      return NextResponse.json({ attachments: attachments.map((a) => toGuestClientAttachment(a, extractionId)) })
+    }
+
+    // ── Authenticated mode ──────────────────────────────────────────────────
+    const user = await getUserFromRequest(req)
+    if (!user) {
+      return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
 
     const task = await findExtractionTaskByIdForUser({
@@ -109,15 +149,102 @@ export async function POST(
   context: { params: { extractionId: string; taskId: string } }
 ) {
   try {
-    const user = await getUserFromRequest(req)
-    if (!user) {
-      return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
-    }
-
     const extractionId = parseId(context.params?.extractionId)
     const taskId = parseId(context.params?.taskId)
     if (!extractionId || !taskId) {
       return NextResponse.json({ error: 'Parámetros inválidos.' }, { status: 400 })
+    }
+
+    const contentType = (req.headers.get('content-type') ?? '').toLowerCase()
+
+    // ── Guest mode ──────────────────────────────────────────────────────────
+    if (extractionId.startsWith('g-')) {
+      const guestId = extractionId.slice(2)
+      if (!GUEST_ID_RE.test(guestId)) {
+        return NextResponse.json({ error: 'guestId inválido.' }, { status: 400 })
+      }
+
+      const task = await findGuestTaskById({ guestId, taskId })
+      if (!task) {
+        return NextResponse.json({ error: 'No se encontró el subítem solicitado.' }, { status: 404 })
+      }
+
+      // File uploads require an account
+      if (contentType.includes('multipart/form-data')) {
+        return NextResponse.json(
+          { error: 'Crea una cuenta gratis para subir archivos.' },
+          { status: 403 }
+        )
+      }
+
+      let guestBody: unknown
+      try { guestBody = await req.json() } catch {
+        return NextResponse.json({ error: 'Body JSON inválido.' }, { status: 400 })
+      }
+
+      const noteText =
+        typeof (guestBody as { noteText?: unknown }).noteText === 'string'
+          ? (guestBody as { noteText: string }).noteText.trim()
+          : ''
+
+      if (noteText) {
+        if (noteText.length > 10000) {
+          return NextResponse.json({ error: 'La nota no puede superar los 10.000 caracteres.' }, { status: 400 })
+        }
+        const created = await createGuestTaskAttachment({
+          guestId,
+          taskId,
+          attachmentType: 'note',
+          storageProvider: 'external',
+          url: 'note://local',
+          thumbnailUrl: null,
+          title: noteText.slice(0, 300),
+          mimeType: 'text/plain',
+          metadataJson: JSON.stringify({ content: noteText }),
+        })
+        if (!created) return NextResponse.json({ error: 'No se pudo guardar la nota.' }, { status: 404 })
+        return NextResponse.json({ attachment: toGuestClientAttachment(created, extractionId) }, { status: 201 })
+      }
+
+      const youtubeUrl =
+        typeof (guestBody as { youtubeUrl?: unknown }).youtubeUrl === 'string'
+          ? (guestBody as { youtubeUrl: string }).youtubeUrl.trim()
+          : typeof (guestBody as { url?: unknown }).url === 'string'
+            ? (guestBody as { url: string }).url.trim()
+            : ''
+
+      if (!youtubeUrl) {
+        return NextResponse.json(
+          { error: 'Debes enviar una nota o una URL de YouTube válida.' },
+          { status: 400 }
+        )
+      }
+
+      const videoId = extractYoutubeVideoId(youtubeUrl)
+      if (!videoId) return NextResponse.json({ error: 'URL de YouTube inválida.' }, { status: 400 })
+
+      const canonicalUrl = buildYoutubeWatchUrl(videoId)
+      const thumbnailUrl = buildYoutubeThumbnailUrl(videoId)
+      const videoTitle = await fetchYoutubeVideoTitle(videoId)
+
+      const created = await createGuestTaskAttachment({
+        guestId,
+        taskId,
+        attachmentType: 'youtube_link',
+        storageProvider: 'external',
+        url: canonicalUrl,
+        thumbnailUrl,
+        title: videoTitle,
+        metadataJson: JSON.stringify({ videoId }),
+      })
+      if (!created) return NextResponse.json({ error: 'No se pudo guardar el enlace.' }, { status: 404 })
+      return NextResponse.json({ attachment: toGuestClientAttachment(created, extractionId) }, { status: 201 })
+    }
+
+    // ── Authenticated mode ──────────────────────────────────────────────────
+    const user = await getUserFromRequest(req)
+    if (!user) {
+      return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
 
     const task = await findExtractionTaskByIdForUser({
@@ -128,8 +255,6 @@ export async function POST(
     if (!task) {
       return NextResponse.json({ error: 'No se encontró el subítem solicitado.' }, { status: 404 })
     }
-
-    const contentType = (req.headers.get('content-type') ?? '').toLowerCase()
 
     if (contentType.includes('multipart/form-data')) {
       const formData = await req.formData()

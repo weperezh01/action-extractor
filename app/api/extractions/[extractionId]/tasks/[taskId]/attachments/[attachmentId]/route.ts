@@ -5,9 +5,12 @@ import {
   deleteExtractionTaskAttachmentByIdForUser,
   findExtractionTaskByIdForUser,
 } from '@/lib/db'
+import { deleteGuestTaskAttachment, findGuestTaskById } from '@/lib/guest-tasks'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+const GUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function parseId(raw: unknown) {
   return typeof raw === 'string' ? raw.trim() : ''
@@ -27,16 +30,34 @@ export async function DELETE(
   context: { params: { extractionId: string; taskId: string; attachmentId: string } }
 ) {
   try {
-    const user = await getUserFromRequest(req)
-    if (!user) {
-      return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
-    }
-
     const extractionId = parseId(context.params?.extractionId)
     const taskId = parseId(context.params?.taskId)
     const attachmentId = parseId(context.params?.attachmentId)
     if (!extractionId || !taskId || !attachmentId) {
       return NextResponse.json({ error: 'Parámetros inválidos.' }, { status: 400 })
+    }
+
+    // ── Guest mode ──────────────────────────────────────────────────────────
+    if (extractionId.startsWith('g-')) {
+      const guestId = extractionId.slice(2)
+      if (!GUEST_ID_RE.test(guestId)) {
+        return NextResponse.json({ error: 'guestId inválido.' }, { status: 400 })
+      }
+      const task = await findGuestTaskById({ guestId, taskId })
+      if (!task) {
+        return NextResponse.json({ error: 'No se encontró el subítem solicitado.' }, { status: 404 })
+      }
+      const deleted = await deleteGuestTaskAttachment({ guestId, taskId, attachmentId })
+      if (!deleted) {
+        return NextResponse.json({ error: 'No se encontró la evidencia solicitada.' }, { status: 404 })
+      }
+      return NextResponse.json({ deletedAttachmentId: deleted.id })
+    }
+
+    // ── Authenticated mode ──────────────────────────────────────────────────
+    const user = await getUserFromRequest(req)
+    if (!user) {
+      return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
 
     const task = await findExtractionTaskByIdForUser({

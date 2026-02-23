@@ -521,7 +521,7 @@ interface DbAdminUserListRow {
 
 const globalForDb = globalThis as unknown as GlobalDb
 
-const pool =
+export const pool =
   globalForDb.__actionExtractorPgPool ??
   new Pool(
     process.env.ACTION_EXTRACTOR_DATABASE_URL
@@ -871,9 +871,71 @@ const INIT_SQL = `
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (guest_id, window_date)
   );
+
+  CREATE TABLE IF NOT EXISTS guest_tasks (
+    id TEXT PRIMARY KEY,
+    guest_id TEXT NOT NULL,
+    phase_id INTEGER NOT NULL,
+    phase_title TEXT NOT NULL,
+    item_index INTEGER NOT NULL,
+    item_text TEXT NOT NULL,
+    checked BOOLEAN NOT NULL DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (guest_id, phase_id, item_index)
+  );
+
+  CREATE TABLE IF NOT EXISTS guest_task_events (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES guest_tasks(id) ON DELETE CASCADE,
+    guest_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS guest_task_attachments (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES guest_tasks(id) ON DELETE CASCADE,
+    guest_id TEXT NOT NULL,
+    attachment_type TEXT NOT NULL,
+    storage_provider TEXT NOT NULL DEFAULT 'external',
+    url TEXT NOT NULL,
+    thumbnail_url TEXT,
+    title TEXT,
+    mime_type TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS guest_task_comments (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES guest_tasks(id) ON DELETE CASCADE,
+    guest_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS guest_task_likes (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES guest_tasks(id) ON DELETE CASCADE,
+    guest_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (task_id, guest_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_guest_tasks_guest_id ON guest_tasks(guest_id);
+  CREATE INDEX IF NOT EXISTS idx_guest_task_events_task_id ON guest_task_events(task_id);
+  CREATE INDEX IF NOT EXISTS idx_guest_task_attachments_task_id ON guest_task_attachments(task_id);
+  CREATE INDEX IF NOT EXISTS idx_guest_task_comments_task_id ON guest_task_comments(task_id);
+  CREATE INDEX IF NOT EXISTS idx_guest_task_likes_task_id ON guest_task_likes(task_id);
 `
 
-const DB_INIT_SIGNATURE = '2026-02-23-guest-mode-v1'
+const DB_INIT_SIGNATURE = '2026-02-23-guest-tasks-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -1201,7 +1263,7 @@ function mapChatMessageRow(row: DbChatMessageRow): DbChatMessage {
   }
 }
 
-async function ensureDbReady() {
+export async function ensureDbReady() {
   await getDbReadyPromise()
 }
 

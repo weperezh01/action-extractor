@@ -210,7 +210,8 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
         if (payload && typeof payload === 'object') {
           const resolvedMode = normalizeExtractionMode((payload as { mode?: unknown }).mode)
           const fromCache = (payload as { cached?: unknown }).cached === true
-          setResult({ ...(payload as ExtractResult), mode: resolvedMode, shareVisibility: 'private' })
+          // Inject the guest extraction ID so ResultPanel can make task API calls
+          setResult({ ...(payload as ExtractResult), id: `g-${guestId}`, mode: resolvedMode, shareVisibility: 'private' })
           setExtractionMode(resolvedMode)
           setShareCopied(false)
           setActivePhase(null)
