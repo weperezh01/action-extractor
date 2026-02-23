@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { AlertCircle, ArrowRight, UserPlus } from 'lucide-react'
 import { ExtractionForm } from '@/app/home/components/ExtractionForm'
 import { WorkspaceControlsDock } from '@/app/home/components/WorkspaceControlsDock'
@@ -24,6 +25,28 @@ import type { UploadedFileState } from '@/app/home/components/ExtractionForm'
 import { t, type Lang } from '@/app/home/lib/i18n'
 
 const GUEST_ID_KEY = 'ae-guest-id'
+export const PENDING_EXTRACTIONS_KEY = 'ae-pending-extractions'
+
+function savePendingExtractions(items: StoredExtraction[]) {
+  if (items.length === 0) return
+  try {
+    const payload = items.map((ex) => ({
+      url: ex.url,
+      mode: ex.mode,
+      objective: ex.result.objective,
+      phases: ex.result.phases,
+      proTip: ex.result.proTip,
+      metadata: ex.result.metadata,
+      videoTitle: ex.result.videoTitle ?? null,
+      thumbnailUrl: ex.result.thumbnailUrl ?? null,
+      sourceType: ex.result.sourceType ?? null,
+      sourceLabel: ex.result.sourceLabel ?? null,
+    }))
+    localStorage.setItem(PENDING_EXTRACTIONS_KEY, JSON.stringify(payload))
+  } catch {
+    // localStorage may not be available — fail silently
+  }
+}
 
 function getOrCreateGuestId(): string {
   try {
@@ -106,6 +129,8 @@ const MODE_PILL_LABELS: Record<string, { en: string; es: string }> = {
 // ── Component ──────────────────────────────────────────────────────────────
 
 export function GuestExtractorSection({ lang }: { lang: Lang }) {
+  const router = useRouter()
+
   // ── Form state ─────────────────────────────────────────────────────────
   const [url, setUrl] = useState('')
   const [extractionMode, setExtractionMode] = useState<ExtractionMode>(DEFAULT_EXTRACTION_MODE)
@@ -193,6 +218,16 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
     setActiveIndex(index)
     setActivePhase(null)
   }, [])
+
+  // Save any completed guest extractions to localStorage so the app can
+  // migrate them to the user's account right after registration/login.
+  const handleGoRegister = useCallback(
+    (currentExtractions: StoredExtraction[]) => {
+      savePendingExtractions(currentExtractions)
+      router.push('/app?mode=register')
+    },
+    [router]
+  )
 
   const handleExtract = useCallback(
     async (options?: { url?: string; mode?: ExtractionMode }) => {
@@ -468,14 +503,14 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
                 <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
                   {t(lang, 'guest.limitReached')}
                 </p>
-                <Link
-                  href="/app?mode=register"
+                <button
+                  onClick={() => handleGoRegister(extractions)}
                   className="mt-4 inline-flex items-center gap-2 rounded-xl bg-violet-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-violet-700"
                 >
                   <UserPlus size={15} />
                   {t(lang, 'guest.limitCta')}
                   <ArrowRight size={14} />
-                </Link>
+                </button>
               </div>
             )}
 
@@ -485,12 +520,12 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
                 <p className="text-xs font-medium text-amber-800 dark:text-amber-300">
                   {t(lang, 'guest.limitReached')}
                 </p>
-                <Link
-                  href="/app?mode=register"
+                <button
+                  onClick={() => handleGoRegister(extractions)}
                   className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-4 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-violet-700"
                 >
                   {t(lang, 'guest.limitCta')} <ArrowRight size={12} />
-                </Link>
+                </button>
               </div>
             )}
 
@@ -725,14 +760,14 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
                   {limitReached ? t(lang, 'guest.limitReached') : t(lang, 'guest.afterResult')}
                 </p>
                 <div className="mt-4 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
-                  <Link
-                    href="/app?mode=register"
+                  <button
+                    onClick={() => handleGoRegister(extractions)}
                     className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-violet-700"
                   >
                     <UserPlus size={15} />
                     {t(lang, 'guest.createAccount')}
                     <ArrowRight size={14} />
-                  </Link>
+                  </button>
                 </div>
               </div>
             </>

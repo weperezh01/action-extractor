@@ -1,8 +1,32 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReadonlyURLSearchParams } from 'next/navigation'
 import type { AuthMode, SessionUser } from '@/app/home/lib/types'
 
 const SESSION_REQUEST_TIMEOUT_MS = 10000
+const PENDING_EXTRACTIONS_KEY = 'ae-pending-extractions'
+
+// Best-effort: migrate guest extractions saved in localStorage to the
+// authenticated user's account. Called once per authentication event.
+async function migrateGuestExtractions() {
+  try {
+    const raw = localStorage.getItem(PENDING_EXTRACTIONS_KEY)
+    if (!raw) return
+    const extractions = JSON.parse(raw) as unknown[]
+    if (!Array.isArray(extractions) || extractions.length === 0) {
+      localStorage.removeItem(PENDING_EXTRACTIONS_KEY)
+      return
+    }
+    // Remove before the fetch so a network error doesn't re-trigger migration
+    localStorage.removeItem(PENDING_EXTRACTIONS_KEY)
+    await fetch('/api/migrate-guest-extractions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ extractions }),
+    })
+  } catch {
+    // fail silently — guest migration is best-effort
+  }
+}
 
 interface UseAuthParams {
   searchParams: ReadonlyURLSearchParams
@@ -48,6 +72,15 @@ export function useAuth({
   const [resetError, setResetError] = useState<string | null>(null)
   const [resetSuccess, setResetSuccess] = useState(false)
 
+  // Ensure guest extraction migration only runs once per component lifetime
+  const migrationAttemptedRef = useRef(false)
+
+  const triggerMigration = useCallback(() => {
+    if (migrationAttemptedRef.current) return
+    migrationAttemptedRef.current = true
+    void migrateGuestExtractions()
+  }, [])
+
   const loadSession = useCallback(async () => {
     setSessionLoading(true)
     const controller = new AbortController()
@@ -62,6 +95,7 @@ export function useAuth({
 
       if (res.ok && data.user) {
         setUser(data.user as SessionUser)
+        triggerMigration()
         // Do not block the main app shell while history loads.
         void Promise.resolve(onAuthenticated()).catch(() => {
           // noop: auth shell should remain usable even if secondary data fails
@@ -118,6 +152,7 @@ export function useAuth({
     if (authStatus === 'google_success') {
       setAuthNotice('Sesión iniciada con Google correctamente.')
       setGlobalNotice('Sesión iniciada con Google.')
+      triggerMigration()
       void onAuthenticated()
     } else if (authStatus === 'google_blocked') {
       setAuthError('Tu cuenta está bloqueada temporalmente. Contacta al administrador.')
@@ -217,6 +252,7 @@ export function useAuth({
         setAuthError(null)
         setAuthNotice(null)
         setGlobalError(null)
+        triggerMigration()
         await onAuthenticated()
       } catch {
         setAuthError('Error de conexión. Intenta de nuevo.')
