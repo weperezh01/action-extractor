@@ -8,9 +8,6 @@ import {
   AlertCircle,
   ArrowUp,
   Brain,
-  CheckSquare,
-  Clock,
-  Copy,
   History,
   LayoutList,
   LogOut,
@@ -35,14 +32,12 @@ import { GoogleIcon } from '@/app/home/components/GoogleIcon'
 import { ExtractionFeedCard } from '@/app/home/components/ExtractionFeedCard'
 import { HistoryPanel } from '@/app/home/components/HistoryPanel'
 import { KnowledgeChat } from '@/app/home/components/KnowledgeChat'
-import { PublicHeroSection } from '@/app/home/components/PublicHeroSection'
 import { ResultPanel } from '@/app/home/components/ResultPanel'
 import { WorkspaceControlsDock } from '@/app/home/components/WorkspaceControlsDock'
 import { FolderDock } from '@/app/home/components/FolderDock'
 import { useFolders } from '@/app/home/hooks/useFolders'
 import { useAuth } from '@/app/home/hooks/useAuth'
 import { useHistory } from '@/app/home/hooks/useHistory'
-import { useLang } from '@/app/home/hooks/useLang'
 import { useIntegrations } from '@/app/home/hooks/useIntegrations'
 import {
   applyTheme,
@@ -164,39 +159,6 @@ function parseStreamPreview(raw: string): {
   return { objective, phases }
 }
 
-function ValueHighlights() {
-  return (
-    <div className="grid gap-4 text-center md:grid-cols-3">
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
-          <Clock size={24} />
-        </div>
-        <h3 className="font-semibold text-slate-800 dark:text-slate-100">Ahorra Horas</h3>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          De 2 horas de video a 3 minutos de lectura.
-        </p>
-      </div>
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400">
-          <CheckSquare size={24} />
-        </div>
-        <h3 className="font-semibold text-slate-800 dark:text-slate-100">Acción Pura</h3>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          Sin relleno. Solo los pasos que generan ROI.
-        </p>
-      </div>
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400">
-          <Copy size={24} />
-        </div>
-        <h3 className="font-semibold text-slate-800 dark:text-slate-100">Exporta Fácil</h3>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          Exporta en un click a Notion, Trello, Todoist o Google Doc.
-        </p>
-      </div>
-    </div>
-  )
-}
 
 function ActionExtractor() {
   const searchParams = useSearchParams()
@@ -237,7 +199,6 @@ function ActionExtractor() {
   const resultAnchorRef = useRef<HTMLDivElement | null>(null)
   const historyAnchorRef = useRef<HTMLDivElement | null>(null)
   const themeStorageKey = getThemeStorageKey()
-  const { lang } = useLang()
   const trimmedUrl = url.trim()
   const detectedSourceType: SourceType = uploadedFile
     ? uploadedFile.sourceType
@@ -678,6 +639,7 @@ function ActionExtractor() {
     setReauthRequired(false)
     await handleAuthLogout()
     resetIntegrations()
+    window.location.href = '/'
   }
 
   const toggleTheme = () => {
@@ -1589,36 +1551,18 @@ function ActionExtractor() {
             <p className="text-sm text-zinc-500 dark:text-zinc-400">Cargando sesión...</p>
           </div>
         ) : !user && !reauthRequired ? (
-          <div className="space-y-8">
-            {!resetTokenFromUrl && (
-              <>
-                <PublicHeroSection lang={lang} />
-
-                <div className="text-center">
-                  <h1 className="text-4xl md:text-5xl font-extrabold text-slate-900 tracking-tight leading-tight">
-                    De Video a{' '}
-                    <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">
-                      Dinero Ejecutable
-                    </span>{' '}
-                    en Segundos.
-                  </h1>
-                  <div className="mx-auto mt-5 h-[180px] w-[180px]">
-                    <div className="relative h-full w-full overflow-hidden rounded-3xl border border-zinc-200 bg-white dark:border-white/15 dark:bg-zinc-950">
-                      <Image
-                        src="/roi-logo.png"
-                        alt="Roi Action Extractor App logo"
-                        fill
-                        sizes="180px"
-                        className="object-cover"
-                        priority
-                      />
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-
-            <ValueHighlights />
+          <div className="flex min-h-[60vh] flex-col items-center justify-center">
+            <div className="w-full max-w-md space-y-4">
+              <div className="text-center">
+                <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                  ROI Action Extractor
+                </h1>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  {resetTokenFromUrl
+                    ? 'Reset your password'
+                    : 'Log in or create an account to continue.'}
+                </p>
+              </div>
 
             <AuthAccessPanel
               resetTokenFromUrl={resetTokenFromUrl}
@@ -1655,6 +1599,13 @@ function ActionExtractor() {
               onForgotSuccessChange={setForgotSuccess}
               onSubmitForgotPassword={handleForgotPassword}
             />
+
+              <div className="text-center">
+                <a href="/" className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                  ← Back to landing
+                </a>
+              </div>
+            </div>
           </div>
         ) : (
           <>
