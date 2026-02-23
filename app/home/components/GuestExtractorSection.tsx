@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import Link from 'next/link'
 import { AlertCircle, ArrowRight, UserPlus } from 'lucide-react'
 import { ExtractionForm } from '@/app/home/components/ExtractionForm'
@@ -140,6 +140,20 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
 
   // extractor (form) visible ↔ result visible are mutually exclusive
   const showExtractor = activeIndex === null
+
+  // overflow-hidden is required for the grid-rows collapse animation, but it clips
+  // dropdowns (mode, language, connections) when the extractor is fully open.
+  // Switch to overflow-visible after the 700ms opening animation completes,
+  // and immediately back to overflow-hidden when the extractor starts closing.
+  const [extractorOverflow, setExtractorOverflow] = useState<'hidden' | 'visible'>('visible')
+  useEffect(() => {
+    if (showExtractor) {
+      const timer = setTimeout(() => setExtractorOverflow('visible'), 720)
+      return () => clearTimeout(timer)
+    } else {
+      setExtractorOverflow('hidden')
+    }
+  }, [showExtractor])
 
   // ── URL validation ─────────────────────────────────────────────────────
   const trimmedUrl = url.trim()
@@ -443,9 +457,9 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
         }`}
       >
         <div
-          className={`overflow-hidden transition-opacity duration-500 ease-in-out ${
-            showExtractor ? 'opacity-100' : 'opacity-0'
-          }`}
+          className={`transition-opacity duration-500 ease-in-out ${
+            extractorOverflow === 'visible' ? 'overflow-visible' : 'overflow-hidden'
+          } ${showExtractor ? 'opacity-100' : 'opacity-0'}`}
         >
           <div className="pb-2">
             {/* State C: limit reached, no results at all */}
