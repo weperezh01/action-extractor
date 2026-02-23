@@ -2,6 +2,8 @@ import type { ExtractionMode } from '@/lib/extraction-modes'
 
 export type ShareVisibility = 'private' | 'public'
 
+export type SourceType = 'youtube' | 'web_url' | 'pdf' | 'docx' | 'text' | 'manual'
+
 export interface Phase {
   id: number
   title: string
@@ -21,7 +23,7 @@ export interface ExtractResult {
   shareVisibility?: ShareVisibility
   createdAt?: string
   cached?: boolean
-  url?: string
+  url?: string | null
   videoId?: string | null
   videoTitle?: string | null
   thumbnailUrl?: string | null
@@ -30,19 +32,25 @@ export interface ExtractResult {
   phases: Phase[]
   proTip: string
   metadata: ExtractMetadata
+  sourceType?: SourceType
+  sourceLabel?: string | null
+  folderId?: string | null
 }
 
 export interface HistoryItem extends ExtractResult {
   id: string
   orderNumber: number
   shareVisibility: ShareVisibility
-  url: string
+  url: string | null
   createdAt: string
+  sourceType?: SourceType
+  sourceLabel?: string | null
+  folderId?: string | null
 }
 
 export type InteractiveTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed'
-export type InteractiveTaskEventType = 'note' | 'pending_action' | 'blocker'
-export type InteractiveTaskAttachmentType = 'pdf' | 'image' | 'audio' | 'youtube_link'
+export type InteractiveTaskEventType = 'note' | 'pending_action' | 'blocker' | 'resolved'
+export type InteractiveTaskAttachmentType = 'pdf' | 'image' | 'audio' | 'youtube_link' | 'note'
 export type InteractiveTaskAttachmentStorageProvider = 'cloudinary' | 'external'
 
 export interface InteractiveTaskEvent {
@@ -52,6 +60,8 @@ export interface InteractiveTaskEvent {
   content: string
   metadataJson: string
   createdAt: string
+  userName: string | null
+  userEmail: string | null
 }
 
 export interface InteractiveTask {
@@ -85,6 +95,8 @@ export interface InteractiveTaskAttachment {
   metadata?: Record<string, unknown>
   createdAt: string
   updatedAt: string
+  userName: string | null
+  userEmail: string | null
 }
 
 export interface InteractiveTaskComment {

@@ -25,5 +25,11 @@ COPY --from=builder /app/next.config.js ./next.config.js
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next ./.next
+# Source files — required by the MCP server for code browsing at /api/mcp
+COPY --from=builder /app/app ./app
+COPY --from=builder /app/lib ./lib
+COPY --from=builder /app/CLAUDE.md ./CLAUDE.md
+COPY --from=builder /app/tsconfig.json ./tsconfig.json
+COPY --from=builder /app/tailwind.config.js ./tailwind.config.js
 EXPOSE 3030
 CMD ["npm","run","start"]

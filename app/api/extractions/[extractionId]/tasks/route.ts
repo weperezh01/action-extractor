@@ -25,6 +25,7 @@ const ALLOWED_EVENT_TYPES = new Set<ExtractionTaskEventType>([
   'note',
   'pending_action',
   'blocker',
+  'resolved',
 ])
 
 function parseExtractionId(raw: unknown) {
@@ -85,6 +86,8 @@ function toClientTask(
       content: event.content,
       metadataJson: event.metadata_json,
       createdAt: event.created_at,
+      userName: event.user_name ?? null,
+      userEmail: event.user_email ?? null,
     })),
   }
 }

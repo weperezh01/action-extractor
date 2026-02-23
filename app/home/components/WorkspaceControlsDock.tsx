@@ -16,6 +16,7 @@ interface WorkspaceControlsDockProps {
   extractionMode: ExtractionMode
   outputLanguage: ExtractionOutputLanguage
   isProcessing: boolean
+  isManualOpen?: boolean
   onExtractionModeChange: (mode: ExtractionMode) => void
   onOutputLanguageChange: (language: ExtractionOutputLanguage) => void
 
@@ -74,6 +75,7 @@ export function WorkspaceControlsDock({
   extractionMode,
   outputLanguage,
   isProcessing,
+  isManualOpen = false,
   onExtractionModeChange,
   onOutputLanguageChange,
 
@@ -185,6 +187,22 @@ export function WorkspaceControlsDock({
   return (
     <div className="mx-auto mb-8 flex w-full max-w-3xl justify-end" ref={controlsRef}>
       <div className="flex flex-wrap items-center justify-end gap-2">
+        <div
+          style={{
+            maxWidth: isManualOpen ? '0px' : '600px',
+            maxHeight: isManualOpen ? '0px' : '120px',
+            opacity: isManualOpen ? 0 : 1,
+            transform: isManualOpen
+              ? 'perspective(700px) translateX(56px) rotateY(-12deg) scale(0.88)'
+              : 'perspective(700px) translateX(0px) rotateY(0deg) scale(1)',
+            pointerEvents: isManualOpen ? 'none' : undefined,
+            overflow: (isModeOpen || isLanguageOpen) ? 'visible' : 'hidden',
+            transition: 'max-width 0.65s cubic-bezier(0.4, 0, 0.2, 1), max-height 0.65s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.55s cubic-bezier(0.4, 0, 0.2, 1), transform 0.65s cubic-bezier(0.4, 0, 0.2, 1)',
+            transformOrigin: 'left center',
+            display: 'flex',
+            gap: '0.5rem',
+          }}
+        >
         <div className="relative">
           <button
             type="button"
@@ -293,6 +311,7 @@ export function WorkspaceControlsDock({
               </div>
             </div>
           )}
+        </div>
         </div>
 
         <div className="relative">

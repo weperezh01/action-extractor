@@ -45,6 +45,9 @@ export async function GET(req: NextRequest) {
       savedTime: '0m',
     }),
     createdAt: row.created_at,
+    sourceType: row.source_type ?? 'youtube',
+    sourceLabel: row.source_label ?? null,
+    folderId: row.folder_id ?? null,
   }))
 
   return NextResponse.json({ history })

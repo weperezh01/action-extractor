@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type {
   InteractiveTask,
+  InteractiveTaskAttachment,
   InteractiveTaskComment,
   InteractiveTaskLikeSummary,
   SessionUser,
@@ -13,9 +14,22 @@ interface SharedTaskTimelineProps {
   extractionId: string
   shareToken: string
   tasks: InteractiveTask[]
+  attachments: InteractiveTaskAttachment[]
 }
 
-function formatTaskDate(isoDate: string) {
+function formatTaskDateUtc(isoDate: string) {
+  const parsed = new Date(isoDate)
+  if (Number.isNaN(parsed.getTime())) return isoDate
+
+  return new Intl.DateTimeFormat('es-ES', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    // Keep SSR/CSR output deterministic to avoid hydration mismatches.
+    timeZone: 'UTC',
+  }).format(parsed)
+}
+
+function formatTaskDateLocal(isoDate: string) {
   const parsed = new Date(isoDate)
   if (Number.isNaN(parsed.getTime())) return isoDate
 
@@ -23,6 +37,35 @@ function formatTaskDate(isoDate: string) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(parsed)
+}
+
+function TaskDateLabel({ isoDate, className }: { isoDate: string; className?: string }) {
+  const [label, setLabel] = useState(() => formatTaskDateUtc(isoDate))
+
+  useEffect(() => {
+    setLabel(formatTaskDateLocal(isoDate))
+  }, [isoDate])
+
+  return (
+    <time dateTime={isoDate} className={className} suppressHydrationWarning>
+      {label}
+    </time>
+  )
+}
+
+function formatAttachmentSize(sizeBytes: number | null) {
+  if (typeof sizeBytes !== 'number' || !Number.isFinite(sizeBytes) || sizeBytes <= 0) return null
+  const kb = 1024
+  const mb = kb * 1024
+  if (sizeBytes >= mb) return `${(sizeBytes / mb).toFixed(1)} MB`
+  return `${Math.max(1, Math.round(sizeBytes / kb))} KB`
+}
+
+function getAttachmentTypeLabel(type: InteractiveTaskAttachment['attachmentType']) {
+  if (type === 'image') return 'Imagen'
+  if (type === 'audio') return 'Audio'
+  if (type === 'youtube_link') return 'YouTube'
+  return 'PDF'
 }
 
 function getTaskStatusLabel(status: InteractiveTask['status']) {
@@ -79,7 +122,12 @@ function normalizeCommunityPayload(
   return { comments, likeSummary }
 }
 
-export function SharedTaskTimeline({ extractionId, shareToken, tasks }: SharedTaskTimelineProps) {
+export function SharedTaskTimeline({
+  extractionId,
+  shareToken,
+  tasks,
+  attachments,
+}: SharedTaskTimelineProps) {
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null)
   const [sessionReady, setSessionReady] = useState(false)
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(tasks[0]?.id ?? null)
@@ -102,6 +150,16 @@ export function SharedTaskTimeline({ extractionId, shareToken, tasks }: SharedTa
     })
     return `/api/auth/google/start?${params.toString()}`
   }, [shareToken])
+
+  const attachmentsByTaskId = useMemo(() => {
+    const grouped: Record<string, InteractiveTaskAttachment[]> = {}
+    for (const attachment of attachments) {
+      const current = grouped[attachment.taskId] ?? []
+      current.push(attachment)
+      grouped[attachment.taskId] = current
+    }
+    return grouped
+  }, [attachments])
 
   useEffect(() => {
     let ignore = false
@@ -335,6 +393,7 @@ export function SharedTaskTimeline({ extractionId, shareToken, tasks }: SharedTa
       <div className="space-y-3">
         {tasks.map((task) => {
           const isExpanded = expandedTaskId === task.id
+          const taskAttachments = attachmentsByTaskId[task.id] ?? []
           const taskComments = taskCommentsByTaskId[task.id] ?? []
           const taskLikeSummary = taskLikeSummaryByTaskId[task.id] ?? {
             taskId: task.id,
@@ -387,7 +446,7 @@ export function SharedTaskTimeline({ extractionId, shareToken, tasks }: SharedTa
 
               <div
                 className={`overflow-hidden transition-all duration-500 ease-out ${
-                  isExpanded ? 'max-h-[1400px] opacity-100' : 'max-h-0 opacity-0'
+                  isExpanded ? 'max-h-[2200px] opacity-100' : 'max-h-0 opacity-0'
                 }`}
               >
                 <div className="mt-3 space-y-4 border-t border-slate-100 pt-3 dark:border-slate-700">
@@ -405,10 +464,91 @@ export function SharedTaskTimeline({ extractionId, shareToken, tasks }: SharedTa
                           <li key={event.id} className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">
                             - {event.content}{' '}
                             <span className="text-slate-400 dark:text-slate-500">
-                              ({formatTaskDate(event.createdAt)})
+                              ({event.userName?.trim() || event.userEmail?.trim() || 'Usuario'} · <TaskDateLabel isoDate={event.createdAt} />)
                             </span>
                           </li>
                         ))}
+                      </ul>
+                    )}
+                  </section>
+
+                  <section className="rounded-lg border border-slate-200 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-900/40">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                        Evidencias
+                      </p>
+                      <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                        {taskAttachments.length}
+                      </span>
+                    </div>
+
+                    {taskAttachments.length === 0 ? (
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Este subítem aún no tiene evidencias adjuntas.
+                      </p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {taskAttachments.map((attachment) => {
+                          const typeLabel = getAttachmentTypeLabel(attachment.attachmentType)
+                          const sizeLabel = formatAttachmentSize(attachment.sizeBytes)
+                          const hasThumbnail = Boolean(attachment.thumbnailUrl)
+                          return (
+                            <li
+                              key={attachment.id}
+                              className="rounded-md border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900"
+                            >
+                              <div className="flex items-start gap-3">
+                                {hasThumbnail ? (
+                                  <img
+                                    src={attachment.thumbnailUrl || ''}
+                                    alt={attachment.title || `Miniatura ${typeLabel}`}
+                                    loading="lazy"
+                                    className="h-14 w-24 rounded border border-slate-200 object-cover dark:border-slate-700"
+                                  />
+                                ) : (
+                                  <div className="flex h-14 w-14 items-center justify-center rounded border border-slate-200 bg-slate-100 text-[10px] font-bold text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                                    {typeLabel}
+                                  </div>
+                                )}
+
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                                      {typeLabel}
+                                    </span>
+                                    {sizeLabel && (
+                                      <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                                        {sizeLabel}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="mt-1 truncate text-xs font-semibold text-slate-700 dark:text-slate-100">
+                                    {attachment.title?.trim() ||
+                                      (attachment.attachmentType === 'youtube_link'
+                                        ? 'Enlace de YouTube'
+                                        : 'Archivo adjunto')}
+                                  </p>
+                                  <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                                    {attachment.userName?.trim() || attachment.userEmail?.trim() || 'Usuario'}
+                                    {' · '}
+                                    <TaskDateLabel
+                                      isoDate={attachment.createdAt}
+                                      className="text-slate-400 dark:text-slate-500"
+                                    />
+                                  </p>
+                                  <a
+                                    href={attachment.url}
+                                    target="_blank"
+                                    rel="noreferrer noopener"
+                                    className="mt-1 inline-flex items-center text-xs font-semibold text-indigo-600 transition-colors hover:text-indigo-700 dark:text-indigo-300 dark:hover:text-indigo-200"
+                                  >
+                                    Abrir evidencia
+                                  </a>
+                                </div>
+                              </div>
+                            </li>
+                          )
+                        })}
                       </ul>
                     )}
                   </section>
@@ -519,7 +659,10 @@ export function SharedTaskTimeline({ extractionId, shareToken, tasks }: SharedTa
                                     </p>
                                     <div className="flex items-center gap-2">
                                       <span className="text-[11px] text-slate-400 dark:text-slate-500">
-                                        {formatTaskDate(comment.createdAt)}
+                                        <TaskDateLabel
+                                          isoDate={comment.createdAt}
+                                          className="text-slate-400 dark:text-slate-500"
+                                        />
                                       </span>
                                       {canDelete && (
                                         <button

@@ -3,8 +3,12 @@ import Image from 'next/image'
 import { cache } from 'react'
 import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
-import { findSharedExtractionByToken, listExtractionTasksWithEventsForSharedExtraction } from '@/lib/db'
-import type { InteractiveTask } from '@/app/home/lib/types'
+import {
+  findSharedExtractionByToken,
+  listExtractionTaskAttachmentsForSharedExtraction,
+  listExtractionTasksWithEventsForSharedExtraction,
+} from '@/lib/db'
+import type { InteractiveTask, InteractiveTaskAttachment } from '@/app/home/lib/types'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
 import { buildYoutubeThumbnailUrl } from '@/lib/video-preview'
 import { SharedTaskTimeline } from './SharedTaskTimeline'
@@ -22,6 +26,9 @@ const DEFAULT_SOCIAL_IMAGE = '/roi-logo.png'
 const getSharedExtraction = cache((token: string) => findSharedExtractionByToken(token))
 const getSharedTasks = cache((extractionId: string) =>
   listExtractionTasksWithEventsForSharedExtraction(extractionId)
+)
+const getSharedAttachments = cache((extractionId: string) =>
+  listExtractionTaskAttachmentsForSharedExtraction(extractionId)
 )
 
 function resolveAppUrl() {
@@ -162,7 +169,31 @@ function mapSharedTasksToInteractiveTasks(
       content: event.content,
       metadataJson: event.metadata_json,
       createdAt: event.created_at,
+      userName: event.user_name ?? null,
+      userEmail: event.user_email ?? null,
     })),
+  }))
+}
+
+function mapSharedAttachmentsToInteractiveAttachments(
+  attachments: Awaited<ReturnType<typeof listExtractionTaskAttachmentsForSharedExtraction>>
+): InteractiveTaskAttachment[] {
+  return attachments.map((attachment) => ({
+    id: attachment.id,
+    taskId: attachment.task_id,
+    extractionId: attachment.extraction_id,
+    attachmentType: attachment.attachment_type,
+    storageProvider: attachment.storage_provider,
+    url: attachment.url,
+    thumbnailUrl: attachment.thumbnail_url,
+    title: attachment.title,
+    mimeType: attachment.mime_type,
+    sizeBytes: attachment.size_bytes,
+    metadataJson: attachment.metadata_json,
+    createdAt: attachment.created_at,
+    updatedAt: attachment.updated_at,
+    userName: attachment.user_name ?? null,
+    userEmail: attachment.user_email ?? null,
   }))
 }
 
@@ -183,7 +214,9 @@ export default async function SharePage({
 
   const phases = safeParse<Phase[]>(extraction.phases_json, [])
   const tasks = await getSharedTasks(extraction.id)
+  const attachments = await getSharedAttachments(extraction.id)
   const interactiveTasks = mapSharedTasksToInteractiveTasks(tasks)
+  const interactiveAttachments = mapSharedAttachmentsToInteractiveAttachments(attachments)
   const metadata = safeParse<ExtractionMetadata>(extraction.metadata_json, {
     readingTime: '3 min',
     difficulty: 'Media',
@@ -354,6 +387,7 @@ export default async function SharePage({
                 extractionId={extraction.id}
                 shareToken={token}
                 tasks={interactiveTasks}
+                attachments={interactiveAttachments}
               />
             )}
 

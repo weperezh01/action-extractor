@@ -26,7 +26,9 @@ export function useAuth({
   const [sessionLoading, setSessionLoading] = useState(true)
   const [user, setUser] = useState<SessionUser | null>(null)
 
-  const [authMode, setAuthMode] = useState<AuthMode>('login')
+  const [authMode, setAuthMode] = useState<AuthMode>(
+    searchParams.get('mode') === 'register' ? 'register' : 'login'
+  )
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -101,7 +103,7 @@ export function useAuth({
     }
 
     if (typeof window !== 'undefined') {
-      window.history.replaceState({}, '', '/')
+      window.history.replaceState({}, '', '/app')
     }
   }, [searchParams])
 
@@ -132,7 +134,7 @@ export function useAuth({
     }
 
     if (typeof window !== 'undefined') {
-      window.history.replaceState({}, '', '/')
+      window.history.replaceState({}, '', '/app')
     }
   }, [onAuthenticated, searchParams, setGlobalNotice])
 
@@ -144,7 +146,7 @@ export function useAuth({
     setGoogleAuthLoading(true)
 
     if (typeof window !== 'undefined') {
-      const params = new URLSearchParams({ next: '/' })
+      const params = new URLSearchParams({ next: '/app' })
       window.location.href = `/api/auth/google/start?${params.toString()}`
     }
   }, [authLoading, googleAuthLoading])

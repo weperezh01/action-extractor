@@ -33,6 +33,8 @@ import {
   type UserExtractionRateLimitResult,
 } from '@/lib/rate-limit'
 import { resolveVideoPreview } from '@/lib/video-preview'
+import { detectSourceType } from '@/lib/source-detector'
+import { extractWebContent, truncateForAi } from '@/lib/content-extractor'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -256,17 +258,32 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
-    const url: string = body?.url ?? ''
+    const rawUrl: string = (body?.url ?? '').trim()
+    const rawText: string = (body?.text ?? '').trim()
+    const bodySourceType = body?.sourceType
+    const bodySourceLabel: string | null =
+      typeof body?.sourceLabel === 'string' ? body.sourceLabel : null
+
     const mode = normalizeExtractionMode(body?.mode)
     const outputLanguage = normalizeExtractionOutputLanguage(body?.outputLanguage)
     const promptVersion = getExtractionPromptVersion(mode, outputLanguage)
 
-    if (!url.trim()) {
-      return NextResponse.json({ error: 'URL requerida.' }, { status: 400 })
+    const sourceType = typeof bodySourceType === 'string' && bodySourceType
+      ? bodySourceType as 'youtube' | 'web_url' | 'pdf' | 'docx' | 'text'
+      : detectSourceType(rawUrl || rawText)
+
+    if (sourceType === 'youtube' || sourceType === 'web_url') {
+      if (!rawUrl) {
+        return NextResponse.json({ error: 'URL requerida.' }, { status: 400 })
+      }
+    } else {
+      if (!rawText) {
+        return NextResponse.json({ error: 'Contenido de texto requerido.' }, { status: 400 })
+      }
     }
 
-    const videoId = extractVideoId(url)
-    if (!videoId) {
+    const videoId = sourceType === 'youtube' ? extractVideoId(rawUrl) : null
+    if (sourceType === 'youtube' && !videoId) {
       return NextResponse.json(
         { error: 'URL de YouTube inválida. Usa el formato https://youtube.com/watch?v=...' },
         { status: 400 }
@@ -281,12 +298,12 @@ export async function POST(req: NextRequest) {
       (dbExtractionProvider as AiProvider | null) ?? 'anthropic'
     const EXTRACTION_MODEL = dbExtractionModel || EXTRACTION_MODEL_DEFAULT
 
-    const cachedVideo = await findVideoCacheByVideoId({
-      videoId,
-      promptVersion,
-      model: EXTRACTION_MODEL,
-    })
-    const fallbackVideoCache = cachedVideo ?? (await findAnyVideoCacheByVideoId(videoId))
+    const cachedVideo = sourceType === 'youtube' && videoId
+      ? await findVideoCacheByVideoId({ videoId, promptVersion, model: EXTRACTION_MODEL })
+      : null
+    const fallbackVideoCache = sourceType === 'youtube' && videoId
+      ? (cachedVideo ?? (await findAnyVideoCacheByVideoId(videoId)))
+      : null
 
     if (cachedVideo) {
       const cachedMetadata = safeParse(cachedVideo.metadata_json, {
@@ -313,14 +330,14 @@ export async function POST(req: NextRequest) {
       }
 
       const videoPreview = await resolveVideoPreview({
-        videoId,
+        videoId: videoId!,
         titleHint: cachedVideo.video_title,
         thumbnailHint: cachedVideo.thumbnail_url,
       })
 
       if (!cachedVideo.video_title || !cachedVideo.thumbnail_url) {
         await upsertVideoCache({
-          videoId,
+          videoId: videoId!,
           videoTitle: videoPreview.videoTitle,
           thumbnailUrl: videoPreview.thumbnailUrl,
           objective: responsePayload.objective,
@@ -335,8 +352,8 @@ export async function POST(req: NextRequest) {
 
       const saved = await createExtraction({
         userId: user.id,
-        url,
-        videoId,
+        url: rawUrl || null,
+        videoId: videoId!,
         videoTitle: videoPreview.videoTitle,
         thumbnailUrl: videoPreview.thumbnailUrl,
         extractionMode: mode,
@@ -344,13 +361,15 @@ export async function POST(req: NextRequest) {
         phasesJson: JSON.stringify(responsePayload.phases),
         proTip: responsePayload.proTip,
         metadataJson: JSON.stringify(responsePayload.metadata),
+        sourceType,
+        sourceLabel: videoPreview.videoTitle ?? bodySourceLabel,
       })
       const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
 
       return NextResponse.json({
         ...responsePayload,
-        url,
-        videoId,
+        url: rawUrl || null,
+        videoId: videoId!,
         videoTitle: videoPreview.videoTitle,
         thumbnailUrl: videoPreview.thumbnailUrl,
         outputLanguageRequested: outputLanguage,
@@ -360,6 +379,8 @@ export async function POST(req: NextRequest) {
         shareVisibility: saved.share_visibility,
         createdAt: saved.created_at,
         cached: true,
+        sourceType,
+        sourceLabel: saved.source_label,
       })
     }
 
@@ -375,66 +396,78 @@ export async function POST(req: NextRequest) {
       return createRateLimitResponse(rateLimit)
     }
 
-    // Fetch transcript con retry automático, con fallback a transcripción cacheada
-    let transcriptText = fallbackVideoCache?.transcript_text?.trim() ?? ''
-    let transcriptSource: 'cache_transcript' | 'youtube' | 'cache_result' = transcriptText
-      ? 'cache_transcript'
-      : 'youtube'
-    const transcriptFallbackFromCache = fallbackVideoCache
-      ? buildTranscriptFallbackFromCachedExtraction(fallbackVideoCache)
-      : ''
-    if (!transcriptText) {
-      try {
-        const segments = await retryWithBackoff(() => YoutubeTranscript.fetchTranscript(videoId), {
-          maxAttempts: 3,
-          shouldRetry: (transcriptError) => classifyTranscriptError(transcriptError).retryable,
-        })
+    // Obtain content based on source type
+    let contentText = ''
+    let contentTitle: string | null = null
+    let transcriptSource: 'cache_transcript' | 'youtube' | 'cache_result' | 'web' | 'file' | 'text' = 'youtube'
 
-        if (!segments.length) {
+    if (sourceType === 'youtube') {
+      let transcriptText = fallbackVideoCache?.transcript_text?.trim() ?? ''
+      transcriptSource = transcriptText ? 'cache_transcript' : 'youtube'
+      const transcriptFallbackFromCache = fallbackVideoCache
+        ? buildTranscriptFallbackFromCachedExtraction(fallbackVideoCache)
+        : ''
+
+      if (!transcriptText) {
+        try {
+          const segments = await retryWithBackoff(() => YoutubeTranscript.fetchTranscript(videoId!), {
+            maxAttempts: 3,
+            shouldRetry: (transcriptError) => classifyTranscriptError(transcriptError).retryable,
+          })
+
+          if (!segments.length) {
+            if (transcriptFallbackFromCache) {
+              transcriptText = transcriptFallbackFromCache
+              transcriptSource = 'cache_result'
+            } else {
+              return NextResponse.json(
+                { error: 'No se encontró transcripción utilizable para este video. Prueba con otro enlace.' },
+                { status: 422 }
+              )
+            }
+          } else {
+            transcriptText = segments.map((segment) => segment.text).join(' ')
+            transcriptSource = 'youtube'
+          }
+        } catch (error: unknown) {
           if (transcriptFallbackFromCache) {
             transcriptText = transcriptFallbackFromCache
             transcriptSource = 'cache_result'
           } else {
-            return NextResponse.json(
-              {
-                error: 'No se encontró transcripción utilizable para este video. Prueba con otro enlace.',
-              },
-              { status: 422 }
-            )
+            const transcriptError = classifyTranscriptError(error)
+            return NextResponse.json({ error: transcriptError.message }, { status: transcriptError.status })
           }
-        } else {
-          transcriptText = segments.map((segment) => segment.text).join(' ')
-          transcriptSource = 'youtube'
-        }
-      } catch (error: unknown) {
-        if (transcriptFallbackFromCache) {
-          transcriptText = transcriptFallbackFromCache
-          transcriptSource = 'cache_result'
-        } else {
-          const transcriptError = classifyTranscriptError(error)
-          return NextResponse.json({ error: transcriptError.message }, { status: transcriptError.status })
         }
       }
+      contentText = transcriptText
+    } else if (sourceType === 'web_url') {
+      try {
+        const webContent = await extractWebContent(rawUrl)
+        contentText = webContent.text
+        contentTitle = webContent.title
+        transcriptSource = 'web'
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'No se pudo descargar la página.'
+        return NextResponse.json({ error: msg }, { status: 422 })
+      }
+    } else {
+      contentText = rawText
+      contentTitle = bodySourceLabel
+      transcriptSource = 'file'
     }
 
-    if (!transcriptText.trim()) {
+    if (!contentText.trim()) {
       return NextResponse.json(
-        { error: 'La transcripción está vacía. Prueba con otro video.' },
+        { error: 'El contenido está vacío. Prueba con otra fuente.' },
         { status: 422 }
       )
     }
 
-    // Truncate to avoid exceeding context limits (~50k chars ≈ 12k tokens)
-    const MAX_CHARS = 50_000
-    const truncated = transcriptText.length > MAX_CHARS
-    const finalTranscript = truncated
-      ? transcriptText.slice(0, MAX_CHARS) + '\n[Transcripción truncada]'
-      : transcriptText
-
-    const wordCount = transcriptText.split(/\s+/).length
+    const { finalText: finalTranscript } = truncateForAi(contentText)
+    const wordCount = contentText.split(/\s+/).length
     const { originalTime, savedTime } = estimateTime(wordCount)
     const resolvedOutputLanguage = resolveExtractionOutputLanguage(outputLanguage, finalTranscript)
-    const previewPromise = resolveVideoPreview({ videoId })
+    const previewPromise = sourceType === 'youtube' && videoId ? resolveVideoPreview({ videoId }) : null
 
     let modelText: string
     try {
@@ -488,25 +521,31 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: modelError.message }, { status: modelError.status })
     }
 
-    const videoPreview = await previewPromise
+    const videoPreview = previewPromise ? await previewPromise : { videoTitle: null, thumbnailUrl: null }
 
-    await upsertVideoCache({
-      videoId,
-      videoTitle: videoPreview.videoTitle,
-      thumbnailUrl: videoPreview.thumbnailUrl,
-      objective: responsePayload.objective,
-      phasesJson: JSON.stringify(responsePayload.phases),
-      proTip: responsePayload.proTip,
-      metadataJson: JSON.stringify(responsePayload.metadata),
-      transcriptText: transcriptSource === 'cache_result' ? null : transcriptText,
-      promptVersion,
-      model: EXTRACTION_MODEL,
-    })
+    if (sourceType === 'youtube' && videoId) {
+      await upsertVideoCache({
+        videoId,
+        videoTitle: videoPreview.videoTitle,
+        thumbnailUrl: videoPreview.thumbnailUrl,
+        objective: responsePayload.objective,
+        phasesJson: JSON.stringify(responsePayload.phases),
+        proTip: responsePayload.proTip,
+        metadataJson: JSON.stringify(responsePayload.metadata),
+        transcriptText: transcriptSource === 'cache_result' ? null : contentText,
+        promptVersion,
+        model: EXTRACTION_MODEL,
+      })
+    }
+
+    const resolvedSourceLabel = sourceType === 'youtube'
+      ? (videoPreview.videoTitle ?? bodySourceLabel)
+      : (contentTitle ?? bodySourceLabel)
 
     const saved = await createExtraction({
       userId: user.id,
-      url,
-      videoId,
+      url: rawUrl || null,
+      videoId: videoId ?? null,
       videoTitle: videoPreview.videoTitle,
       thumbnailUrl: videoPreview.thumbnailUrl,
       extractionMode: mode,
@@ -514,13 +553,15 @@ export async function POST(req: NextRequest) {
       phasesJson: JSON.stringify(responsePayload.phases),
       proTip: responsePayload.proTip,
       metadataJson: JSON.stringify(responsePayload.metadata),
+      sourceType,
+      sourceLabel: resolvedSourceLabel,
     })
     const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
 
     return NextResponse.json({
       ...responsePayload,
-      url,
-      videoId,
+      url: rawUrl || null,
+      videoId: videoId ?? null,
       videoTitle: videoPreview.videoTitle,
       thumbnailUrl: videoPreview.thumbnailUrl,
       outputLanguageRequested: outputLanguage,
@@ -530,6 +571,8 @@ export async function POST(req: NextRequest) {
       shareVisibility: saved.share_visibility,
       createdAt: saved.created_at,
       cached: false,
+      sourceType,
+      sourceLabel: saved.source_label,
     })
   } catch (err: unknown) {
     console.error('[ActionExtractor] extract error:', err)

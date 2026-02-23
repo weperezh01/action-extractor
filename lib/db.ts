@@ -24,7 +24,7 @@ interface DbSessionWithUser {
 export interface DbExtraction {
   id: string
   user_id: string
-  url: string
+  url: string | null
   video_id: string | null
   video_title: string | null
   thumbnail_url: string | null
@@ -36,6 +36,9 @@ export interface DbExtraction {
   share_visibility: ExtractionShareVisibility
   order_number?: number
   created_at: string
+  source_type: string
+  source_label: string | null
+  folder_id: string | null
 }
 
 export interface DbVideoCache {
@@ -299,7 +302,7 @@ interface DbSessionWithUserRow {
 interface DbExtractionRow {
   id: string
   user_id: string
-  url: string
+  url: string | null
   video_id: string | null
   video_title: string | null
   thumbnail_url: string | null
@@ -311,6 +314,9 @@ interface DbExtractionRow {
   share_visibility?: string | null
   order_number?: number | string
   created_at: Date | string
+  source_type?: string | null
+  source_label?: string | null
+  folder_id?: string | null
 }
 
 interface DbVideoCacheRow {
@@ -852,9 +858,14 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_ai_usage_log_created_at ON ai_usage_log(created_at);
   CREATE INDEX IF NOT EXISTS idx_ai_usage_log_provider_model ON ai_usage_log(provider, model);
   CREATE INDEX IF NOT EXISTS idx_ai_usage_log_user_id ON ai_usage_log(user_id);
+
+  ALTER TABLE extractions ALTER COLUMN url DROP NOT NULL;
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'youtube';
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_label TEXT;
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS folder_id TEXT;
 `
 
-const DB_INIT_SIGNATURE = '2026-02-22-ai-usage-log-v2'
+const DB_INIT_SIGNATURE = '2026-02-23-folders-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -970,7 +981,7 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
   return {
     id: row.id,
     user_id: row.user_id,
-    url: row.url,
+    url: row.url ?? null,
     video_id: row.video_id,
     video_title: row.video_title,
     thumbnail_url: row.thumbnail_url,
@@ -982,6 +993,9 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
     share_visibility: shareVisibility,
     order_number: orderNumber,
     created_at: toIso(row.created_at),
+    source_type: row.source_type ?? 'youtube',
+    source_label: row.source_label ?? null,
+    folder_id: row.folder_id ?? null,
   }
 }
 
@@ -1314,7 +1328,7 @@ export async function deleteExpiredSessions() {
 
 export async function createExtraction(input: {
   userId: string
-  url: string
+  url: string | null
   videoId: string | null
   videoTitle: string | null
   thumbnailUrl: string | null
@@ -1323,9 +1337,12 @@ export async function createExtraction(input: {
   phasesJson: string
   proTip: string
   metadataJson: string
+  sourceType?: string
+  sourceLabel?: string | null
 }) {
   await ensureDbReady()
   const id = randomUUID()
+  const sourceType = input.sourceType ?? 'youtube'
   const { rows } = await pool.query<DbExtractionRow>(
     `
       INSERT INTO extractions (
@@ -1339,9 +1356,11 @@ export async function createExtraction(input: {
         objective,
         phases_json,
         pro_tip,
-        metadata_json
+        metadata_json,
+        source_type,
+        source_label
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING
         id,
         user_id,
@@ -1355,7 +1374,9 @@ export async function createExtraction(input: {
         pro_tip,
         metadata_json,
         share_visibility,
-        created_at
+        created_at,
+        source_type,
+        source_label
     `,
     [
       id,
@@ -1369,6 +1390,8 @@ export async function createExtraction(input: {
       input.phasesJson,
       input.proTip,
       input.metadataJson,
+      sourceType,
+      input.sourceLabel ?? null,
     ]
   )
 
@@ -1393,6 +1416,8 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
         ranked.metadata_json,
         ranked.share_visibility,
         ranked.created_at,
+        ranked.source_type,
+        ranked.source_label,
         ranked.order_number
       FROM (
         SELECT
@@ -1409,6 +1434,8 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
           metadata_json,
           share_visibility,
           created_at,
+          source_type,
+          source_label,
           ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC)::int AS order_number
         FROM extractions
         WHERE user_id = $1
@@ -1588,6 +1615,41 @@ export async function updateExtractionPhasesForUser(input: {
   )
 
   return rows[0] ? mapExtractionRow(rows[0]) : null
+}
+
+export async function updateExtractionMetaForUser(input: {
+  id: string
+  userId: string
+  videoTitle: string
+  sourceLabel: string
+  thumbnailUrl: string | null
+  objective: string
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionRow>(
+    `UPDATE extractions
+     SET video_title = $1, source_label = $2, thumbnail_url = $3, objective = $4
+     WHERE id = $5 AND user_id = $6
+     RETURNING
+       id, user_id, url, video_id, video_title, thumbnail_url,
+       extraction_mode, objective, phases_json, pro_tip, metadata_json,
+       share_visibility, created_at, source_type, source_label`,
+    [input.videoTitle, input.sourceLabel, input.thumbnailUrl, input.objective, input.id, input.userId]
+  )
+  return rows[0] ? mapExtractionRow(rows[0]) : null
+}
+
+export async function updateExtractionFolderForUser(input: {
+  id: string
+  userId: string
+  folderId: string | null
+}): Promise<boolean> {
+  await ensureDbReady()
+  const { rowCount } = await pool.query(
+    `UPDATE extractions SET folder_id = $1 WHERE id = $2 AND user_id = $3`,
+    [input.folderId, input.id, input.userId]
+  )
+  return (rowCount ?? 0) > 0
 }
 
 export async function findOrCreateChatConversationForUser(userId: string) {

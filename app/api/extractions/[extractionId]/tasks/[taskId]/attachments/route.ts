@@ -42,6 +42,8 @@ function toClientAttachment(attachment: DbExtractionTaskAttachment) {
     metadata: safeParseJson(attachment.metadata_json),
     createdAt: attachment.created_at,
     updatedAt: attachment.updated_at,
+    userName: attachment.user_name ?? null,
+    userEmail: attachment.user_email ?? null,
   }
 }
 
@@ -203,6 +205,36 @@ export async function POST(
       return NextResponse.json({ error: 'Body JSON inválido.' }, { status: 400 })
     }
 
+    const noteText =
+      typeof (body as { noteText?: unknown }).noteText === 'string'
+        ? (body as { noteText: string }).noteText.trim()
+        : ''
+
+    if (noteText) {
+      if (noteText.length > 10000) {
+        return NextResponse.json({ error: 'La nota no puede superar los 10.000 caracteres.' }, { status: 400 })
+      }
+
+      const created = await createExtractionTaskAttachmentForUser({
+        taskId,
+        extractionId,
+        userId: user.id,
+        attachmentType: 'note',
+        storageProvider: 'external',
+        url: 'note://local',
+        thumbnailUrl: null,
+        title: noteText.slice(0, 300),
+        mimeType: 'text/plain',
+        sizeBytes: null,
+        metadataJson: JSON.stringify({ content: noteText }),
+      })
+      if (!created) {
+        return NextResponse.json({ error: 'No se pudo guardar la nota.' }, { status: 404 })
+      }
+
+      return NextResponse.json({ attachment: toClientAttachment(created) }, { status: 201 })
+    }
+
     const youtubeUrl =
       typeof (body as { youtubeUrl?: unknown }).youtubeUrl === 'string'
         ? (body as { youtubeUrl: string }).youtubeUrl.trim()
@@ -212,7 +244,7 @@ export async function POST(
 
     if (!youtubeUrl) {
       return NextResponse.json(
-        { error: 'Debes enviar un archivo o una URL de YouTube válida.' },
+        { error: 'Debes enviar un archivo, una nota o una URL de YouTube válida.' },
         { status: 400 }
       )
     }

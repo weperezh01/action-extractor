@@ -26,6 +26,7 @@ export function useHistory() {
     return history.filter((item) => {
       const searchable = [
         item.videoTitle ?? '',
+        item.sourceLabel ?? '',
         item.objective ?? '',
         item.url ?? '',
         formatHistoryDate(item.createdAt),

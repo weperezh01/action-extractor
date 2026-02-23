@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
       proTip: extraction.pro_tip,
       metadata,
       videoTitle: extraction.video_title,
-      videoUrl: extraction.url,
+      videoUrl: extraction.url ?? '',
     })
 
     return NextResponse.json({
