@@ -1,4 +1,4 @@
-import { consumeExtractionRateLimitByUser, getExtractionRateLimitUsageByUser } from '@/lib/db'
+import { consumeExtractionRateLimitByUser, consumeGuestExtractionRateLimit, getExtractionRateLimitUsageByUser } from '@/lib/db'
 
 const DEFAULT_EXTRACTIONS_PER_HOUR = 12
 const MAX_EXTRACTIONS_PER_HOUR = 500
@@ -68,4 +68,8 @@ export async function getUserExtractionRateLimitSnapshot(
 
 export function buildExtractionRateLimitMessage(limit: number) {
   return `Has alcanzado el límite de ${limit} extracciones por hora. Intenta de nuevo en unos minutos.`
+}
+
+export async function consumeGuestRateLimit(guestId: string) {
+  return consumeGuestExtractionRateLimit(guestId)
 }

@@ -30,6 +30,7 @@ import {
 import {
   buildExtractionRateLimitMessage,
   consumeUserExtractionRateLimit,
+  consumeGuestRateLimit,
   type UserExtractionRateLimitResult,
 } from '@/lib/rate-limit'
 import { resolveVideoPreview } from '@/lib/video-preview'
@@ -259,8 +260,22 @@ async function parseExtractionWithRepair(params: {
 
 export async function POST(req: NextRequest) {
   const user = await getUserFromRequest(req)
-  if (!user) {
+  const isGuest = !user && req.headers.get('X-Guest-Mode') === '1'
+
+  if (!user && !isGuest) {
     return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
+  }
+
+  if (isGuest) {
+    const rawGuestId = req.headers.get('X-Guest-ID') ?? ''
+    const guestId = /^[0-9a-f-]{20,40}$/i.test(rawGuestId) ? rawGuestId : 'unknown'
+    const { allowed } = await consumeGuestRateLimit(guestId)
+    if (!allowed) {
+      return NextResponse.json(
+        { error: 'Ya usaste tu extracción gratuita. Crea una cuenta para continuar.' },
+        { status: 429 }
+      )
+    }
   }
 
   let body: unknown
@@ -332,9 +347,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Servicio de IA no configurado. Falta la API key del proveedor seleccionado.' }, { status: 503 })
     }
 
-    const rateLimit = await consumeUserExtractionRateLimit(user.id)
-    if (!rateLimit.allowed) {
-      return createRateLimitResponse(rateLimit)
+    if (user) {
+      const rateLimit = await consumeUserExtractionRateLimit(user.id)
+      if (!rateLimit.allowed) {
+        return createRateLimitResponse(rateLimit)
+      }
     }
   }
 
@@ -416,42 +433,58 @@ export async function POST(req: NextRequest) {
             })
           }
 
-          const saved = await createExtraction({
-            userId: user.id,
-            url: rawUrl || null,
-            videoId: videoId!,
-            videoTitle: videoPreview.videoTitle,
-            thumbnailUrl: videoPreview.thumbnailUrl,
-            extractionMode: mode,
-            objective: responsePayload.objective,
-            phasesJson: JSON.stringify(responsePayload.phases),
-            proTip: responsePayload.proTip,
-            metadataJson: JSON.stringify(responsePayload.metadata),
-            sourceType,
-            sourceLabel: videoPreview.videoTitle ?? bodySourceLabel,
-          })
-          const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
-
           send('status', {
             step: 'cached',
             message: 'Resultado obtenido desde caché.',
           })
-          send('result', {
-            ...responsePayload,
-            url: rawUrl || null,
-            videoId: videoId!,
-            videoTitle: videoPreview.videoTitle,
-            thumbnailUrl: videoPreview.thumbnailUrl,
-            outputLanguageRequested: outputLanguage,
-            outputLanguageResolved: outputLanguage === 'auto' ? null : outputLanguage,
-            id: saved.id,
-            orderNumber: orderNumber ?? undefined,
-            shareVisibility: saved.share_visibility,
-            createdAt: saved.created_at,
-            cached: true,
-            sourceType,
-            sourceLabel: saved.source_label,
-          })
+
+          if (user) {
+            const saved = await createExtraction({
+              userId: user.id,
+              url: rawUrl || null,
+              videoId: videoId!,
+              videoTitle: videoPreview.videoTitle,
+              thumbnailUrl: videoPreview.thumbnailUrl,
+              extractionMode: mode,
+              objective: responsePayload.objective,
+              phasesJson: JSON.stringify(responsePayload.phases),
+              proTip: responsePayload.proTip,
+              metadataJson: JSON.stringify(responsePayload.metadata),
+              sourceType,
+              sourceLabel: videoPreview.videoTitle ?? bodySourceLabel,
+            })
+            const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
+
+            send('result', {
+              ...responsePayload,
+              url: rawUrl || null,
+              videoId: videoId!,
+              videoTitle: videoPreview.videoTitle,
+              thumbnailUrl: videoPreview.thumbnailUrl,
+              outputLanguageRequested: outputLanguage,
+              outputLanguageResolved: outputLanguage === 'auto' ? null : outputLanguage,
+              id: saved.id,
+              orderNumber: orderNumber ?? undefined,
+              shareVisibility: saved.share_visibility,
+              createdAt: saved.created_at,
+              cached: true,
+              sourceType,
+              sourceLabel: saved.source_label,
+            })
+          } else {
+            send('result', {
+              ...responsePayload,
+              url: rawUrl || null,
+              videoId: videoId!,
+              videoTitle: videoPreview.videoTitle,
+              thumbnailUrl: videoPreview.thumbnailUrl,
+              outputLanguageRequested: outputLanguage,
+              outputLanguageResolved: outputLanguage === 'auto' ? null : outputLanguage,
+              cached: true,
+              sourceType,
+              sourceLabel: videoPreview.videoTitle ?? bodySourceLabel,
+            })
+          }
           send('done', { ok: true })
           close()
           return
@@ -643,7 +676,7 @@ export async function POST(req: NextRequest) {
             provider: EXTRACTION_PROVIDER,
             model: EXTRACTION_MODEL,
             useType: 'extraction',
-            userId: user.id,
+            userId: user?.id,
             inputTokens: aiResult.inputTokens,
             outputTokens: aiResult.outputTokens,
             costUsd: estimateCostUsd(EXTRACTION_MODEL, aiResult.inputTokens, aiResult.outputTokens),
@@ -701,38 +734,53 @@ export async function POST(req: NextRequest) {
           ? (videoPreview.videoTitle ?? bodySourceLabel)
           : (contentTitle ?? bodySourceLabel)
 
-        const saved = await createExtraction({
-          userId: user.id,
-          url: rawUrl || null,
-          videoId: videoId ?? null,
-          videoTitle: videoPreview.videoTitle,
-          thumbnailUrl: videoPreview.thumbnailUrl,
-          extractionMode: mode,
-          objective: responsePayload.objective,
-          phasesJson: JSON.stringify(responsePayload.phases),
-          proTip: responsePayload.proTip,
-          metadataJson: JSON.stringify(responsePayload.metadata),
-          sourceType,
-          sourceLabel: resolvedSourceLabel,
-        })
-        const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
+        if (user) {
+          const saved = await createExtraction({
+            userId: user.id,
+            url: rawUrl || null,
+            videoId: videoId ?? null,
+            videoTitle: videoPreview.videoTitle,
+            thumbnailUrl: videoPreview.thumbnailUrl,
+            extractionMode: mode,
+            objective: responsePayload.objective,
+            phasesJson: JSON.stringify(responsePayload.phases),
+            proTip: responsePayload.proTip,
+            metadataJson: JSON.stringify(responsePayload.metadata),
+            sourceType,
+            sourceLabel: resolvedSourceLabel,
+          })
+          const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
 
-        send('result', {
-          ...responsePayload,
-          url: rawUrl || null,
-          videoId: videoId ?? null,
-          videoTitle: videoPreview.videoTitle,
-          thumbnailUrl: videoPreview.thumbnailUrl,
-          outputLanguageRequested: outputLanguage,
-          outputLanguageResolved: resolvedOutputLanguage,
-          id: saved.id,
-          orderNumber: orderNumber ?? undefined,
-          shareVisibility: saved.share_visibility,
-          createdAt: saved.created_at,
-          cached: false,
-          sourceType,
-          sourceLabel: saved.source_label,
-        })
+          send('result', {
+            ...responsePayload,
+            url: rawUrl || null,
+            videoId: videoId ?? null,
+            videoTitle: videoPreview.videoTitle,
+            thumbnailUrl: videoPreview.thumbnailUrl,
+            outputLanguageRequested: outputLanguage,
+            outputLanguageResolved: resolvedOutputLanguage,
+            id: saved.id,
+            orderNumber: orderNumber ?? undefined,
+            shareVisibility: saved.share_visibility,
+            createdAt: saved.created_at,
+            cached: false,
+            sourceType,
+            sourceLabel: saved.source_label,
+          })
+        } else {
+          send('result', {
+            ...responsePayload,
+            url: rawUrl || null,
+            videoId: videoId ?? null,
+            videoTitle: videoPreview.videoTitle,
+            thumbnailUrl: videoPreview.thumbnailUrl,
+            outputLanguageRequested: outputLanguage,
+            outputLanguageResolved: resolvedOutputLanguage,
+            cached: false,
+            sourceType,
+            sourceLabel: resolvedSourceLabel,
+          })
+        }
         send('done', { ok: true })
       } catch (error: unknown) {
         console.error('[ActionExtractor] extract stream error:', error)

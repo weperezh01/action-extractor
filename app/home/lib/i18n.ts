@@ -102,6 +102,20 @@ const dict = {
     'landing.finalcta.title': 'Start extracting value today',
     'landing.finalcta.sub': 'Free account. No credit card required.',
     'landing.finalcta.button': 'Create free account',
+
+    // ── landing · guest extractor ──
+    'landing.hero.tryGuest': 'Try it free — no account needed',
+    'landing.guest.title': 'Try it right now',
+    'landing.guest.sub': '1 free extraction. No sign-up required. Results are not saved.',
+    'guest.warning': '1 free extraction · No account needed · Results are not saved',
+    'guest.placeholder': 'Paste a YouTube URL or any article link…',
+    'guest.extract': 'Extract for free',
+    'guest.extracting': 'Extracting…',
+    'guest.resultTitle': 'Your free extraction',
+    'guest.afterResult': 'Liked the result? Create a free account to save, export, and get more extractions.',
+    'guest.createAccount': 'Create free account',
+    'guest.limitReached': 'You already used your free extraction today. Create an account to continue.',
+    'guest.limitCta': 'Create account',
   },
   es: {
     // ── nav ──
@@ -197,6 +211,20 @@ const dict = {
     'landing.finalcta.title': 'Empieza a extraer valor hoy',
     'landing.finalcta.sub': 'Cuenta gratuita. No requiere tarjeta de crédito.',
     'landing.finalcta.button': 'Crear cuenta gratis',
+
+    // ── landing · guest extractor ──
+    'landing.hero.tryGuest': 'Pruébalo gratis — sin cuenta',
+    'landing.guest.title': 'Pruébalo ahora mismo',
+    'landing.guest.sub': '1 extracción gratuita. Sin registro. El resultado no se guarda.',
+    'guest.warning': '1 extracción gratuita · Sin registro · No se guarda el resultado',
+    'guest.placeholder': 'Pega una URL de YouTube o cualquier artículo…',
+    'guest.extract': 'Extraer gratis',
+    'guest.extracting': 'Extrayendo…',
+    'guest.resultTitle': 'Tu extracción gratuita',
+    'guest.afterResult': '¿Te gustó el resultado? Crea una cuenta gratis para guardar, exportar y hacer más extracciones.',
+    'guest.createAccount': 'Crear cuenta gratis',
+    'guest.limitReached': 'Ya usaste tu extracción gratuita de hoy. Crea una cuenta para continuar.',
+    'guest.limitCta': 'Crear cuenta',
   },
 } as const
 

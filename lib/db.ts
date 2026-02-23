@@ -863,9 +863,17 @@ const INIT_SQL = `
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'youtube';
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_label TEXT;
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS folder_id TEXT;
+
+  CREATE TABLE IF NOT EXISTS guest_extraction_limits (
+    guest_id    TEXT    NOT NULL,
+    window_date DATE    NOT NULL DEFAULT CURRENT_DATE,
+    request_count INTEGER NOT NULL DEFAULT 0,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (guest_id, window_date)
+  );
 `
 
-const DB_INIT_SIGNATURE = '2026-02-23-folders-v1'
+const DB_INIT_SIGNATURE = '2026-02-23-guest-mode-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -4180,4 +4188,23 @@ export async function getAdminAiCostStats(periodDays = 30): Promise<AdminAiCostS
       calls: parseDbInteger(row.calls),
     })),
   }
+}
+
+export async function consumeGuestExtractionRateLimit(guestId: string): Promise<{
+  allowed: boolean
+  used: number
+}> {
+  await ensureDbReady()
+  const { rows } = await pool.query(
+    `INSERT INTO guest_extraction_limits (guest_id, window_date, request_count)
+     VALUES ($1, CURRENT_DATE, 1)
+     ON CONFLICT (guest_id, window_date)
+     DO UPDATE SET
+       request_count = guest_extraction_limits.request_count + 1,
+       updated_at = NOW()
+     RETURNING request_count`,
+    [guestId]
+  )
+  const used = Number(rows[0]?.request_count ?? 2)
+  return { allowed: used <= 1, used }
 }

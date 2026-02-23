@@ -21,6 +21,7 @@ import { useLang } from '@/app/home/hooks/useLang'
 import { applyTheme, getThemeStorageKey, resolveInitialTheme } from '@/app/home/lib/utils'
 import { t } from '@/app/home/lib/i18n'
 import type { Theme } from '@/app/home/lib/types'
+import { GuestExtractorSection } from '@/app/home/components/GuestExtractorSection'
 
 export default function LandingPage() {
   const { lang, toggle: toggleLang } = useLang()
@@ -181,6 +182,17 @@ export default function LandingPage() {
             </p>
           </div>
 
+          <div className="mt-4 flex justify-center">
+            <button
+              onClick={() => {
+                document.getElementById('guest-extractor')?.scrollIntoView({ behavior: 'smooth' })
+              }}
+              className="text-sm text-zinc-400 underline underline-offset-4 transition-colors hover:text-zinc-600 dark:hover:text-zinc-200"
+            >
+              {t(lang, 'landing.hero.tryGuest')}
+            </button>
+          </div>
+
           {/* Stats row */}
           <div className="mx-auto mt-16 grid max-w-lg grid-cols-3 gap-3">
             {[
@@ -294,6 +306,24 @@ export default function LandingPage() {
               {t(lang, 'landing.finalcta.button')}
               <ArrowRight size={18} />
             </Link>
+          </div>
+        </section>
+
+        {/* ── GUEST EXTRACTOR ── */}
+        <section
+          id="guest-extractor"
+          className="flex min-h-[calc(100svh-3.5rem)] flex-col justify-center border-t border-zinc-100 py-12 dark:border-white/10"
+        >
+          <div className="mx-auto w-full max-w-5xl px-4">
+            <div className="mb-10 text-center">
+              <h2 className="text-3xl font-extrabold tracking-tight text-zinc-900 dark:text-white">
+                {t(lang, 'landing.guest.title')}
+              </h2>
+              <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+                {t(lang, 'landing.guest.sub')}
+              </p>
+            </div>
+            <GuestExtractorSection lang={lang} />
           </div>
         </section>
       </main>
