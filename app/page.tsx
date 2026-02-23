@@ -185,7 +185,19 @@ export default function LandingPage() {
           <div className="mt-4 flex justify-center">
             <button
               onClick={() => {
-                document.getElementById('guest-extractor')?.scrollIntoView({ behavior: 'smooth' })
+                const target = document.getElementById('guest-extractor')
+                if (!target) return
+                const start = window.scrollY
+                const end = target.getBoundingClientRect().top + window.scrollY - 32
+                const duration = 1400
+                const startTime = performance.now()
+                const ease = (t: number) => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t
+                const step = (now: number) => {
+                  const elapsed = Math.min((now - startTime) / duration, 1)
+                  window.scrollTo(0, start + (end - start) * ease(elapsed))
+                  if (elapsed < 1) requestAnimationFrame(step)
+                }
+                requestAnimationFrame(step)
               }}
               className="text-sm text-zinc-400 underline underline-offset-4 transition-colors hover:text-zinc-600 dark:hover:text-zinc-200"
             >
