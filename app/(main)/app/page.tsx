@@ -172,6 +172,7 @@ function ActionExtractor() {
   )
   const [isProcessing, setIsProcessing] = useState(false)
   const [result, setResult] = useState<ExtractResult | null>(null)
+  const [isResultBookClosed, setIsResultBookClosed] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activePhase, setActivePhase] = useState<number | null>(null)
   const [uploadedFile, setUploadedFile] = useState<UploadedFileState | null>(null)
@@ -233,6 +234,7 @@ function ActionExtractor() {
 
   const resetExtractionUiState = useCallback(() => {
     setResult(null)
+    setIsResultBookClosed(false)
     setError(null)
     setNotice(null)
     setActivePhase(null)
@@ -713,6 +715,7 @@ function ActionExtractor() {
     setError(null)
     setNotice(null)
     setResult(null)
+    setIsResultBookClosed(false)
     setShareCopied(false)
     setStreamStatus(`Iniciando extracción (${getExtractionModeLabel(extractionModeToUse)})...`)
     setStreamPreview('')
@@ -775,6 +778,7 @@ function ActionExtractor() {
             mode: resolvedMode,
             shareVisibility: resolvedShareVisibility,
           })
+          setIsResultBookClosed(false)
           setExtractionMode(resolvedMode)
           setShareCopied(false)
           setActivePhase(null)
@@ -1379,6 +1383,7 @@ function ActionExtractor() {
       sourceType: item.sourceType,
       sourceLabel: item.sourceLabel ?? null,
     })
+    setIsResultBookClosed(false)
     setActivePhase(null)
     setError(null)
     setShareCopied(false)
@@ -1478,6 +1483,12 @@ function ActionExtractor() {
         : ''
     setNotice(`Historial limpiado correctamente${deletedCount}.`)
   }, [clearAllHistory, handleUnauthorized, history.length])
+
+  const activeFolderIdForCover =
+    activeFolderIds.length > 0 ? activeFolderIds[activeFolderIds.length - 1] : null
+  const currentResultFolderLabel = activeFolderIdForCover
+    ? folders.find((folder) => folder.id === activeFolderIdForCover)?.name ?? 'Playbooks sueltos'
+    : 'Playbooks sueltos'
 
   return (
     <div className="min-h-screen bg-white text-zinc-900 dark:bg-black dark:text-zinc-100">
@@ -1658,11 +1669,12 @@ function ActionExtractor() {
                     uploadError={uploadError}
                     onFileSelect={handleFileSelect}
                     onClearFile={handleClearFile}
-                    onManualResult={(manualResult) => {
-                      setResult(manualResult)
-                      setUrl('')
-                      setUploadedFile(null)
-                      setError(null)
+                  onManualResult={(manualResult) => {
+                    setResult(manualResult)
+                    setIsResultBookClosed(false)
+                    setUrl('')
+                    setUploadedFile(null)
+                    setError(null)
                       setNotice('Extracción vacía creada. Usa "Editar estructura" para agregar contenido.')
                       setShouldScrollToResult(true)
                       void loadHistory()
@@ -1824,7 +1836,7 @@ function ActionExtractor() {
               }}
             />
 
-            {result && (
+            {result ? (
               <div ref={resultAnchorRef} className="scroll-mt-24">
                 <ResultPanel
                   result={result}
@@ -1864,7 +1876,9 @@ function ActionExtractor() {
                   onShareVisibilityChange={handleUpdateShareVisibility}
                   onSavePhases={handleSaveResultPhases}
                   onSaveMeta={handleSaveResultMeta}
-                  onClose={() => setResult(null)}
+                  isBookClosed={isResultBookClosed}
+                  bookFolderLabel={currentResultFolderLabel}
+                  onClose={() => setIsResultBookClosed(true)}
                   onExportToNotion={() => handleExportToNotion(result.id)}
                   onConnectNotion={handleConnectNotion}
                   onExportToTrello={() => handleExportToTrello(result.id)}
@@ -1882,7 +1896,21 @@ function ActionExtractor() {
                   }}
                 />
               </div>
-            )}
+            ) : !isProcessing ? (
+              <div ref={resultAnchorRef} className="scroll-mt-24">
+                <div className="animate-fade-slide">
+                  <div
+                    className="paper-playbook paper-playbook-closed min-h-screen min-h-[100dvh] bg-white rounded-sm shadow-xl shadow-slate-200/50 border border-slate-200 overflow-hidden dark:bg-slate-900 dark:border-slate-800 dark:shadow-none"
+                  >
+                    <span aria-hidden="true" className="paper-playbook-fold" />
+                    <div aria-hidden="true" className="paper-playbook-cover translate-y-0 opacity-100">
+                      <p className="paper-playbook-cover-kicker">Carpeta activa</p>
+                      <p className="paper-playbook-cover-title">Playbooks sueltos</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <div ref={historyAnchorRef} className="scroll-mt-24 pt-6 md:pt-10">
               {/* View mode toggle */}

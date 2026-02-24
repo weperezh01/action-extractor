@@ -82,6 +82,13 @@ function resolveAttachmentTypeByMime(mimeType: string): ExtractionTaskAttachment
   return null
 }
 
+/** Genera la URL de miniatura de la primera página de un PDF en Cloudinary. */
+function buildCloudinaryPdfThumbnail(pdfUrl: string): string {
+  return pdfUrl
+    .replace('/upload/', '/upload/pg_1,f_jpg,q_70,w_600,ar_16:9,c_fill/')
+    .replace(/\.pdf$/i, '.jpg')
+}
+
 function getMaxUploadBytes() {
   const parsed = Number.parseInt(process.env.CLOUDINARY_MAX_UPLOAD_MB ?? '25', 10)
   const mb = Number.isFinite(parsed) && parsed > 0 ? parsed : 25
@@ -298,7 +305,11 @@ export async function POST(
         storageProvider: 'cloudinary',
         url: upload.secureUrl,
         thumbnailUrl:
-          attachmentType === 'image' ? upload.secureUrl : attachmentType === 'pdf' ? upload.secureUrl : null,
+          attachmentType === 'image'
+            ? upload.secureUrl
+            : attachmentType === 'pdf'
+            ? buildCloudinaryPdfThumbnail(upload.secureUrl)
+            : null,
         title: rawFile.name?.trim() || null,
         mimeType: mimeType || null,
         sizeBytes: rawFile.size,

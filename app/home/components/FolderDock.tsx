@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Check, Folder, FolderOpen, Plus, X } from 'lucide-react'
+import { Check, Plus, X } from 'lucide-react'
 
 export interface FolderItem {
   id: string
@@ -64,7 +64,7 @@ function CreateForm({
   placeholder = 'Nombre de la carpeta',
 }: CreateFormProps) {
   return (
-    <div className="flex-shrink-0 min-w-[168px] rounded-2xl border border-indigo-200 bg-indigo-50/70 p-3 shadow-sm dark:border-indigo-800/60 dark:bg-indigo-950/30">
+    <div className="relative -mb-px flex-shrink-0 min-w-[220px] rounded-t-xl border border-b-0 border-indigo-300 bg-white px-2.5 py-2 shadow-sm dark:border-indigo-800 dark:bg-zinc-950">
       <input
         ref={inputRef}
         type="text"
@@ -76,7 +76,7 @@ function CreateForm({
         }}
         placeholder={placeholder}
         maxLength={30}
-        className="mb-2 w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-800 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/30 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+        className="mb-2 h-8 w-full rounded-md border border-zinc-200 bg-white px-2.5 text-xs text-zinc-800 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/30 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500"
       />
       <div className="mb-2.5 flex items-center gap-1.5">
         {FOLDER_COLORS.map((c) => (
@@ -98,7 +98,7 @@ function CreateForm({
           type="button"
           onClick={onCreate}
           disabled={!newName.trim()}
-          className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-indigo-600 py-1.5 text-[10px] font-bold text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
+          className="flex flex-1 items-center justify-center gap-1 rounded-md bg-indigo-600 py-1.5 text-[10px] font-bold text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
         >
           <Check size={10} />
           Crear
@@ -106,7 +106,7 @@ function CreateForm({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-lg border border-zinc-200 px-2.5 py-1.5 text-[10px] text-zinc-500 transition-colors hover:bg-zinc-100 dark:border-white/10 dark:hover:bg-white/5"
+          className="rounded-md border border-zinc-200 px-2.5 py-1.5 text-[10px] text-zinc-500 transition-colors hover:bg-zinc-100 dark:border-white/10 dark:hover:bg-white/5"
         >
           <X size={10} />
         </button>
@@ -174,202 +174,163 @@ export function FolderDock({
     .join(' y ')
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-1 py-6">
-      <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
-        Mis carpetas
-      </p>
+    <div className="-mb-px mx-auto w-full max-w-5xl px-1 pb-0 pt-2">
+      <div className="relative">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 border-b border-zinc-300/80 dark:border-white/15" />
+        <div className="flex items-end gap-1.5 overflow-x-auto pb-0 pr-1" style={{ scrollbarWidth: 'none' }}>
+          {rootFolders.map((folder) => {
+            const isSelected = activeFolderIds.includes(folder.id)
+            const meta = getColorMeta(folder.color)
+            const count = folderCounts[folder.id] ?? 0
 
-      {/* ── Row 1: Root folders ── */}
-      <div className="flex items-end gap-3 overflow-x-auto pb-2" style={{ scrollbarWidth: 'none' }}>
-        {rootFolders.map((folder) => {
-          const isSelected = activeFolderIds.includes(folder.id)
-          const isHighlighted = isSelected
-          const meta = getColorMeta(folder.color)
-          const count = folderCounts[folder.id] ?? 0
-
-          return (
-            <div
-              key={folder.id}
-              className="group relative flex-shrink-0"
-              style={{
-                transform: isSelected ? 'scale(1.1)' : 'scale(1)',
-                transition: 'transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)',
-                zIndex: isSelected ? 1 : 0,
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => onFolderToggle(folder.id)}
-                className={`relative flex w-[92px] flex-col items-center gap-1.5 rounded-2xl border px-3 pb-2.5 pt-3.5 transition-all duration-200 ${
-                  isHighlighted
-                    ? `${meta.active} shadow-md`
-                    : 'border-zinc-200 bg-white hover:border-zinc-300 hover:bg-zinc-50 hover:shadow-sm dark:border-white/10 dark:bg-zinc-950 dark:hover:border-white/20 dark:hover:bg-white/5'
-                }`}
-              >
-                {isHighlighted ? (
-                  <FolderOpen size={40} strokeWidth={1.5} className={meta.icon} />
-                ) : (
-                  <Folder size={40} strokeWidth={1.5} className={meta.icon} />
-                )}
-                <span className={`w-full truncate text-center text-[11px] font-semibold leading-tight ${
-                  isHighlighted ? 'text-zinc-800 dark:text-zinc-100' : 'text-zinc-500 dark:text-zinc-400'
-                }`}>
-                  {folder.name}
-                </span>
-                {count > 0 && (
-                  <span className={`absolute -right-1.5 -top-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full px-1 text-[10px] font-bold ${
-                    isHighlighted
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300'
-                  }`}>
-                    {count}
-                  </span>
-                )}
-              </button>
-
-              {folder.id !== 'general' && (
+            return (
+              <div key={folder.id} className="group relative flex-shrink-0">
                 <button
                   type="button"
-                  onClick={() => onDeleteFolder(folder.id)}
-                  aria-label={`Eliminar carpeta ${folder.name}`}
-                  className="absolute -left-1.5 -top-1.5 hidden h-5 w-5 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-400 shadow-sm transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 group-hover:flex dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-500 dark:hover:border-rose-800 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
+                  onClick={() => onFolderToggle(folder.id)}
+                  className={`relative -mb-px inline-flex h-11 min-w-[118px] max-w-[220px] items-center gap-2 rounded-t-xl border border-b-0 px-3 text-xs font-semibold transition-all duration-200 ${
+                    isSelected
+                      ? `${meta.active} z-10 text-zinc-800 shadow-sm dark:text-zinc-100`
+                      : 'translate-y-1 border-zinc-300/80 bg-white/70 text-zinc-500 hover:translate-y-0.5 hover:border-zinc-400 hover:bg-white hover:text-zinc-700 dark:border-white/15 dark:bg-zinc-950/70 dark:text-zinc-400 dark:hover:border-white/25 dark:hover:bg-zinc-900 dark:hover:text-zinc-200'
+                  }`}
                 >
-                  <X size={10} />
+                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${meta.dot}`} />
+                  <span className="truncate">{folder.name}</span>
+                  {count > 0 && (
+                    <span className={`ml-auto inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1 text-[10px] font-bold ${
+                      isSelected
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300'
+                    }`}>
+                      {count}
+                    </span>
+                  )}
                 </button>
-              )}
-            </div>
-          )
-        })}
 
-        {/* New root folder button / form */}
-        {!isCreating ? (
-          <button
-            type="button"
-            onClick={() => openCreate(null)}
-            className="flex w-[92px] flex-shrink-0 flex-col items-center gap-1.5 rounded-2xl border border-dashed border-zinc-300 px-3 pb-2.5 pt-3.5 text-zinc-400 transition-colors hover:border-zinc-400 hover:bg-zinc-50 hover:text-zinc-500 dark:border-white/10 dark:hover:border-white/20 dark:hover:bg-white/5 dark:hover:text-zinc-300"
-          >
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-dashed border-zinc-300 dark:border-white/15">
-              <Plus size={20} />
-            </div>
-            <span className="text-[11px] font-semibold">Nueva</span>
-          </button>
-        ) : creatingParentId === null ? (
-          <CreateForm
-            inputRef={inputRef}
-            newName={newName}
-            newColor={newColor}
-            onNameChange={setNewName}
-            onColorChange={setNewColor}
-            onCreate={handleCreate}
-            onCancel={cancelCreate}
-          />
-        ) : null}
+                {folder.id !== 'general' && (
+                  <button
+                    type="button"
+                    onClick={() => onDeleteFolder(folder.id)}
+                    aria-label={`Eliminar carpeta ${folder.name}`}
+                    className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-400 shadow-sm transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 group-hover:flex dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-500 dark:hover:border-rose-800 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
+                  >
+                    <X size={9} />
+                  </button>
+                )}
+              </div>
+            )
+          })}
+
+          {!isCreating ? (
+            <button
+              type="button"
+              onClick={() => openCreate(null)}
+              className="-mb-px inline-flex h-11 min-w-[90px] flex-shrink-0 translate-y-1 items-center justify-center gap-1.5 rounded-t-xl border border-dashed border-b-0 border-zinc-300 text-xs font-semibold text-zinc-500 transition-all duration-200 hover:translate-y-0.5 hover:border-zinc-400 hover:bg-white hover:text-zinc-700 dark:border-white/15 dark:text-zinc-400 dark:hover:border-white/25 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+            >
+              <Plus size={14} />
+              Nueva
+            </button>
+          ) : creatingParentId === null ? (
+            <CreateForm
+              inputRef={inputRef}
+              newName={newName}
+              newColor={newColor}
+              onNameChange={setNewName}
+              onColorChange={setNewColor}
+              onCreate={handleCreate}
+              onCancel={cancelCreate}
+            />
+          ) : null}
+        </div>
       </div>
 
-      {/* ── Row 2: Sub-folders (animated slide-in) ── */}
       <div
         style={{
           display: 'grid',
           gridTemplateRows: showSubRow ? '1fr' : '0fr',
           opacity: showSubRow ? 1 : 0,
           transition: 'grid-template-rows 0.35s ease, opacity 0.3s ease',
-          marginTop: showSubRow ? '10px' : '0',
+          marginTop: showSubRow ? '8px' : '0',
         }}
       >
         <div style={{ overflow: 'hidden' }}>
-          <div className="pt-1 pb-2">
-            <div className="mb-2 flex items-center gap-2">
-              <div className="h-px flex-1 bg-zinc-100 dark:bg-zinc-800" />
+          <div className="pb-0 pt-1">
+            <div className="mb-1 flex items-center gap-2 px-1">
+              <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
                 {singleSelectedRoot ? `Dentro de ${singleSelectedRootName}` : `Subcarpetas · ${multiRootLabel}`}
               </p>
-              <div className="h-px flex-1 bg-zinc-100 dark:bg-zinc-800" />
+              <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
             </div>
 
-            <div className="flex items-end gap-2.5 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none' }}>
-              {subFolders.map((folder) => {
-                const isSelected = activeFolderIds.includes(folder.id)
-                const meta = getColorMeta(folder.color)
-                const count = folderCounts[folder.id] ?? 0
+            <div className="relative">
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 border-b border-zinc-200/80 dark:border-white/10" />
+              <div className="flex items-end gap-1 overflow-x-auto pb-0 pr-1" style={{ scrollbarWidth: 'none' }}>
+                {subFolders.map((folder) => {
+                  const isSelected = activeFolderIds.includes(folder.id)
+                  const meta = getColorMeta(folder.color)
+                  const count = folderCounts[folder.id] ?? 0
 
-                return (
-                  <div
-                    key={folder.id}
-                    className="group relative flex-shrink-0"
-                    style={{
-                      transform: isSelected ? 'scale(1.1)' : 'scale(1)',
-                      transition: 'transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)',
-                      zIndex: isSelected ? 1 : 0,
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onFolderToggle(folder.id)}
-                      className={`relative flex w-[80px] flex-col items-center gap-1 rounded-xl border px-2 pb-2 pt-3 transition-all duration-200 ${
-                        isSelected
-                          ? `${meta.active} shadow-sm`
-                          : 'border-zinc-200 bg-white hover:border-zinc-300 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-950 dark:hover:border-white/20 dark:hover:bg-white/5'
-                      }`}
-                    >
-                      {isSelected ? (
-                        <FolderOpen size={30} strokeWidth={1.5} className={meta.icon} />
-                      ) : (
-                        <Folder size={30} strokeWidth={1.5} className={meta.icon} />
-                      )}
-                      <span className={`w-full truncate text-center text-[10px] font-semibold leading-tight ${
-                        isSelected ? 'text-zinc-800 dark:text-zinc-100' : 'text-zinc-500 dark:text-zinc-400'
-                      }`}>
-                        {folder.name}
-                      </span>
-                      {count > 0 && (
-                        <span className={`absolute -right-1.5 -top-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[9px] font-bold ${
+                  return (
+                    <div key={folder.id} className="group relative flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => onFolderToggle(folder.id)}
+                        className={`relative -mb-px inline-flex h-9 min-w-[104px] max-w-[196px] items-center gap-1.5 rounded-t-lg border border-b-0 px-2.5 text-[11px] font-semibold transition-all duration-200 ${
                           isSelected
-                            ? 'bg-indigo-600 text-white'
-                            : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300'
-                        }`}>
-                          {count}
-                        </span>
-                      )}
-                    </button>
+                            ? `${meta.active} z-10 text-zinc-800 shadow-sm dark:text-zinc-100`
+                            : 'translate-y-1 border-zinc-300/70 bg-white/65 text-zinc-500 hover:translate-y-0.5 hover:border-zinc-400 hover:bg-white hover:text-zinc-700 dark:border-white/15 dark:bg-zinc-950/70 dark:text-zinc-400 dark:hover:border-white/25 dark:hover:bg-zinc-900 dark:hover:text-zinc-200'
+                        }`}
+                      >
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`} />
+                        <span className="truncate">{folder.name}</span>
+                        {count > 0 && (
+                          <span className={`ml-auto inline-flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[9px] font-bold ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300'
+                          }`}>
+                            {count}
+                          </span>
+                        )}
+                      </button>
 
+                      <button
+                        type="button"
+                        onClick={() => onDeleteFolder(folder.id)}
+                        aria-label={`Eliminar subcarpeta ${folder.name}`}
+                        className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-400 shadow-sm transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 group-hover:flex dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-500 dark:hover:border-rose-800 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
+                      >
+                        <X size={9} />
+                      </button>
+                    </div>
+                  )
+                })}
+
+                {singleSelectedRoot && (
+                  !isCreating ? (
                     <button
                       type="button"
-                      onClick={() => onDeleteFolder(folder.id)}
-                      aria-label={`Eliminar subcarpeta ${folder.name}`}
-                      className="absolute -left-1.5 -top-1.5 hidden h-5 w-5 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-400 shadow-sm transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 group-hover:flex dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-500 dark:hover:border-rose-800 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
+                      onClick={() => openCreate(singleSelectedRoot)}
+                      className="-mb-px inline-flex h-9 min-w-[86px] flex-shrink-0 translate-y-1 items-center justify-center gap-1 rounded-t-lg border border-dashed border-b-0 border-zinc-300 text-[11px] font-semibold text-zinc-500 transition-all duration-200 hover:translate-y-0.5 hover:border-zinc-400 hover:bg-white hover:text-zinc-700 dark:border-white/15 dark:text-zinc-400 dark:hover:border-white/25 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
                     >
-                      <X size={10} />
+                      <Plus size={12} />
+                      Nueva
                     </button>
-                  </div>
-                )
-              })}
-
-              {/* New sub-folder button only when 1 root is selected */}
-              {singleSelectedRoot && (
-                !isCreating ? (
-                  <button
-                    type="button"
-                    onClick={() => openCreate(singleSelectedRoot)}
-                    className="flex w-[80px] flex-shrink-0 flex-col items-center gap-1 rounded-xl border border-dashed border-zinc-300 px-2 pb-2 pt-3 text-zinc-400 transition-colors hover:border-zinc-400 hover:bg-zinc-50 hover:text-zinc-500 dark:border-white/10 dark:hover:border-white/20 dark:hover:bg-white/5 dark:hover:text-zinc-300"
-                  >
-                    <div className="flex h-[30px] w-[30px] items-center justify-center rounded-lg border border-dashed border-zinc-300 dark:border-white/15">
-                      <Plus size={14} />
-                    </div>
-                    <span className="text-[10px] font-semibold">Nueva</span>
-                  </button>
-                ) : creatingParentId === singleSelectedRoot ? (
-                  <CreateForm
-                    inputRef={inputRef}
-                    newName={newName}
-                    newColor={newColor}
-                    onNameChange={setNewName}
-                    onColorChange={setNewColor}
-                    onCreate={handleCreate}
-                    onCancel={cancelCreate}
-                    placeholder="Nombre de la subcarpeta"
-                  />
-                ) : null
-              )}
+                  ) : creatingParentId === singleSelectedRoot ? (
+                    <CreateForm
+                      inputRef={inputRef}
+                      newName={newName}
+                      newColor={newColor}
+                      onNameChange={setNewName}
+                      onColorChange={setNewColor}
+                      onCreate={handleCreate}
+                      onCancel={cancelCreate}
+                      placeholder="Nombre de la subcarpeta"
+                    />
+                  ) : null
+                )}
+              </div>
             </div>
           </div>
         </div>

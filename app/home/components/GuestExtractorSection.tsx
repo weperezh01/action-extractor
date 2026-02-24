@@ -150,6 +150,7 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
   // ── Multi-result state ─────────────────────────────────────────────────
   const [extractions, setExtractions] = useState<StoredExtraction[]>([])
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
+  const [isPlaybookClosed, setIsPlaybookClosed] = useState(false)
 
   // Ref to capture the new index synchronously inside setExtractions updater
   const pendingIndexRef = useRef<number>(-1)
@@ -162,6 +163,7 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
   const activeExtraction = activeIndex !== null ? (extractions[activeIndex] ?? null) : null
   if (activeExtraction) lastActiveRef.current = activeExtraction
   const displayExtraction = activeExtraction ?? lastActiveRef.current
+  const guestPlaybookFolderLabel = 'Playbooks sueltos'
 
   // extractor (form) visible ↔ result visible are mutually exclusive
   const showExtractor = activeIndex === null
@@ -216,6 +218,7 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
 
   const handleSwitchActive = useCallback((index: number | null) => {
     setActiveIndex(index)
+    setIsPlaybookClosed(false)
     setActivePhase(null)
   }, [])
 
@@ -328,6 +331,7 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
               return [...prev, newExtraction]
             })
             setActiveIndex(pendingIndexRef.current)
+            setIsPlaybookClosed(false)
             setActivePhase(null)
             setError(null)
             setStreamStatus(fromCache ? 'Resultado recuperado desde caché.' : 'Extracción completada.')
@@ -724,7 +728,9 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
                   onShareVisibilityChange={NOOP}
                   onSavePhases={NOOP_SAVE as (phases: Phase[]) => Promise<boolean>}
                   onSaveMeta={NOOP_SAVE as (meta: { title: string; thumbnailUrl: string | null; objective: string }) => Promise<boolean>}
-                  onClose={() => handleSwitchActive(null)}
+                  isBookClosed={isPlaybookClosed}
+                  bookFolderLabel={guestPlaybookFolderLabel}
+                  onClose={() => setIsPlaybookClosed(true)}
                   onExportToNotion={NOOP_ASYNC}
                   onConnectNotion={NOOP}
                   onExportToTrello={NOOP_ASYNC}

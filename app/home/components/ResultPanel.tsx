@@ -5,6 +5,7 @@ import {
   Bell,
   Eye,
   Brain,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -34,6 +35,7 @@ import {
   X,
   Zap,
 } from 'lucide-react'
+import { createPortal } from 'react-dom'
 import Image from 'next/image'
 import {
   EXTRACTION_MODE_OPTIONS,
@@ -112,8 +114,12 @@ interface ResultPanelProps {
   onExportToGoogleDocs: () => void | Promise<void>
   onConnectGoogleDocs: () => void | Promise<void>
 
+  isBookClosed?: boolean
+  bookFolderLabel?: string | null
   onClose?: () => void
 }
+
+type PlaybookCloseStage = 'idle' | 'folding' | 'cover'
 
 const TASK_STATUS_OPTIONS: Array<{
   value: InteractiveTaskStatus
@@ -194,6 +200,37 @@ function getAttachmentTypeLabel(type: InteractiveTaskAttachment['attachmentType'
   return 'PDF'
 }
 
+/**
+ * Deriva la URL de miniatura (primera página como JPG) de un PDF de Cloudinary.
+ * Funciona tanto para thumbnailUrl ya generados como para retrocompatibilidad
+ * con PDFs viejos que tenían la URL del PDF como thumbnailUrl.
+ */
+function resolvePdfPreviewUrl(attachment: InteractiveTaskAttachment): string | null {
+  if (attachment.attachmentType !== 'pdf') return null
+  // thumbnailUrl correcto: termina en .jpg/.jpeg/.png (ya es imagen)
+  const thumb = attachment.thumbnailUrl
+  if (thumb && !/\.pdf$/i.test(thumb)) return thumb
+  // Retrocompatibilidad: derivar thumbnail desde la URL del PDF en Cloudinary
+  const url = attachment.url
+  if (url.includes('cloudinary.com') && url.includes('/upload/')) {
+    return url
+      .replace('/upload/', '/upload/pg_1,f_jpg,q_70,w_600,ar_16:9,c_fill/')
+      .replace(/\.pdf$/i, '.jpg')
+  }
+  return null
+}
+
+/**
+ * Devuelve la URL del proxy para abrir un PDF con Content-Type: application/pdf
+ * y Content-Disposition: inline, evitando el error "We can't open this file" en Edge.
+ */
+function pdfOpenUrl(url: string): string {
+  if (url.includes('cloudinary.com')) {
+    return `/api/pdf-proxy?url=${encodeURIComponent(url)}`
+  }
+  return url
+}
+
 export function ResultPanel({
   result,
   url,
@@ -250,6 +287,8 @@ export function ResultPanel({
 
   onExportToGoogleDocs,
   onConnectGoogleDocs,
+  isBookClosed = false,
+  bookFolderLabel,
   onClose,
 }: ResultPanelProps) {
   const resolvedMode = normalizeExtractionMode(result.mode ?? extractionMode)
@@ -276,6 +315,10 @@ export function ResultPanel({
     }
     return 'Análisis de texto'
   })()
+  const coverFolderLabel =
+    typeof bookFolderLabel === 'string' && bookFolderLabel.trim().length > 0
+      ? bookFolderLabel.trim()
+      : 'Playbooks sueltos'
   const [isActionsExpanded, setIsActionsExpanded] = useState(false)
   const [collapseAfterAsyncAction, setCollapseAfterAsyncAction] = useState(false)
   const asyncActionLoadingRef = useRef(false)
@@ -291,7 +334,9 @@ export function ResultPanel({
   const [taskMutationLoadingId, setTaskMutationLoadingId] = useState<string | null>(null)
   const [eventDraftContent, setEventDraftContent] = useState('')
   const [idCopied, setIdCopied] = useState(false)
-  const [isClosing, setIsClosing] = useState(false)
+  const [closeStage, setCloseStage] = useState<PlaybookCloseStage>('idle')
+  const closeTimersRef = useRef<number[]>([])
+  const closeRequestedRef = useRef(false)
   const [isStructureEditing, setIsStructureEditing] = useState(false)
   const [phaseDrafts, setPhaseDrafts] = useState<Phase[]>(result.phases)
   const [structureSaving, setStructureSaving] = useState(false)
@@ -343,6 +388,8 @@ export function ResultPanel({
   >({})
   const [copiedAttachmentId, setCopiedAttachmentId] = useState<string | null>(null)
   const [openAttachmentMenuId, setOpenAttachmentMenuId] = useState<string | null>(null)
+  const [mobileSheetTaskId, setMobileSheetTaskId] = useState<string | null>(null)
+  const [mobileSheetTab, setMobileSheetTab] = useState<'gestion' | 'actividad' | 'evidencias' | 'comunidad'>('gestion')
   const [noteDraftByTaskId, setNoteDraftByTaskId] = useState<Record<string, string>>({})
   const taskFileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const [isMetaEditing, setIsMetaEditing] = useState(false)
@@ -368,6 +415,29 @@ export function ResultPanel({
     todoistExportLoading ||
     googleDocsLoading ||
     googleDocsExportLoading
+  const isClosing = closeStage !== 'idle'
+  const showBookCover = isBookClosed || closeStage !== 'idle'
+
+  useEffect(() => {
+    return () => {
+      closeTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
+      closeTimersRef.current = []
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isBookClosed) {
+      closeTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
+      closeTimersRef.current = []
+      setCloseStage('cover')
+      return
+    }
+
+    if (closeRequestedRef.current) {
+      closeRequestedRef.current = false
+      setCloseStage('idle')
+    }
+  }, [isBookClosed])
 
   useEffect(() => {
     if (!collapseAfterAsyncAction) return
@@ -675,6 +745,39 @@ export function ResultPanel({
     if (!extractionId || !activeTaskId) return
     void fetchTaskAttachments(activeTaskId)
   }, [activeTaskId, result.id])
+
+
+  // Interceptar botón "atrás" del dispositivo para cerrar el modal en lugar de navegar
+  useEffect(() => {
+    if (!mobileSheetTaskId) return
+
+    const taskIdSnapshot = mobileSheetTaskId
+    // Empujar una entrada falsa con la misma URL para que el "atrás" llegue aquí primero
+    window.history.pushState({ mobileSheet: taskIdSnapshot }, '')
+
+    const onPopState = () => {
+      // El usuario presionó "atrás" — cerrar modal sin navegar
+      setMobileSheetTaskId(null)
+    }
+
+    window.addEventListener('popstate', onPopState)
+
+    return () => {
+      window.removeEventListener('popstate', onPopState)
+      // Si el modal se cerró por otro medio (botón X), limpiar la entrada falsa del historial
+      if (window.history.state?.mobileSheet === taskIdSnapshot) {
+        window.history.back()
+      }
+    }
+  }, [mobileSheetTaskId])
+
+  // Auto-fetch comunidad cuando el sheet mobile está en esa pestaña
+  useEffect(() => {
+    if (!mobileSheetTaskId || mobileSheetTab !== 'comunidad') return
+    if (autoFetchedCommunityRef.current.has(mobileSheetTaskId)) return
+    autoFetchedCommunityRef.current.add(mobileSheetTaskId)
+    void fetchTaskCommunity(mobileSheetTaskId)
+  }, [mobileSheetTaskId, mobileSheetTab])
 
   const refreshTaskCollection = async (payload: Record<string, unknown>) => {
     const extractionId = result.id?.trim()
@@ -1390,52 +1493,99 @@ export function ResultPanel({
   }
 
   const handleClose = () => {
-    if (!onClose || isClosing) return
-    setIsClosing(true)
-    setTimeout(() => onClose(), 700)
+    if (!onClose || closeStage !== 'idle' || isBookClosed) return
+    closeTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
+    closeTimersRef.current = []
+
+    closeRequestedRef.current = true
+    setCloseStage('folding')
+    const coverTimer = window.setTimeout(() => setCloseStage('cover'), 220)
+    const closeTimer = window.setTimeout(() => onClose(), 1150)
+    closeTimersRef.current = [coverTimer, closeTimer]
   }
 
   return (
     <div
       className="animate-fade-slide"
       style={{
-        transition: 'opacity 0.65s ease, transform 0.65s ease',
-        opacity: isClosing ? 0 : 1,
-        transform: isClosing ? 'translateY(16px) scale(0.98)' : 'translateY(0) scale(1)',
-        pointerEvents: isClosing ? 'none' : undefined,
+        transition: 'transform 0.55s ease',
+        transform:
+          closeStage === 'idle'
+            ? 'translateY(0) scale(1)'
+            : closeStage === 'folding'
+              ? 'translateY(8px) scale(0.99)'
+              : 'translateY(0) scale(0.995)',
+        pointerEvents: isClosing || isBookClosed ? 'none' : undefined,
       }}
     >
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <p className="min-w-0 truncate text-sm font-semibold text-slate-700 dark:text-slate-200">
-          {sourceDisplayTitle}
-        </p>
-        {onClose && (
-          <button
-            type="button"
-            onClick={handleClose}
-            aria-label="Cerrar playbook"
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+      <div
+        className={`paper-playbook bg-white rounded-sm shadow-xl shadow-slate-200/50 border border-slate-200 overflow-hidden dark:bg-slate-900 dark:border-slate-800 dark:shadow-none ${
+          isBookClosed || closeStage === 'cover'
+            ? 'paper-playbook-closed min-h-screen min-h-[100dvh]'
+            : ''
+        }`}
+        style={{
+          transition: 'transform 0.55s ease',
+          transform:
+            closeStage === 'idle'
+              ? 'perspective(1400px) rotateX(0deg)'
+              : closeStage === 'folding'
+                ? 'perspective(1400px) rotateX(6deg)'
+                : 'perspective(1400px) rotateX(0deg)',
+        }}
+      >
+        <span aria-hidden="true" className="paper-playbook-fold" />
+        {showBookCover && (
+          <div
+            aria-hidden="true"
+            className={`paper-playbook-cover ${
+              closeStage === 'folding' ? 'translate-y-1 opacity-75' : 'translate-y-0 opacity-100'
+            }`}
           >
-            <X size={13} />
-            Cerrar
-          </button>
+            <p className="paper-playbook-cover-kicker">Carpeta activa</p>
+            <p className="paper-playbook-cover-title">{coverFolderLabel}</p>
+          </div>
         )}
-      </div>
-
-      <div className="flex flex-wrap gap-4 mb-6">
-        <div className="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 border border-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300 dark:border-emerald-800">
-          <Clock size={16} /> Tiempo Ahorrado: {result.metadata.savedTime}
+        <div
+          className={`border-b border-slate-200/80 bg-transparent px-0 py-5 transition-all duration-300 dark:border-slate-800 ${
+            isClosing || isBookClosed
+              ? 'max-h-0 -translate-y-2 overflow-hidden opacity-0 py-0'
+              : 'max-h-72 translate-y-0 opacity-100'
+          }`}
+          style={{ marginInline: '4.5%' }}
+        >
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-2.5">
+            <div className="flex flex-wrap items-center justify-start gap-2.5">
+              <div className="flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
+                <Clock size={14} /> Tiempo ahorrado: {result.metadata.savedTime}
+              </div>
+              <div className="flex items-center gap-1.5 rounded-lg border border-orange-100 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-700 dark:border-orange-800 dark:bg-orange-900/20 dark:text-orange-300">
+                <Brain size={14} /> Dificultad: {result.metadata.difficulty}
+              </div>
+              <div className="flex items-center gap-1.5 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300">
+                <Zap size={14} /> Modo: {getExtractionModeLabel(resolvedMode)}
+              </div>
+            </div>
+            {onClose && !isBookClosed && (
+              <button
+                type="button"
+                onClick={handleClose}
+                aria-label="Cerrar playbook"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              >
+                <X size={13} />
+                Cerrar
+              </button>
+            )}
+          </div>
+          <p className="mx-auto max-w-3xl text-center text-sm font-semibold text-slate-700 dark:text-slate-200">
+            {sourceDisplayTitle}
+          </p>
         </div>
-        <div className="bg-orange-50 text-orange-700 px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 border border-orange-100 dark:bg-orange-900/20 dark:text-orange-300 dark:border-orange-800">
-          <Brain size={16} /> Dificultad: {result.metadata.difficulty}
-        </div>
-        <div className="bg-indigo-50 text-indigo-700 px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 border border-indigo-100 dark:bg-indigo-900/20 dark:text-indigo-300 dark:border-indigo-800">
-          <Zap size={16} /> Modo: {getExtractionModeLabel(resolvedMode)}
-        </div>
-      </div>
-
-      <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-200 overflow-hidden dark:bg-slate-900 dark:border-slate-800 dark:shadow-none">
-        <div className="p-6 border-b border-slate-100 bg-white dark:bg-slate-900 dark:border-slate-800">
+        <div
+          className="p-6 border-b border-slate-100 bg-white dark:bg-slate-900 dark:border-slate-800"
+          style={{ marginInline: '4.5%' }}
+        >
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
               {sourceSectionLabel}
@@ -1918,7 +2068,10 @@ export function ResultPanel({
           </div>
         </div>
 
-        <div className="bg-slate-50 p-6 border-b border-slate-100 dark:bg-slate-800/40 dark:border-slate-800">
+        <div
+          className="bg-slate-50 p-6 border-b border-slate-100 dark:bg-slate-800/40 dark:border-slate-800"
+          style={{ marginInline: '4.5%' }}
+        >
           <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
             Objetivo del Resultado
           </h2>
@@ -2207,7 +2360,7 @@ export function ResultPanel({
                               Subítems
                             </p>
                           </div>
-                          <ul className="ml-2 space-y-3 border-l-2 border-dashed border-slate-300 pl-4 dark:border-slate-700">
+                          <ul className="space-y-2 md:ml-2 md:space-y-3 md:border-l-2 md:border-dashed md:border-slate-300 md:pl-4 md:dark:border-slate-700">
                             {phase.items.map((item, idx) => {
                               const subItemNumber = `${phase.id}.${idx + 1}`
                               const task = tasksByPhaseItem.get(`${phase.id}:${idx}`) ?? null
@@ -2274,7 +2427,7 @@ export function ResultPanel({
                                 >
                                   <span
                                     aria-hidden="true"
-                                    className="absolute -left-[1.1rem] top-5 h-2.5 w-2.5 rounded-full border-2 border-indigo-400 bg-white dark:border-indigo-500 dark:bg-slate-900"
+                                    className="hidden md:block absolute -left-[1.1rem] top-5 h-2.5 w-2.5 rounded-full border-2 border-indigo-400 bg-white dark:border-indigo-500 dark:bg-slate-900"
                                   />
                                   <div className="p-3">
                                     {/* Content column — full width */}
@@ -2283,23 +2436,28 @@ export function ResultPanel({
                                       <div className="flex items-center justify-between gap-2 mb-1">
                                         {/* ── Left: checkbox · number · community stats ── */}
                                         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                                          <div className="relative flex-shrink-0">
-                                            <input
-                                              type="checkbox"
-                                              checked={task?.checked ?? false}
-                                              disabled={!task || isTaskMutating}
-                                              onChange={(event) => {
-                                                if (!task) return
-                                                void handleTaskToggle(task, event.target.checked)
-                                              }}
-                                              className="peer w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer appearance-none border checked:bg-indigo-600 checked:border-indigo-600 transition-all disabled:cursor-not-allowed disabled:opacity-60"
-                                            />
-                                            <CheckCircle2
-                                              size={12}
-                                              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white opacity-0 peer-checked:opacity-100 pointer-events-none"
+                                          <button
+                                            type="button"
+                                            role="checkbox"
+                                            aria-checked={task?.checked ?? false}
+                                            disabled={!task || isTaskMutating}
+                                            onClick={(event) => {
+                                              event.stopPropagation()
+                                              if (!task) return
+                                              void handleTaskToggle(task, !task.checked)
+                                            }}
+                                            className={`flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-[5px] border-2 shadow-sm transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
+                                              task?.checked
+                                                ? 'border-indigo-600 bg-indigo-600 dark:border-indigo-500 dark:bg-indigo-500'
+                                                : 'border-slate-300 bg-white hover:border-indigo-400 hover:bg-indigo-50/40 dark:border-slate-600 dark:bg-slate-900 dark:hover:border-indigo-500'
+                                            }`}
+                                          >
+                                            <Check
+                                              size={11}
                                               strokeWidth={3}
+                                              className={`text-white transition-all duration-150 ${task?.checked ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`}
                                             />
-                                          </div>
+                                          </button>
                                           <span className="inline-flex h-6 w-fit min-w-[2.3rem] items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 px-1.5 font-mono text-[11px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
                                             {subItemNumber}
                                           </span>
@@ -2344,12 +2502,25 @@ export function ResultPanel({
                                             </span>
                                           )}
                                           {task && (
-                                            <span className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(task.status)}`}>
-                                              {getTaskStatusLabel(task.status)}
-                                            </span>
+                                            <>
+                                              {/* Mobile: icono compacto con color de estado */}
+                                              <span
+                                                className={`md:hidden inline-flex items-center justify-center rounded-full border p-[3px] ${getTaskStatusChipClassName(task.status)}`}
+                                                title={getTaskStatusLabel(task.status)}
+                                              >
+                                                {task.status === 'completed' && <CheckCircle2 size={10} />}
+                                                {task.status === 'in_progress' && <Zap size={10} />}
+                                                {task.status === 'blocked' && <AlertTriangle size={10} />}
+                                                {task.status === 'pending' && <Clock size={10} />}
+                                              </span>
+                                              {/* Desktop: chip con texto */}
+                                              <span className={`hidden md:inline-flex rounded-md border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(task.status)}`}>
+                                                {getTaskStatusLabel(task.status)}
+                                              </span>
+                                            </>
                                           )}
                                           {task && (
-                                            <div className="relative">
+                                            <div className="relative hidden md:block">
                                               <button
                                                 type="button"
                                                 onClick={() => setTaskMenuOpenId((prev) => (prev === task.id ? null : task.id))}
@@ -2414,14 +2585,19 @@ export function ResultPanel({
                                         </div>
                                       </div>
 
-                                      {/* Text — click to select this task (opens community) */}
+                                      {/* Text — click to select this task (opens community on desktop, sheet on mobile) */}
                                       <button
                                         type="button"
                                         onClick={() => {
                                           if (!task) return
-                                          setSelectedTaskId((prev) =>
-                                            prev === task.id ? null : task.id
-                                          )
+                                          if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                                            setMobileSheetTaskId(task.id)
+                                            setMobileSheetTab('comunidad')
+                                          } else {
+                                            setSelectedTaskId((prev) =>
+                                              prev === task.id ? null : task.id
+                                            )
+                                          }
                                         }}
                                         className={`w-full text-left rounded-lg px-1 py-0.5 transition-colors ${
                                           isTaskSelected
@@ -2438,10 +2614,10 @@ export function ResultPanel({
                                     </div>
                                   </div>{/* p-3 wrapper */}
 
-                                  {/* Actividad inline collapsible */}
+                                  {/* Actividad inline collapsible (desktop only) */}
                                   <div
                                     aria-hidden={!isTaskActivityExpanded || !task}
-                                    className={`grid transition-[grid-template-rows,opacity] duration-500 ease-out ${
+                                    className={`hidden md:grid transition-[grid-template-rows,opacity] duration-500 ease-out ${
                                       isTaskActivityExpanded && task
                                         ? 'grid-rows-[1fr] opacity-100'
                                         : 'grid-rows-[0fr] opacity-0'
@@ -2502,10 +2678,10 @@ export function ResultPanel({
                                     </div>
                                   </div>
 
-                                  {/* Gestión inline collapsible */}
+                                  {/* Gestión inline collapsible (desktop only) */}
                                   <div
                                     aria-hidden={!isTaskGestionExpanded || !task}
-                                    className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
+                                    className={`hidden md:grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
                                       isTaskGestionExpanded && task
                                         ? 'grid-rows-[1fr] opacity-100'
                                         : 'grid-rows-[0fr] opacity-0'
@@ -2603,9 +2779,9 @@ export function ResultPanel({
                                     </div>
                                   </div>
 
-                                  {/* Comunidad — solo visible cuando el ítem está seleccionado */}
+                                  {/* Comunidad — solo visible cuando el ítem está seleccionado (desktop only) */}
                                   {isTaskSelected && task && (
-                                    <div className="border-t border-slate-100 dark:border-slate-800">
+                                    <div className="hidden md:block border-t border-slate-100 dark:border-slate-800">
                                       {/* Header siempre visible: toggle comunidad */}
                                       <div className="flex flex-wrap items-center justify-between gap-2 px-3 pt-2 pb-1">
                                         <button
@@ -2778,9 +2954,10 @@ export function ResultPanel({
                                     </div>
                                   )}
 
+                                  {/* Evidencias inline collapsible (desktop only) */}
                                   <div
                                     aria-hidden={!isTaskExpanded || !task}
-                                    className={`grid transition-[grid-template-rows,opacity] duration-700 ease-out ${
+                                    className={`hidden md:grid transition-[grid-template-rows,opacity] duration-700 ease-out ${
                                       isTaskExpanded && task
                                         ? 'grid-rows-[1fr] opacity-100'
                                         : 'grid-rows-[0fr] opacity-0'
@@ -3010,7 +3187,7 @@ export function ResultPanel({
                                                       attachment.attachmentType === 'image' ||
                                                       attachment.attachmentType === 'youtube_link'
                                                         ? attachment.thumbnailUrl || attachment.url
-                                                        : null
+                                                        : resolvePdfPreviewUrl(attachment)
 
                                                     const isNote = attachment.attachmentType === 'note'
                                                     const noteContent =
@@ -3033,7 +3210,7 @@ export function ResultPanel({
                                                           </div>
                                                         ) : previewUrl ? (
                                                           <a
-                                                            href={attachment.url}
+                                                            href={attachment.attachmentType === 'pdf' ? pdfOpenUrl(attachment.url) : attachment.url}
                                                             target="_blank"
                                                             rel="noreferrer"
                                                             className="block aspect-video w-full overflow-hidden bg-slate-100 dark:bg-slate-800"
@@ -3122,7 +3299,7 @@ export function ResultPanel({
                                                                 {!isNote && (
                                                                   <>
                                                                     <a
-                                                                      href={attachment.url}
+                                                                      href={attachment.attachmentType === 'pdf' ? pdfOpenUrl(attachment.url) : attachment.url}
                                                                       target="_blank"
                                                                       rel="noreferrer"
                                                                       onClick={() => setOpenAttachmentMenuId(null)}
@@ -3225,6 +3402,523 @@ export function ResultPanel({
         </div>
 
       </div>
+
+      {/* ══════════════════════════════════════════════════
+          MOBILE BOTTOM SHEET — sub-item detail (md:hidden)
+          ══════════════════════════════════════════════════ */}
+      {(() => {
+        if (!mobileSheetTaskId) return null
+        const sheetTask = interactiveTasks.find((t) => t.id === mobileSheetTaskId) ?? null
+        if (!sheetTask) return null
+
+        const sheetTaskAttachments = taskAttachmentsByTaskId[sheetTask.id] ?? []
+        const sheetTaskAttachmentError = taskAttachmentErrorByTaskId[sheetTask.id] ?? null
+        const sheetTaskYoutubeDraft = youtubeAttachmentDraftByTaskId[sheetTask.id] ?? ''
+        const sheetIsAttachmentLoading = taskAttachmentLoadingId === sheetTask.id
+        const sheetIsAttachmentMutating = taskAttachmentMutationId === sheetTask.id
+        const sheetTaskComments = taskCommentsByTaskId[sheetTask.id] ?? []
+        const sheetTaskLikeSummary = taskLikeSummaryByTaskId[sheetTask.id] ?? {
+          taskId: sheetTask.id,
+          extractionId: sheetTask.extractionId,
+          likesCount: 0,
+          likedByMe: false,
+        }
+        const sheetCommentDraft = taskCommentDraftByTaskId[sheetTask.id] ?? ''
+        const sheetCommunityError = taskCommunityErrorByTaskId[sheetTask.id] ?? null
+        const sheetIsCommunityLoading = taskCommunityLoadingId === sheetTask.id
+        const sheetIsCommunityMutating = taskCommunityMutationId === sheetTask.id
+        const sheetIsTaskMutating = taskMutationLoadingId === sheetTask.id
+        const sheetEstadoExpanded = taskEstadoExpandedByTaskId[sheetTask.id] ?? false
+        const sheetAddEvidenceExpanded = taskAddEvidenceExpandedByTaskId[sheetTask.id] ?? false
+        const sheetNoteContent = noteDraftByTaskId[sheetTask.id] ?? ''
+
+        const TABS = [
+          { key: 'gestion', label: 'Gestión' },
+          { key: 'actividad', label: 'Actividad' },
+          { key: 'evidencias', label: 'Evidencias' },
+          { key: 'comunidad', label: 'Comunidad' },
+        ] as const
+
+        return createPortal(
+            <div
+              className="fixed inset-0 z-[9999] flex flex-col bg-white dark:bg-slate-900 md:hidden"
+            >
+              {/* Header */}
+              <div className="flex flex-shrink-0 items-center gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                    {sheetTask.phaseId}.{sheetTask.itemIndex + 1}
+                    <span className={`ml-2 rounded-md border px-1.5 py-0.5 text-[10px] ${getTaskStatusChipClassName(sheetTask.status)}`}>
+                      {getTaskStatusLabel(sheetTask.status)}
+                    </span>
+                  </p>
+                  <p className="mt-0.5 line-clamp-2 text-sm font-semibold text-slate-800 dark:text-slate-100">
+                    {sheetTask.itemText}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMobileSheetTaskId(null)}
+                  className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              {/* Tabs */}
+              <div className="flex flex-shrink-0 border-b border-slate-200 dark:border-slate-700">
+                {TABS.map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setMobileSheetTab(tab.key)}
+                    className={`flex-1 py-2.5 text-xs font-semibold transition-colors ${
+                      mobileSheetTab === tab.key
+                        ? 'border-b-2 border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
+                        : 'text-slate-500 dark:text-slate-400'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Scrollable content */}
+              <div key={`${mobileSheetTaskId}-${mobileSheetTab}`} className="flex-1 overflow-y-auto overscroll-contain p-4">
+
+                {/* ── TAB: GESTIÓN ── */}
+                {mobileSheetTab === 'gestion' && (
+                  <div className="space-y-4">
+                    {/* Checkbox + Estado */}
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        role="checkbox"
+                        aria-checked={sheetTask.checked}
+                        disabled={sheetIsTaskMutating}
+                        onClick={() => void handleTaskToggle(sheetTask, !sheetTask.checked)}
+                        className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-[6px] border-2 shadow-sm transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
+                          sheetTask.checked
+                            ? 'border-indigo-600 bg-indigo-600 dark:border-indigo-500 dark:bg-indigo-500'
+                            : 'border-slate-300 bg-white hover:border-indigo-400 dark:border-slate-600 dark:bg-slate-900'
+                        }`}
+                      >
+                        <Check
+                          size={13}
+                          strokeWidth={3}
+                          className={`text-white transition-all duration-150 ${sheetTask.checked ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`}
+                        />
+                      </button>
+                      <span className="text-sm text-slate-600 dark:text-slate-300">
+                        {sheetTask.checked ? 'Marcada como completada' : 'Pendiente de completar'}
+                      </span>
+                    </div>
+
+                    {/* Estado selector */}
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setTaskEstadoExpandedByTaskId((prev) => ({
+                            ...prev,
+                            [sheetTask.id]: !sheetEstadoExpanded,
+                          }))
+                        }
+                        className="flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:bg-slate-800"
+                      >
+                        <span className="text-sm font-semibold text-slate-600 dark:text-slate-300">Estado</span>
+                        <span className="flex items-center gap-2">
+                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(sheetTask.status)}`}>
+                            {getTaskStatusLabel(sheetTask.status)}
+                          </span>
+                          {sheetEstadoExpanded ? <ChevronUp size={14} className="text-slate-400" /> : <ChevronDown size={14} className="text-slate-400" />}
+                        </span>
+                      </button>
+                      {sheetEstadoExpanded && (
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          {TASK_STATUS_OPTIONS.map((option) => {
+                            const isActive = sheetTask.status === option.value
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => void handleTaskStatusChange(sheetTask, option.value)}
+                                disabled={sheetIsTaskMutating || isActive}
+                                className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-xs font-semibold transition-all disabled:cursor-not-allowed ${
+                                  isActive
+                                    ? option.chipClassName + ' shadow-sm'
+                                    : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
+                                }`}
+                              >
+                                {option.value === 'completed' && <CheckCircle2 size={13} />}
+                                {option.value === 'in_progress' && <Zap size={13} />}
+                                {option.value === 'blocked' && <AlertTriangle size={13} />}
+                                {option.value === 'pending' && <Clock size={13} />}
+                                {option.label}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Registrar en actividad */}
+                    <div>
+                      <p className="mb-2 text-sm font-semibold text-slate-600 dark:text-slate-300">
+                        Registrar en actividad
+                      </p>
+                      <input
+                        type="text"
+                        value={eventDraftContent}
+                        onChange={(event) => setEventDraftContent(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && !event.shiftKey && eventDraftContent.trim()) {
+                            void handleAddTaskEvent(sheetTask, 'note')
+                          }
+                        }}
+                        placeholder="Escribe una observación, acción o bloqueo..."
+                        disabled={sheetIsTaskMutating}
+                        className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500"
+                      />
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'note')} disabled={sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"><Pencil size={12} />Observación</button>
+                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'pending_action')} disabled={sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"><Clock size={12} />Pendiente</button>
+                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'blocker')} disabled={sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300"><AlertTriangle size={12} />Impedimento</button>
+                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'resolved')} disabled={sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300"><CheckCircle2 size={12} />Resuelto</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── TAB: ACTIVIDAD ── */}
+                {mobileSheetTab === 'actividad' && (
+                  <div>
+                    {sheetTask.events.length === 0 ? (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        No hay eventos registrados todavía.
+                      </p>
+                    ) : (
+                      <ul className="space-y-3">
+                        {sheetTask.events.map((event) => (
+                          <li
+                            key={event.id}
+                            className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800"
+                          >
+                            <div className="flex items-start gap-3">
+                              {event.eventType === 'blocker' ? (
+                                <AlertTriangle size={14} className="mt-0.5 flex-shrink-0 text-rose-500 dark:text-rose-300" />
+                              ) : event.eventType === 'pending_action' ? (
+                                <Clock size={14} className="mt-0.5 flex-shrink-0 text-amber-500 dark:text-amber-400" />
+                              ) : event.eventType === 'resolved' ? (
+                                <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0 text-emerald-500 dark:text-emerald-400" />
+                              ) : (
+                                <Pencil size={14} className="mt-0.5 flex-shrink-0 text-slate-400 dark:text-slate-500" />
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                                  {getTaskEventTypeLabel(event.eventType)}
+                                </p>
+                                <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
+                                  {event.content}
+                                </p>
+                                <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                                  <span className="font-medium text-slate-500 dark:text-slate-400">
+                                    {event.userName?.trim() || event.userEmail?.trim() || 'Usuario'}
+                                  </span>
+                                  {' · '}
+                                  {formatTaskEventDate(event.createdAt)}
+                                </p>
+                              </div>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {/* ── TAB: EVIDENCIAS ── */}
+                {mobileSheetTab === 'evidencias' && (
+                  <div>
+                    {sheetTaskAttachmentError && (
+                      <p className="mb-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
+                        {sheetTaskAttachmentError}
+                      </p>
+                    )}
+
+                    {/* Toggle agregar evidencia */}
+                    <div className="mb-4 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setTaskAddEvidenceExpandedByTaskId((prev) => ({
+                            ...prev,
+                            [sheetTask.id]: !sheetAddEvidenceExpanded,
+                          }))
+                        }
+                        className="flex items-center gap-1.5 rounded-lg border border-dashed border-indigo-200 bg-indigo-50/60 px-3 py-2 transition-colors hover:border-indigo-300 hover:bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-900/10"
+                      >
+                        <Plus size={13} className="text-indigo-600 dark:text-indigo-400" />
+                        <span className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+                          Agregar evidencia
+                        </span>
+                        {sheetAddEvidenceExpanded ? <ChevronUp size={13} className="text-indigo-400" /> : <ChevronDown size={13} className="text-indigo-400" />}
+                      </button>
+                    </div>
+
+                    {sheetAddEvidenceExpanded && (
+                      <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800/60">
+                        {/* Nota de texto */}
+                        <div className="space-y-2">
+                          <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                            <Pencil size={10} />Nota de texto
+                          </p>
+                          <textarea
+                            value={sheetNoteContent}
+                            onChange={(event) =>
+                              setNoteDraftByTaskId((prev) => ({ ...prev, [sheetTask.id]: event.target.value }))
+                            }
+                            placeholder="Escribe tu nota aquí..."
+                            disabled={sheetIsAttachmentMutating}
+                            style={{ minHeight: '5rem' }}
+                            className="w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200"
+                          />
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => void handleAddTaskNote(sheetTask)}
+                              disabled={sheetIsAttachmentMutating || !sheetNoteContent.trim()}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <Save size={12} />Guardar nota
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="my-3 border-t border-dashed border-slate-200 dark:border-slate-700" />
+
+                        {/* Archivo */}
+                        <div className="space-y-2">
+                          <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                            <Upload size={10} />Archivo
+                          </p>
+                          <input
+                            ref={(node) => { taskFileInputRefs.current[sheetTask.id] = node }}
+                            type="file"
+                            accept=".pdf,application/pdf,image/*,audio/*"
+                            className="hidden"
+                            disabled={sheetIsAttachmentMutating}
+                            onChange={(event) => {
+                              const file = event.target.files?.[0] ?? null
+                              void handleTaskFileSelected(sheetTask, file)
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleOpenTaskFilePicker(sheetTask.id)}
+                            disabled={sheetIsAttachmentMutating}
+                            className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-xs font-semibold text-slate-500 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600 disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800/40 dark:text-slate-400"
+                          >
+                            <Upload size={14} />PDF · imagen · audio
+                          </button>
+                        </div>
+
+                        <div className="my-3 border-t border-dashed border-slate-200 dark:border-slate-700" />
+
+                        {/* YouTube */}
+                        <div className="space-y-2">
+                          <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                            <Link2 size={10} />YouTube
+                          </p>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={sheetTaskYoutubeDraft}
+                              onChange={(event) => handleTaskYoutubeDraftChange(sheetTask.id, event.target.value)}
+                              placeholder="Pega la URL del video..."
+                              disabled={sheetIsAttachmentMutating}
+                              className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void handleAddTaskYoutubeLink(sheetTask)}
+                              disabled={sheetIsAttachmentMutating || sheetTaskYoutubeDraft.trim().length === 0}
+                              className="inline-flex h-9 flex-shrink-0 items-center gap-1.5 rounded-lg bg-rose-600 px-3 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-40"
+                            >
+                              <Plus size={12} />Agregar
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {sheetIsAttachmentLoading ? (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">Cargando evidencias...</p>
+                    ) : sheetTaskAttachments.length === 0 ? (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        Este subítem aún no tiene evidencias.
+                      </p>
+                    ) : (
+                      <ul className="grid grid-cols-2 gap-3">
+                        {sheetTaskAttachments.map((attachment) => {
+                          const attachmentLabel = getAttachmentTypeLabel(attachment.attachmentType)
+                          const attachmentSize = formatAttachmentSize(attachment.sizeBytes)
+                          const previewUrl =
+                            attachment.attachmentType === 'image' || attachment.attachmentType === 'youtube_link'
+                              ? attachment.thumbnailUrl || attachment.url
+                              : resolvePdfPreviewUrl(attachment)
+                          const isNote = attachment.attachmentType === 'note'
+                          const noteContent = isNote
+                            ? (attachment.metadata?.content as string | undefined) ?? attachment.title ?? ''
+                            : ''
+
+                          return (
+                            <li
+                              key={attachment.id}
+                              className="relative flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"
+                            >
+                              {isNote ? (
+                                <div className="flex-1 bg-amber-50 px-3 py-2.5 dark:bg-amber-950/20">
+                                  <p className="line-clamp-5 whitespace-pre-wrap break-words text-xs leading-relaxed text-amber-900 dark:text-amber-200">
+                                    {noteContent || '(nota vacía)'}
+                                  </p>
+                                </div>
+                              ) : previewUrl ? (
+                                <a
+                                  href={attachment.attachmentType === 'pdf' ? pdfOpenUrl(attachment.url) : attachment.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="block aspect-video w-full overflow-hidden bg-slate-100 dark:bg-slate-800"
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img src={previewUrl} alt={attachment.title || attachmentLabel} className="h-full w-full object-cover" />
+                                </a>
+                              ) : (
+                                <a
+                                  href={attachment.attachmentType === 'pdf' ? pdfOpenUrl(attachment.url) : attachment.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="flex aspect-video w-full items-center justify-center bg-slate-50 text-slate-400 hover:bg-slate-100 dark:bg-slate-800 dark:text-slate-500 dark:hover:bg-slate-700"
+                                >
+                                  {attachment.attachmentType === 'pdf' ? (
+                                    <FileText size={28} />
+                                  ) : (
+                                    <Music2 size={28} />
+                                  )}
+                                </a>
+                              )}
+                              <div className="px-2 py-1.5">
+                                <p className="truncate text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+                                  {attachment.title || attachmentLabel}
+                                </p>
+                                {attachmentSize && (
+                                  <p className="text-[10px] text-slate-400">{attachmentSize}</p>
+                                )}
+                              </div>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {/* ── TAB: COMUNIDAD ── */}
+                {mobileSheetTab === 'comunidad' && (
+                  <div>
+                    {sheetCommunityError && (
+                      <p className="mb-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
+                        {sheetCommunityError}
+                      </p>
+                    )}
+
+                    {/* Like / Compartir / Seguir */}
+                    <div className="mb-4 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleToggleTaskLike(sheetTask)}
+                        disabled={sheetIsCommunityMutating}
+                        className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                          sheetTaskLikeSummary.likedByMe
+                            ? 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
+                            : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200'
+                        }`}
+                      >
+                        <ThumbsUp size={14} />
+                        {sheetTaskLikeSummary.likedByMe ? 'Te gusta' : 'Me gusta'}
+                        <span className="rounded bg-slate-200/60 px-1.5 py-0.5 text-xs dark:bg-slate-700/80">
+                          {sheetTaskLikeSummary.likesCount}
+                        </span>
+                      </button>
+                      <button type="button" disabled title="Próximamente" className="inline-flex h-9 cursor-not-allowed items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-500 opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400">
+                        <Share2 size={14} />Compartir
+                      </button>
+                      <button type="button" disabled title="Próximamente" className="inline-flex h-9 cursor-not-allowed items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-500 opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400">
+                        <Bell size={14} />Seguir
+                      </button>
+                    </div>
+
+                    {/* Comentar */}
+                    <div className="mb-4 flex gap-2">
+                      <input
+                        type="text"
+                        value={sheetCommentDraft}
+                        onChange={(event) => handleTaskCommentDraftChange(sheetTask.id, event.target.value)}
+                        placeholder="Escribe un comentario..."
+                        disabled={sheetIsCommunityMutating}
+                        className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void handleAddTaskComment(sheetTask)}
+                        disabled={sheetIsCommunityMutating || sheetCommentDraft.trim().length === 0}
+                        className="inline-flex h-10 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-4 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300"
+                      >
+                        Comentar
+                      </button>
+                    </div>
+
+                    {sheetIsCommunityLoading ? (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">Cargando comentarios...</p>
+                    ) : sheetTaskComments.length === 0 ? (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        Aún no hay comentarios en este subítem.
+                      </p>
+                    ) : (
+                      <ul className="space-y-3">
+                        {sheetTaskComments.map((comment) => (
+                          <li key={comment.id} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+                            <div className="flex items-start gap-2">
+                              <MessageSquare size={14} className="mt-0.5 flex-shrink-0 text-slate-400 dark:text-slate-500" />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                                  {comment.userName?.trim() || comment.userEmail?.trim() || 'Usuario'}
+                                </p>
+                                <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">{comment.content}</p>
+                                <p className="mt-1 text-[11px] text-slate-400">{formatTaskEventDate(comment.createdAt)}</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => void handleDeleteTaskComment(sheetTask, comment.id)}
+                                disabled={sheetIsCommunityMutating}
+                                className="inline-flex h-7 items-center rounded-md border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300"
+                              >
+                                Borrar
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+              </div>
+            </div>,
+          typeof document !== 'undefined' ? document.body : null as unknown as Element
+        )
+      })()}
+
     </div>
   )
 }
