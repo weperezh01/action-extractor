@@ -172,9 +172,18 @@ export function FolderDock({
     .map((id) => folders.find((f) => f.id === id)?.name)
     .filter(Boolean)
     .join(' y ')
+  const activeFolderNames = activeFolderIds
+    .map((id) => folders.find((f) => f.id === id)?.name)
+    .filter((name): name is string => Boolean(name))
+  const activeFoldersSummary = activeFolderNames.join(' · ')
 
   return (
     <div className="-mb-px mx-auto w-full max-w-5xl px-1 pb-0 pt-2">
+      {activeFolderNames.length > 0 && (
+        <p className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wide text-indigo-600 dark:text-indigo-300">
+          Abiertas: {activeFoldersSummary}
+        </p>
+      )}
       <div className="relative">
         <div className="pointer-events-none absolute inset-x-0 bottom-0 border-b border-zinc-300/80 dark:border-white/15" />
         <div className="flex items-end gap-1.5 overflow-x-auto pb-0 pr-1" style={{ scrollbarWidth: 'none' }}>
@@ -190,11 +199,21 @@ export function FolderDock({
                   onClick={() => onFolderToggle(folder.id)}
                   className={`relative -mb-px inline-flex h-11 min-w-[118px] max-w-[220px] items-center gap-2 rounded-t-xl border border-b-0 px-3 text-xs font-semibold transition-all duration-200 ${
                     isSelected
-                      ? `${meta.active} z-10 text-zinc-800 shadow-sm dark:text-zinc-100`
-                      : 'translate-y-1 border-zinc-300/80 bg-white/70 text-zinc-500 hover:translate-y-0.5 hover:border-zinc-400 hover:bg-white hover:text-zinc-700 dark:border-white/15 dark:bg-zinc-950/70 dark:text-zinc-400 dark:hover:border-white/25 dark:hover:bg-zinc-900 dark:hover:text-zinc-200'
+                      ? `${meta.active} z-10 border-zinc-400/90 text-zinc-900 ring-2 ring-indigo-400/45 shadow-[0_12px_24px_-14px_rgba(24,24,27,0.55)] dark:border-white/30 dark:text-zinc-50`
+                      : 'translate-y-1 border-zinc-300/80 bg-white/70 text-zinc-500 opacity-80 hover:translate-y-0.5 hover:border-zinc-400 hover:bg-white hover:text-zinc-700 hover:opacity-100 dark:border-white/15 dark:bg-zinc-950/70 dark:text-zinc-400 dark:hover:border-white/25 dark:hover:bg-zinc-900 dark:hover:text-zinc-200'
                   }`}
                 >
+                  {isSelected && (
+                    <span className="absolute right-2 top-1 inline-flex items-center rounded-full border border-indigo-300 bg-indigo-50 px-1.5 py-[1px] text-[9px] font-bold leading-none text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200">
+                      Abierta
+                    </span>
+                  )}
                   <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${meta.dot}`} />
+                  {isSelected && (
+                    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm">
+                      <Check size={10} />
+                    </span>
+                  )}
                   <span className="truncate">{folder.name}</span>
                   {count > 0 && (
                     <span className={`ml-auto inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1 text-[10px] font-bold ${
@@ -273,19 +292,29 @@ export function FolderDock({
 
                   return (
                     <div key={folder.id} className="group relative flex-shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => onFolderToggle(folder.id)}
-                        className={`relative -mb-px inline-flex h-9 min-w-[104px] max-w-[196px] items-center gap-1.5 rounded-t-lg border border-b-0 px-2.5 text-[11px] font-semibold transition-all duration-200 ${
-                          isSelected
-                            ? `${meta.active} z-10 text-zinc-800 shadow-sm dark:text-zinc-100`
-                            : 'translate-y-1 border-zinc-300/70 bg-white/65 text-zinc-500 hover:translate-y-0.5 hover:border-zinc-400 hover:bg-white hover:text-zinc-700 dark:border-white/15 dark:bg-zinc-950/70 dark:text-zinc-400 dark:hover:border-white/25 dark:hover:bg-zinc-900 dark:hover:text-zinc-200'
-                        }`}
-                      >
-                        <span className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`} />
-                        <span className="truncate">{folder.name}</span>
-                        {count > 0 && (
-                          <span className={`ml-auto inline-flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[9px] font-bold ${
+	                      <button
+	                        type="button"
+	                        onClick={() => onFolderToggle(folder.id)}
+	                        className={`relative -mb-px inline-flex h-9 min-w-[104px] max-w-[196px] items-center gap-1.5 rounded-t-lg border border-b-0 px-2.5 text-[11px] font-semibold transition-all duration-200 ${
+	                          isSelected
+	                            ? `${meta.active} z-10 border-zinc-400/90 text-zinc-900 ring-2 ring-indigo-400/35 shadow-[0_10px_20px_-14px_rgba(24,24,27,0.45)] dark:border-white/30 dark:text-zinc-50`
+	                            : 'translate-y-1 border-zinc-300/70 bg-white/65 text-zinc-500 opacity-80 hover:translate-y-0.5 hover:border-zinc-400 hover:bg-white hover:text-zinc-700 hover:opacity-100 dark:border-white/15 dark:bg-zinc-950/70 dark:text-zinc-400 dark:hover:border-white/25 dark:hover:bg-zinc-900 dark:hover:text-zinc-200'
+	                        }`}
+	                      >
+	                        {isSelected && (
+	                          <span className="absolute right-2 top-0.5 inline-flex items-center rounded-full border border-indigo-300 bg-indigo-50 px-1 py-[1px] text-[8px] font-bold leading-none text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200">
+	                            Abierta
+	                          </span>
+	                        )}
+	                        <span className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`} />
+	                        {isSelected && (
+	                          <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm">
+	                            <Check size={9} />
+	                          </span>
+	                        )}
+	                        <span className="truncate">{folder.name}</span>
+	                        {count > 0 && (
+	                          <span className={`ml-auto inline-flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[9px] font-bold ${
                             isSelected
                               ? 'bg-indigo-600 text-white'
                               : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300'

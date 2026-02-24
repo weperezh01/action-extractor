@@ -14,6 +14,7 @@ import {
   Download,
   ExternalLink,
   FileText,
+  Folder,
   Globe,
   GripVertical,
   ImageIcon,
@@ -55,6 +56,7 @@ import type {
   ShareVisibility,
   SourceType,
 } from '@/app/home/lib/types'
+import type { FolderItem } from '@/app/home/components/FolderDock'
 
 interface ResultPanelProps {
   result: ExtractResult
@@ -117,9 +119,26 @@ interface ResultPanelProps {
   isBookClosed?: boolean
   bookFolderLabel?: string | null
   onClose?: () => void
+  folders?: FolderItem[]
+  onAssignFolder?: (extractionId: string, folderId: string | null) => void | Promise<void>
 }
 
 type PlaybookCloseStage = 'idle' | 'folding' | 'cover'
+type PlaybookCoverMotion = 'opening' | 'closing'
+type PlaybookPageTurnStage = 'idle' | 'primed' | 'turning'
+const PLAYBOOK_COVER_OPEN_MS = 860
+const PLAYBOOK_COVER_CLOSE_MS = 1380
+const PLAYBOOK_PAGE_TURN_MS = 1760
+
+interface PlaybookPageTurnSnapshot {
+  sourceSectionLabel: string
+  sourceDisplayTitle: string
+  objective: string
+  phases: Phase[]
+  savedTime: string
+  difficulty: string
+  modeLabel: string
+}
 
 const TASK_STATUS_OPTIONS: Array<{
   value: InteractiveTaskStatus
@@ -290,6 +309,8 @@ export function ResultPanel({
   isBookClosed = false,
   bookFolderLabel,
   onClose,
+  folders = [],
+  onAssignFolder,
 }: ResultPanelProps) {
   const resolvedMode = normalizeExtractionMode(result.mode ?? extractionMode)
   const sourceUrl = (result.url ?? url).trim()
@@ -319,6 +340,26 @@ export function ResultPanel({
     typeof bookFolderLabel === 'string' && bookFolderLabel.trim().length > 0
       ? bookFolderLabel.trim()
       : 'Playbooks sueltos'
+  const currentPageTurnSnapshot = useMemo<PlaybookPageTurnSnapshot>(
+    () => ({
+      sourceSectionLabel,
+      sourceDisplayTitle,
+      objective: result.objective ?? '',
+      phases: result.phases.map((phase) => ({ ...phase, items: [...phase.items] })),
+      savedTime: result.metadata.savedTime,
+      difficulty: result.metadata.difficulty,
+      modeLabel: getExtractionModeLabel(resolvedMode),
+    }),
+    [
+      sourceSectionLabel,
+      sourceDisplayTitle,
+      result.objective,
+      result.phases,
+      result.metadata.savedTime,
+      result.metadata.difficulty,
+      resolvedMode,
+    ]
+  )
   const [isActionsExpanded, setIsActionsExpanded] = useState(false)
   const [collapseAfterAsyncAction, setCollapseAfterAsyncAction] = useState(false)
   const asyncActionLoadingRef = useRef(false)
@@ -334,9 +375,17 @@ export function ResultPanel({
   const [taskMutationLoadingId, setTaskMutationLoadingId] = useState<string | null>(null)
   const [eventDraftContent, setEventDraftContent] = useState('')
   const [idCopied, setIdCopied] = useState(false)
-  const [closeStage, setCloseStage] = useState<PlaybookCloseStage>('idle')
+  const [isAssigningFolder, setIsAssigningFolder] = useState(false)
+  const [closeStage, setCloseStage] = useState<PlaybookCloseStage>('cover')
+  const [coverMotion, setCoverMotion] = useState<PlaybookCoverMotion>(
+    isBookClosed ? 'closing' : 'opening'
+  )
   const closeTimersRef = useRef<number[]>([])
-  const closeRequestedRef = useRef(false)
+  const [pageTurnStage, setPageTurnStage] = useState<PlaybookPageTurnStage>('idle')
+  const [pageTurnSnapshot, setPageTurnSnapshot] = useState<PlaybookPageTurnSnapshot | null>(null)
+  const pageTurnTimersRef = useRef<number[]>([])
+  const latestPageTurnSnapshotRef = useRef<PlaybookPageTurnSnapshot>(currentPageTurnSnapshot)
+  const previousResultIdRef = useRef<string | null>(result.id?.trim() ?? null)
   const [isStructureEditing, setIsStructureEditing] = useState(false)
   const [phaseDrafts, setPhaseDrafts] = useState<Phase[]>(result.phases)
   const [structureSaving, setStructureSaving] = useState(false)
@@ -415,29 +464,90 @@ export function ResultPanel({
     todoistExportLoading ||
     googleDocsLoading ||
     googleDocsExportLoading
-  const isClosing = closeStage !== 'idle'
-  const showBookCover = isBookClosed || closeStage !== 'idle'
+  const isBookFullyClosed = closeStage === 'cover'
+  const isBookOpen = closeStage === 'idle'
+  const isPageTurning = pageTurnStage !== 'idle'
+  const shouldHideBookContent =
+    isBookFullyClosed || (closeStage === 'folding' && coverMotion === 'closing')
+  const showBookCover = true
+  const coverOpenedToLeft =
+    closeStage === 'idle' || (closeStage === 'folding' && coverMotion === 'opening')
+  const showPageTurnLeaf = isBookOpen && !isBookClosed && isPageTurning && Boolean(pageTurnSnapshot)
+  const pageTurnTransform =
+    pageTurnStage === 'turning'
+      ? 'perspective(2800px) rotateY(-98deg) rotateX(1.15deg) skewY(-1.2deg) skewX(-0.8deg) scaleX(0.994) scaleY(0.983)'
+      : 'perspective(2800px) rotateY(0deg) rotateX(0deg) skewY(0deg) skewX(0deg) scaleX(1) scaleY(1)'
+  const pageTurnBorderRadius =
+    pageTurnStage === 'turning'
+      ? '2px 66px 84px 2px / 2px 82px 106px 2px'
+      : '2px 12px 14px 2px / 2px 16px 18px 2px'
+  const pageTurnShadow =
+    pageTurnStage === 'turning'
+      ? 'inset -24px 0 34px rgba(128, 100, 58, 0.24), inset -66px 0 44px rgba(255, 255, 255, 0.22), 12px 0 28px -15px rgba(64, 43, 20, 0.56)'
+      : 'inset 0 0 0 1px rgba(255, 255, 255, 0.5), 8px 0 18px -14px rgba(64, 43, 20, 0.42)'
+  const isPageTurnAtBend = pageTurnStage === 'turning'
 
   useEffect(() => {
     return () => {
       closeTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
       closeTimersRef.current = []
+      pageTurnTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
+      pageTurnTimersRef.current = []
     }
   }, [])
 
   useEffect(() => {
+    closeTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
+    closeTimersRef.current = []
+
     if (isBookClosed) {
-      closeTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
-      closeTimersRef.current = []
-      setCloseStage('cover')
+      setCoverMotion('closing')
+      setCloseStage('folding')
+      const closeTimer = window.setTimeout(() => setCloseStage('cover'), PLAYBOOK_COVER_CLOSE_MS)
+      closeTimersRef.current = [closeTimer]
       return
     }
 
-    if (closeRequestedRef.current) {
-      closeRequestedRef.current = false
-      setCloseStage('idle')
-    }
+    setCoverMotion('opening')
+    setCloseStage('folding')
+    const openTimer = window.setTimeout(() => setCloseStage('idle'), PLAYBOOK_COVER_OPEN_MS)
+    closeTimersRef.current = [openTimer]
   }, [isBookClosed])
+
+  useEffect(() => {
+    const nextResultId = result.id?.trim() ?? null
+    const previousResultId = previousResultIdRef.current
+
+    const shouldAnimateTurn =
+      previousResultId !== null &&
+      nextResultId !== null &&
+      previousResultId !== nextResultId &&
+      closeStage === 'idle' &&
+      !isBookClosed
+
+    pageTurnTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
+    pageTurnTimersRef.current = []
+
+    if (shouldAnimateTurn) {
+      setPageTurnSnapshot(latestPageTurnSnapshotRef.current)
+      setPageTurnStage('primed')
+      const startTimer = window.setTimeout(() => setPageTurnStage('turning'), 20)
+      const endTimer = window.setTimeout(() => {
+        setPageTurnStage('idle')
+        setPageTurnSnapshot(null)
+      }, PLAYBOOK_PAGE_TURN_MS + 120)
+      pageTurnTimersRef.current = [startTimer, endTimer]
+    } else {
+      setPageTurnStage('idle')
+      setPageTurnSnapshot(null)
+    }
+
+    previousResultIdRef.current = nextResultId
+  }, [result.id, closeStage, isBookClosed])
+
+  useEffect(() => {
+    latestPageTurnSnapshotRef.current = currentPageTurnSnapshot
+  }, [currentPageTurnSnapshot])
 
   useEffect(() => {
     if (!collapseAfterAsyncAction) return
@@ -1497,30 +1607,37 @@ export function ResultPanel({
     closeTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
     closeTimersRef.current = []
 
-    closeRequestedRef.current = true
+    setCoverMotion('closing')
     setCloseStage('folding')
-    const coverTimer = window.setTimeout(() => setCloseStage('cover'), 220)
-    const closeTimer = window.setTimeout(() => onClose(), 1150)
-    closeTimersRef.current = [coverTimer, closeTimer]
+    onClose()
+  }
+
+  const handleAssignCurrentFolder = (folderId: string | null) => {
+    const extractionId = result.id?.trim()
+    if (!extractionId || !onAssignFolder || isAssigningFolder) return
+    setIsAssigningFolder(true)
+    void Promise.resolve(onAssignFolder(extractionId, folderId)).finally(() => {
+      setIsAssigningFolder(false)
+    })
   }
 
   return (
     <div
-      className="animate-fade-slide"
+      className="animate-fade-slide relative"
       style={{
         transition: 'transform 0.55s ease',
         transform:
           closeStage === 'idle'
             ? 'translateY(0) scale(1)'
             : closeStage === 'folding'
-              ? 'translateY(8px) scale(0.99)'
+              ? 'translateY(0) scale(0.998)'
               : 'translateY(0) scale(0.995)',
-        pointerEvents: isClosing || isBookClosed ? 'none' : undefined,
+        pointerEvents: closeStage === 'idle' && !isPageTurning ? undefined : 'none',
       }}
     >
       <div
         className={`paper-playbook bg-white rounded-sm shadow-xl shadow-slate-200/50 border border-slate-200 overflow-hidden dark:bg-slate-900 dark:border-slate-800 dark:shadow-none ${
-          isBookClosed || closeStage === 'cover'
+          shouldHideBookContent
             ? 'paper-playbook-closed min-h-screen min-h-[100dvh]'
             : ''
         }`}
@@ -1535,22 +1652,11 @@ export function ResultPanel({
         }}
       >
         <span aria-hidden="true" className="paper-playbook-fold" />
-        {showBookCover && (
-          <div
-            aria-hidden="true"
-            className={`paper-playbook-cover ${
-              closeStage === 'folding' ? 'translate-y-1 opacity-75' : 'translate-y-0 opacity-100'
-            }`}
-          >
-            <p className="paper-playbook-cover-kicker">Carpeta activa</p>
-            <p className="paper-playbook-cover-title">{coverFolderLabel}</p>
-          </div>
-        )}
         <div
-          className={`border-b border-slate-200/80 bg-transparent px-0 py-5 transition-all duration-300 dark:border-slate-800 ${
-            isClosing || isBookClosed
+          className={`border-b border-slate-200/80 bg-transparent px-0 pt-5 pb-6 transition-all duration-300 dark:border-slate-800 ${
+            shouldHideBookContent
               ? 'max-h-0 -translate-y-2 overflow-hidden opacity-0 py-0'
-              : 'max-h-72 translate-y-0 opacity-100'
+              : 'max-h-80 translate-y-0 opacity-100'
           }`}
           style={{ marginInline: '4.5%' }}
         >
@@ -1566,7 +1672,7 @@ export function ResultPanel({
                 <Zap size={14} /> Modo: {getExtractionModeLabel(resolvedMode)}
               </div>
             </div>
-            {onClose && !isBookClosed && (
+            {onClose && isBookOpen && (
               <button
                 type="button"
                 onClick={handleClose}
@@ -1578,7 +1684,7 @@ export function ResultPanel({
               </button>
             )}
           </div>
-          <p className="mx-auto max-w-3xl text-center text-sm font-semibold text-slate-700 dark:text-slate-200">
+          <p className="mx-auto mt-10 mb-3 max-w-3xl text-center text-xl font-bold leading-tight text-slate-700 dark:text-slate-100">
             {sourceDisplayTitle}
           </p>
         </div>
@@ -1586,19 +1692,40 @@ export function ResultPanel({
           className="p-6 border-b border-slate-100 bg-white dark:bg-slate-900 dark:border-slate-800"
           style={{ marginInline: '4.5%' }}
         >
-          <div className="flex items-center justify-between mb-3">
+          <div className="mb-3 flex items-center justify-between gap-2">
             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
               {sourceSectionLabel}
             </h2>
-            {result.id && !isMetaEditing && (
-              <button
-                type="button"
-                onClick={handleStartMetaEdit}
-                className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-              >
-                <Pencil size={12} /> Editar
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {result.id && onAssignFolder && (
+                <label className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                  <Folder size={12} />
+                  <select
+                    value={result.folderId ?? ''}
+                    disabled={isAssigningFolder}
+                    onChange={(event) => handleAssignCurrentFolder(event.target.value || null)}
+                    className="bg-transparent pr-1 outline-none"
+                    aria-label="Asignar carpeta"
+                  >
+                    <option value="">Playbooks sueltos</option>
+                    {folders.map((folder) => (
+                      <option key={folder.id} value={folder.id}>
+                        {folder.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {result.id && !isMetaEditing && (
+                <button
+                  type="button"
+                  onClick={handleStartMetaEdit}
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                >
+                  <Pencil size={12} /> Editar
+                </button>
+              )}
+            </div>
           </div>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
             <div className="flex min-w-0 flex-1 flex-col gap-4 md:flex-row">
@@ -1680,7 +1807,7 @@ export function ResultPanel({
                 </div>
               )}
               <div className="min-w-0 flex-1">
-                {isMetaEditing ? (
+                {isMetaEditing && (
                   <input
                     type="text"
                     value={metaTitleDraft}
@@ -1689,13 +1816,9 @@ export function ResultPanel({
                     placeholder="Título"
                     className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 placeholder-slate-400 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
                   />
-                ) : (
-                  <p className="font-semibold text-slate-800 text-base line-clamp-2 dark:text-slate-100">
-                    {sourceDisplayTitle}
-                  </p>
                 )}
                 {sourceUrl && (
-                  <p className="text-xs text-slate-500 mt-2 break-all dark:text-slate-400">
+                  <p className={`break-all text-xs text-slate-500 dark:text-slate-400 ${isMetaEditing ? 'mt-2' : 'mt-0'}`}>
                     {sourceUrl}
                   </p>
                 )}
@@ -3918,6 +4041,88 @@ export function ResultPanel({
           typeof document !== 'undefined' ? document.body : null as unknown as Element
         )
       })()}
+
+      {showPageTurnLeaf && pageTurnSnapshot && (
+        <div
+          aria-hidden="true"
+          className={`paper-playbook-page-turn${isPageTurnAtBend ? ' paper-playbook-page-turn-active' : ''}`}
+          style={{
+            transform: pageTurnTransform,
+            borderRadius: pageTurnBorderRadius,
+            boxShadow: pageTurnShadow,
+          }}
+        >
+          <div className="paper-playbook-page-turn-sheet">
+            <div className="flex h-full flex-col" style={{ marginInline: '4.5%' }}>
+              <div className="border-b border-slate-200/70 px-0 py-4">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span className="rounded-md border border-emerald-200/80 bg-emerald-50/70 px-2 py-1 text-[10px] font-semibold text-emerald-700">
+                    Tiempo: {pageTurnSnapshot.savedTime}
+                  </span>
+                  <span className="rounded-md border border-orange-200/80 bg-orange-50/70 px-2 py-1 text-[10px] font-semibold text-orange-700">
+                    Dificultad: {pageTurnSnapshot.difficulty}
+                  </span>
+                  <span className="rounded-md border border-indigo-200/80 bg-indigo-50/70 px-2 py-1 text-[10px] font-semibold text-indigo-700">
+                    Modo: {pageTurnSnapshot.modeLabel}
+                  </span>
+                </div>
+                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                  {pageTurnSnapshot.sourceSectionLabel}
+                </p>
+                <p className="mt-1 line-clamp-2 text-sm font-semibold text-slate-700">
+                  {pageTurnSnapshot.sourceDisplayTitle}
+                </p>
+              </div>
+
+              <div className="border-b border-slate-200/70 py-3">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                  Objetivo del resultado
+                </p>
+                <p className="mt-1 line-clamp-4 text-[12px] leading-5 text-slate-700">
+                  {pageTurnSnapshot.objective || 'Sin objetivo.'}
+                </p>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-hidden py-3">
+                <div className="space-y-2">
+                  {pageTurnSnapshot.phases.slice(0, 5).map((phase) => (
+                    <div key={phase.id} className="rounded-md border border-slate-200/60 bg-white/35 px-2.5 py-2">
+                      <p className="truncate text-[11px] font-semibold text-slate-700">{phase.title}</p>
+                      <ul className="mt-1 space-y-0.5">
+                        {phase.items.slice(0, 2).map((item, itemIndex) => (
+                          <li key={`${phase.id}-${itemIndex}`} className="line-clamp-1 text-[10px] text-slate-600">
+                            • {item}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <span className="paper-playbook-page-turn-crease" />
+          </div>
+        </div>
+      )}
+
+      {showBookCover && (
+        <div
+          aria-hidden="true"
+          className="paper-playbook-cover"
+          style={{
+            transition:
+              coverMotion === 'closing'
+                ? 'transform 1.35s cubic-bezier(0.2, 0.75, 0.2, 1)'
+                : 'transform 0.9s cubic-bezier(0.24, 0.7, 0.28, 1)',
+            transform: coverOpenedToLeft
+              ? 'perspective(2400px) rotateY(-104deg) rotateX(0.5deg)'
+              : 'perspective(2400px) rotateY(0deg) rotateX(0deg)',
+          }}
+        >
+          <p className="paper-playbook-cover-kicker">Carpeta activa</p>
+          <p className="paper-playbook-cover-title">{coverFolderLabel}</p>
+        </div>
+      )}
 
     </div>
   )

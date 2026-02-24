@@ -34,6 +34,7 @@ import { ExtractionFeedCard } from '@/app/home/components/ExtractionFeedCard'
 import { HistoryPanel } from '@/app/home/components/HistoryPanel'
 import { KnowledgeChat } from '@/app/home/components/KnowledgeChat'
 import { ResultPanel } from '@/app/home/components/ResultPanel'
+import { PlaybookSideTabs } from '@/app/home/components/PlaybookSideTabs'
 import { WorkspaceControlsDock } from '@/app/home/components/WorkspaceControlsDock'
 import { FolderDock } from '@/app/home/components/FolderDock'
 import { useFolders } from '@/app/home/hooks/useFolders'
@@ -193,7 +194,7 @@ function ActionExtractor() {
   const [showGoToHistoryButton, setShowGoToHistoryButton] = useState(false)
   const [isManualFormOpen, setIsManualFormOpen] = useState(false)
   const [activeFolderIds, setActiveFolderIds] = useState<string[]>([])
-  const { folders, createFolder, deleteFolder } = useFolders()
+  const { folders, loadFolders, resetFolders, createFolder, deleteFolder } = useFolders()
   const [historyView, setHistoryView] = useState<'list' | 'feed'>('list')
   const [theme, setTheme] = useState<Theme>('light')
   const [reauthRequired, setReauthRequired] = useState(false)
@@ -306,8 +307,14 @@ function ActionExtractor() {
   const handleSessionMissing = useCallback(() => {
     setReauthRequired(false)
     resetHistory()
+    resetFolders()
+    setActiveFolderIds([])
     resetExtractionUiState()
-  }, [resetExtractionUiState, resetHistory])
+  }, [resetExtractionUiState, resetFolders, resetHistory])
+
+  const handleAuthenticated = useCallback(async () => {
+    await Promise.all([loadHistory(), loadFolders()])
+  }, [loadHistory, loadFolders])
 
   const {
     sessionLoading,
@@ -349,7 +356,7 @@ function ActionExtractor() {
   } = useAuth({
     searchParams,
     resetTokenFromUrl,
-    onAuthenticated: loadHistory,
+    onAuthenticated: handleAuthenticated,
     onSessionMissing: handleSessionMissing,
     onLogout: handleSessionMissing,
     setGlobalNotice: setNotice,
@@ -366,15 +373,26 @@ function ActionExtractor() {
     setReauthRequired(true)
     setUser(null)
     resetHistory()
+    resetFolders()
+    setActiveFolderIds([])
     setNotice(null)
     setStreamStatus(null)
     setStreamPreview('')
-  }, [resetHistory, setAuthError, setAuthMode, setAuthNotice, setEmail, setUser, user])
+  }, [resetFolders, resetHistory, setAuthError, setAuthMode, setAuthNotice, setEmail, setUser, user])
 
   useEffect(() => {
     if (!user) return
     setReauthRequired(false)
   }, [user])
+
+  useEffect(() => {
+    setActiveFolderIds((previous) => {
+      if (previous.length === 0) return previous
+      const validIds = new Set(folders.map((folder) => folder.id))
+      const next = previous.filter((id) => validIds.has(id))
+      return next.length === previous.length ? previous : next
+    })
+  }, [folders])
 
   useEffect(() => {
     if (!shouldScrollToResult || isProcessing || !result) return
@@ -1163,13 +1181,25 @@ function ActionExtractor() {
           body: JSON.stringify({ folderId }),
         })
         if (res.status === 401) { handleUnauthorized(); return }
-        if (!res.ok) return
+        const data = (await res.json().catch(() => null)) as { error?: unknown } | null
+        if (!res.ok) {
+          setError(
+            typeof data?.error === 'string' && data.error.trim()
+              ? data.error
+              : 'No se pudo asignar la carpeta.'
+          )
+          return
+        }
+        setError(null)
         setHistory((prev) =>
           prev.map((item) => (item.id === extractionId ? { ...item, folderId } : item))
         )
-      } catch {}
+        setResult((prev) => (prev && prev.id === extractionId ? { ...prev, folderId } : prev))
+      } catch {
+        setError('Error de conexión al asignar carpeta.')
+      }
     },
-    [handleUnauthorized, setHistory]
+    [handleUnauthorized, setError, setHistory, setResult]
   )
 
   const handleSaveResultPhases = useCallback(
@@ -1371,6 +1401,7 @@ function ActionExtractor() {
       orderNumber: item.orderNumber,
       shareVisibility: item.shareVisibility === 'public' ? 'public' : 'private',
       createdAt: item.createdAt,
+      folderId: item.folderId ?? null,
       url: item.url ?? null,
       videoId: item.videoId ?? null,
       videoTitle: item.videoTitle ?? null,
@@ -1489,6 +1520,9 @@ function ActionExtractor() {
   const currentResultFolderLabel = activeFolderIdForCover
     ? folders.find((folder) => folder.id === activeFolderIdForCover)?.name ?? 'Playbooks sueltos'
     : 'Playbooks sueltos'
+  const filteredHistoryForActiveFolders = activeFolderIds.length > 0
+    ? filteredHistory.filter((item) => item.folderId != null && activeFolderIds.includes(item.folderId))
+    : filteredHistory
 
   return (
     <div className="min-h-screen bg-white text-zinc-900 dark:bg-black dark:text-zinc-100">
@@ -1836,81 +1870,96 @@ function ActionExtractor() {
               }}
             />
 
-            {result ? (
+            <div className="relative">
               <div ref={resultAnchorRef} className="scroll-mt-24">
-                <ResultPanel
-                  result={result}
-                  url={url}
-                  extractionMode={extractionMode}
-                  isProcessing={isProcessing}
-                  activePhase={activePhase}
-                  onTogglePhase={togglePhase}
-                  isExportingPdf={isExportingPdf}
-                  shareLoading={shareLoading}
-                  shareCopied={shareCopied}
-                  shareVisibility={result.shareVisibility === 'public' ? 'public' : 'private'}
-                  shareVisibilityLoading={shareVisibilityLoading}
-                  notionConfigured={notionConfigured}
-                  notionConnected={notionConnected}
-                  notionWorkspaceName={notionWorkspaceName}
-                  notionLoading={notionLoading}
-                  notionExportLoading={notionExportLoading}
-                  trelloConfigured={trelloConfigured}
-                  trelloConnected={trelloConnected}
-                  trelloUsername={trelloUsername}
-                  trelloLoading={trelloLoading}
-                  trelloExportLoading={trelloExportLoading}
-                  todoistConfigured={todoistConfigured}
-                  todoistConnected={todoistConnected}
-                  todoistUserLabel={todoistUserLabel}
-                  todoistLoading={todoistLoading}
-                  todoistExportLoading={todoistExportLoading}
-                  googleDocsConfigured={googleDocsConfigured}
-                  googleDocsConnected={googleDocsConnected}
-                  googleDocsUserEmail={googleDocsUserEmail}
-                  googleDocsLoading={googleDocsLoading}
-                  googleDocsExportLoading={googleDocsExportLoading}
-                  onDownloadPdf={handleDownloadPdf}
-                  onCopyShareLink={handleCopyShareLink}
-                  onCopyMarkdown={() => handleCopyMarkdown()}
-                  onShareVisibilityChange={handleUpdateShareVisibility}
-                  onSavePhases={handleSaveResultPhases}
-                  onSaveMeta={handleSaveResultMeta}
-                  isBookClosed={isResultBookClosed}
-                  bookFolderLabel={currentResultFolderLabel}
-                  onClose={() => setIsResultBookClosed(true)}
-                  onExportToNotion={() => handleExportToNotion(result.id)}
-                  onConnectNotion={handleConnectNotion}
-                  onExportToTrello={() => handleExportToTrello(result.id)}
-                  onConnectTrello={handleConnectTrello}
-                  onExportToTodoist={() => handleExportToTodoist(result.id)}
-                  onConnectTodoist={handleConnectTodoist}
-                  onExportToGoogleDocs={() => handleExportToGoogleDocs(result.id)}
-                  onConnectGoogleDocs={handleConnectGoogleDocs}
-                  onReExtractMode={(mode) => {
-                    handleScrollToExtractor()
-                    void handleExtract({
-                      url: (result.url ?? url).trim(),
-                      mode,
-                    })
-                  }}
-                />
-              </div>
-            ) : !isProcessing ? (
-              <div ref={resultAnchorRef} className="scroll-mt-24">
-                <div className="animate-fade-slide">
-                  <div
-                    className="paper-playbook paper-playbook-closed min-h-screen min-h-[100dvh] bg-white rounded-sm shadow-xl shadow-slate-200/50 border border-slate-200 overflow-hidden dark:bg-slate-900 dark:border-slate-800 dark:shadow-none"
-                  >
-                    <span aria-hidden="true" className="paper-playbook-fold" />
-                    <div aria-hidden="true" className="paper-playbook-cover translate-y-0 opacity-100">
-                      <p className="paper-playbook-cover-kicker">Carpeta activa</p>
-                      <p className="paper-playbook-cover-title">Playbooks sueltos</p>
+                {result ? (
+                  <ResultPanel
+                    result={result}
+                    url={url}
+                    extractionMode={extractionMode}
+                    isProcessing={isProcessing}
+                    activePhase={activePhase}
+                    onTogglePhase={togglePhase}
+                    isExportingPdf={isExportingPdf}
+                    shareLoading={shareLoading}
+                    shareCopied={shareCopied}
+                    shareVisibility={result.shareVisibility === 'public' ? 'public' : 'private'}
+                    shareVisibilityLoading={shareVisibilityLoading}
+                    notionConfigured={notionConfigured}
+                    notionConnected={notionConnected}
+                    notionWorkspaceName={notionWorkspaceName}
+                    notionLoading={notionLoading}
+                    notionExportLoading={notionExportLoading}
+                    trelloConfigured={trelloConfigured}
+                    trelloConnected={trelloConnected}
+                    trelloUsername={trelloUsername}
+                    trelloLoading={trelloLoading}
+                    trelloExportLoading={trelloExportLoading}
+                    todoistConfigured={todoistConfigured}
+                    todoistConnected={todoistConnected}
+                    todoistUserLabel={todoistUserLabel}
+                    todoistLoading={todoistLoading}
+                    todoistExportLoading={todoistExportLoading}
+                    googleDocsConfigured={googleDocsConfigured}
+                    googleDocsConnected={googleDocsConnected}
+                    googleDocsUserEmail={googleDocsUserEmail}
+                    googleDocsLoading={googleDocsLoading}
+                    googleDocsExportLoading={googleDocsExportLoading}
+                    onDownloadPdf={handleDownloadPdf}
+                    onCopyShareLink={handleCopyShareLink}
+                    onCopyMarkdown={() => handleCopyMarkdown()}
+                    onShareVisibilityChange={handleUpdateShareVisibility}
+                    onSavePhases={handleSaveResultPhases}
+                    onSaveMeta={handleSaveResultMeta}
+                    isBookClosed={isResultBookClosed}
+                    bookFolderLabel={currentResultFolderLabel}
+                    onClose={() => setIsResultBookClosed(true)}
+                    folders={folders}
+                    onAssignFolder={handleAssignFolder}
+                    onExportToNotion={() => handleExportToNotion(result.id)}
+                    onConnectNotion={handleConnectNotion}
+                    onExportToTrello={() => handleExportToTrello(result.id)}
+                    onConnectTrello={handleConnectTrello}
+                    onExportToTodoist={() => handleExportToTodoist(result.id)}
+                    onConnectTodoist={handleConnectTodoist}
+                    onExportToGoogleDocs={() => handleExportToGoogleDocs(result.id)}
+                    onConnectGoogleDocs={handleConnectGoogleDocs}
+                    onReExtractMode={(mode) => {
+                      handleScrollToExtractor()
+                      void handleExtract({
+                        url: (result.url ?? url).trim(),
+                        mode,
+                      })
+                    }}
+                  />
+                ) : !isProcessing ? (
+                  <div className="animate-fade-slide">
+                    <div
+                      className="paper-playbook paper-playbook-closed min-h-screen min-h-[100dvh] bg-white rounded-sm shadow-xl shadow-slate-200/50 border border-slate-200 overflow-hidden dark:bg-slate-900 dark:border-slate-800 dark:shadow-none"
+                    >
+                      <span aria-hidden="true" className="paper-playbook-fold" />
+                      <div aria-hidden="true" className="paper-playbook-cover translate-y-0 opacity-100">
+                        <p className="paper-playbook-cover-kicker">Carpeta activa</p>
+                        <p className="paper-playbook-cover-title">Playbooks sueltos</p>
+                      </div>
                     </div>
                   </div>
-                </div>
+                ) : null}
               </div>
-            ) : null}
+
+              {historyView === 'list' && (
+                <div className="absolute left-full top-0 hidden w-[18rem] min-[1728px]:block">
+                  <PlaybookSideTabs
+                    items={filteredHistoryForActiveFolders}
+                    folders={folders}
+                    loading={historyLoading}
+                    activeItemId={result?.id ?? null}
+                    onSelectItem={openHistoryItem}
+                    onRefresh={() => void loadHistory()}
+                  />
+                </div>
+              )}
+            </div>
 
             <div ref={historyAnchorRef} className="scroll-mt-24 pt-6 md:pt-10">
               {/* View mode toggle */}
@@ -2011,52 +2060,54 @@ function ActionExtractor() {
                   </div>
                 </div>
               ) : (
-                <HistoryPanel
-                  history={history}
-                  filteredHistory={activeFolderIds.length > 0 ? filteredHistory.filter((item) => item.folderId != null && activeFolderIds.includes(item.folderId)) : filteredHistory}
-                  historyLoading={historyLoading}
-                  folders={folders}
-                  activeFolderIds={activeFolderIds}
-                  onAssignFolder={handleAssignFolder}
-                  historyQuery={historyQuery}
-                  pdfExportLoading={isExportingPdf}
-                  historyShareLoadingItemId={historyShareLoadingItemId}
-                  historyShareCopiedItemId={historyShareCopiedItemId}
-                  notionConfigured={notionConfigured}
-                  notionConnected={notionConnected}
-                  notionLoading={notionLoading}
-                  notionExportLoading={notionExportLoading}
-                  trelloConfigured={trelloConfigured}
-                  trelloConnected={trelloConnected}
-                  trelloLoading={trelloLoading}
-                  trelloExportLoading={trelloExportLoading}
-                  todoistConfigured={todoistConfigured}
-                  todoistConnected={todoistConnected}
-                  todoistLoading={todoistLoading}
-                  todoistExportLoading={todoistExportLoading}
-                  googleDocsConfigured={googleDocsConfigured}
-                  googleDocsConnected={googleDocsConnected}
-                  googleDocsLoading={googleDocsLoading}
-                  googleDocsExportLoading={googleDocsExportLoading}
-                  deletingHistoryItemId={deletingHistoryItemId}
-                  clearingHistory={clearingHistory}
-                  onHistoryQueryChange={setHistoryQuery}
-                  onRefresh={() => void loadHistory()}
-                  onSelectItem={openHistoryItem}
-                  onDownloadPdf={(item) => handleDownloadPdf(item)}
-                  onCopyShareLink={handleCopyShareLinkFromHistory}
-                  onCopyMarkdown={handleCopyMarkdown}
-                  onExportToNotion={(item) => handleExportToNotion(item.id)}
-                  onConnectNotion={handleConnectNotion}
-                  onExportToTrello={(item) => handleExportToTrello(item.id)}
-                  onConnectTrello={handleConnectTrello}
-                  onExportToTodoist={(item) => handleExportToTodoist(item.id)}
-                  onConnectTodoist={handleConnectTodoist}
-                  onExportToGoogleDocs={(item) => handleExportToGoogleDocs(item.id)}
-                  onConnectGoogleDocs={handleConnectGoogleDocs}
-                  onDeleteItem={handleDeleteHistoryItem}
-                  onClearHistory={() => void handleClearHistory()}
-                />
+                <div className="min-[1728px]:hidden">
+                  <HistoryPanel
+                    history={history}
+                    filteredHistory={filteredHistoryForActiveFolders}
+                    historyLoading={historyLoading}
+                    folders={folders}
+                    activeFolderIds={activeFolderIds}
+                    onAssignFolder={handleAssignFolder}
+                    historyQuery={historyQuery}
+                    pdfExportLoading={isExportingPdf}
+                    historyShareLoadingItemId={historyShareLoadingItemId}
+                    historyShareCopiedItemId={historyShareCopiedItemId}
+                    notionConfigured={notionConfigured}
+                    notionConnected={notionConnected}
+                    notionLoading={notionLoading}
+                    notionExportLoading={notionExportLoading}
+                    trelloConfigured={trelloConfigured}
+                    trelloConnected={trelloConnected}
+                    trelloLoading={trelloLoading}
+                    trelloExportLoading={trelloExportLoading}
+                    todoistConfigured={todoistConfigured}
+                    todoistConnected={todoistConnected}
+                    todoistLoading={todoistLoading}
+                    todoistExportLoading={todoistExportLoading}
+                    googleDocsConfigured={googleDocsConfigured}
+                    googleDocsConnected={googleDocsConnected}
+                    googleDocsLoading={googleDocsLoading}
+                    googleDocsExportLoading={googleDocsExportLoading}
+                    deletingHistoryItemId={deletingHistoryItemId}
+                    clearingHistory={clearingHistory}
+                    onHistoryQueryChange={setHistoryQuery}
+                    onRefresh={() => void loadHistory()}
+                    onSelectItem={openHistoryItem}
+                    onDownloadPdf={(item) => handleDownloadPdf(item)}
+                    onCopyShareLink={handleCopyShareLinkFromHistory}
+                    onCopyMarkdown={handleCopyMarkdown}
+                    onExportToNotion={(item) => handleExportToNotion(item.id)}
+                    onConnectNotion={handleConnectNotion}
+                    onExportToTrello={(item) => handleExportToTrello(item.id)}
+                    onConnectTrello={handleConnectTrello}
+                    onExportToTodoist={(item) => handleExportToTodoist(item.id)}
+                    onConnectTodoist={handleConnectTodoist}
+                    onExportToGoogleDocs={(item) => handleExportToGoogleDocs(item.id)}
+                    onConnectGoogleDocs={handleConnectGoogleDocs}
+                    onDeleteItem={handleDeleteHistoryItem}
+                    onClearHistory={() => void handleClearHistory()}
+                  />
+                </div>
               )}
             </div>
 

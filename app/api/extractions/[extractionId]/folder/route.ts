@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { updateExtractionFolderForUser } from '@/lib/db'
+import { findExtractionFolderByIdForUser, updateExtractionFolderForUser } from '@/lib/db'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -37,6 +37,13 @@ export async function PATCH(
 
     if (folderId === undefined) {
       return NextResponse.json({ error: 'folderId inválido.' }, { status: 400 })
+    }
+
+    if (folderId) {
+      const folder = await findExtractionFolderByIdForUser({ id: folderId, userId: user.id })
+      if (!folder) {
+        return NextResponse.json({ error: 'La carpeta seleccionada no existe.' }, { status: 400 })
+      }
     }
 
     const updated = await updateExtractionFolderForUser({

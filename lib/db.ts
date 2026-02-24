@@ -41,6 +41,16 @@ export interface DbExtraction {
   folder_id: string | null
 }
 
+export interface DbExtractionFolder {
+  id: string
+  user_id: string
+  name: string
+  color: string
+  parent_id: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface DbVideoCache {
   video_id: string
   video_title: string | null
@@ -317,6 +327,16 @@ interface DbExtractionRow {
   source_type?: string | null
   source_label?: string | null
   folder_id?: string | null
+}
+
+interface DbExtractionFolderRow {
+  id: string
+  user_id: string
+  name: string
+  color: string
+  parent_id: string | null
+  created_at: Date | string
+  updated_at: Date | string
 }
 
 interface DbVideoCacheRow {
@@ -864,6 +884,27 @@ const INIT_SQL = `
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_label TEXT;
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS folder_id TEXT;
 
+  CREATE TABLE IF NOT EXISTS extraction_folders (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL DEFAULT 'indigo',
+    parent_id TEXT REFERENCES extraction_folders(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  ALTER TABLE extraction_folders ADD COLUMN IF NOT EXISTS user_id TEXT;
+  ALTER TABLE extraction_folders ADD COLUMN IF NOT EXISTS name TEXT;
+  ALTER TABLE extraction_folders ADD COLUMN IF NOT EXISTS color TEXT NOT NULL DEFAULT 'indigo';
+  ALTER TABLE extraction_folders ADD COLUMN IF NOT EXISTS parent_id TEXT;
+  ALTER TABLE extraction_folders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE extraction_folders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+  CREATE INDEX IF NOT EXISTS idx_extraction_folders_user_id ON extraction_folders(user_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_folders_parent_id ON extraction_folders(parent_id);
+  CREATE INDEX IF NOT EXISTS idx_extractions_folder_id ON extractions(folder_id);
+
   CREATE TABLE IF NOT EXISTS guest_extraction_limits (
     guest_id    TEXT    NOT NULL,
     window_date DATE    NOT NULL DEFAULT CURRENT_DATE,
@@ -935,7 +976,7 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_guest_task_likes_task_id ON guest_task_likes(task_id);
 `
 
-const DB_INIT_SIGNATURE = '2026-02-23-guest-tasks-v1'
+const DB_INIT_SIGNATURE = '2026-02-24-folders-db-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -1066,6 +1107,18 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
     source_type: row.source_type ?? 'youtube',
     source_label: row.source_label ?? null,
     folder_id: row.folder_id ?? null,
+  }
+}
+
+function mapExtractionFolderRow(row: DbExtractionFolderRow): DbExtractionFolder {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    name: row.name,
+    color: row.color,
+    parent_id: row.parent_id ?? null,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
   }
 }
 
@@ -1709,6 +1762,128 @@ export async function updateExtractionMetaForUser(input: {
   return rows[0] ? mapExtractionRow(rows[0]) : null
 }
 
+export async function listExtractionFoldersByUser(userId: string) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionFolderRow>(
+    `
+      SELECT
+        id,
+        user_id,
+        name,
+        color,
+        parent_id,
+        created_at,
+        updated_at
+      FROM extraction_folders
+      WHERE user_id = $1
+      ORDER BY parent_id NULLS FIRST, created_at ASC
+    `,
+    [userId]
+  )
+  return rows.map(mapExtractionFolderRow)
+}
+
+export async function findExtractionFolderByIdForUser(input: { id: string; userId: string }) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionFolderRow>(
+    `
+      SELECT
+        id,
+        user_id,
+        name,
+        color,
+        parent_id,
+        created_at,
+        updated_at
+      FROM extraction_folders
+      WHERE id = $1 AND user_id = $2
+      LIMIT 1
+    `,
+    [input.id, input.userId]
+  )
+  return rows[0] ? mapExtractionFolderRow(rows[0]) : null
+}
+
+export async function createExtractionFolderForUser(input: {
+  userId: string
+  name: string
+  color: string
+  parentId: string | null
+  id?: string
+}) {
+  await ensureDbReady()
+  const id = input.id?.trim() || randomUUID()
+
+  const { rows } = await pool.query<DbExtractionFolderRow>(
+    `
+      INSERT INTO extraction_folders (
+        id,
+        user_id,
+        name,
+        color,
+        parent_id
+      )
+      SELECT
+        $1,
+        $2,
+        $3,
+        $4,
+        $5::text
+      WHERE
+        $5::text IS NULL
+        OR EXISTS (
+          SELECT 1
+          FROM extraction_folders
+          WHERE id = $5::text AND user_id = $2
+        )
+      ON CONFLICT (id) DO NOTHING
+      RETURNING
+        id,
+        user_id,
+        name,
+        color,
+        parent_id,
+        created_at,
+        updated_at
+    `,
+    [id, input.userId, input.name, input.color, input.parentId]
+  )
+
+  return rows[0] ? mapExtractionFolderRow(rows[0]) : null
+}
+
+export async function deleteExtractionFolderTreeForUser(input: { id: string; userId: string }) {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ id: string }>(
+    `
+      WITH RECURSIVE folder_tree AS (
+        SELECT id
+        FROM extraction_folders
+        WHERE id = $1 AND user_id = $2
+        UNION ALL
+        SELECT child.id
+        FROM extraction_folders child
+        INNER JOIN folder_tree ft ON child.parent_id = ft.id
+        WHERE child.user_id = $2
+      ),
+      detached_extractions AS (
+        UPDATE extractions
+        SET folder_id = NULL
+        WHERE user_id = $2 AND folder_id IN (SELECT id FROM folder_tree)
+      ),
+      deleted_folders AS (
+        DELETE FROM extraction_folders
+        WHERE user_id = $2 AND id IN (SELECT id FROM folder_tree)
+        RETURNING id
+      )
+      SELECT id FROM deleted_folders
+    `,
+    [input.id, input.userId]
+  )
+
+  return rows.map((row) => row.id)
+}
+
 export async function updateExtractionFolderForUser(input: {
   id: string
   userId: string
@@ -1716,7 +1891,21 @@ export async function updateExtractionFolderForUser(input: {
 }): Promise<boolean> {
   await ensureDbReady()
   const { rowCount } = await pool.query(
-    `UPDATE extractions SET folder_id = $1 WHERE id = $2 AND user_id = $3`,
+    `
+      UPDATE extractions
+      SET folder_id = $1::text
+      WHERE
+        id = $2
+        AND user_id = $3
+        AND (
+          $1::text IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM extraction_folders
+            WHERE id = $1::text AND user_id = $3
+          )
+        )
+    `,
     [input.folderId, input.id, input.userId]
   )
   return (rowCount ?? 0) > 0
