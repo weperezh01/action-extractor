@@ -30,6 +30,7 @@ import {
   ThumbsUp,
   Trash2,
   Upload,
+  Users,
   X,
   Zap,
 } from 'lucide-react'
@@ -2334,6 +2335,12 @@ export function ResultPanel({
                                             <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Evidencias">
                                               <ImageIcon size={10} />
                                               {taskAttachments.length}
+                                            </span>
+                                          )}
+                                          {task && (taskCommentsByTaskId[task.id]?.length ?? 0) > 0 && (
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Participantes">
+                                              <Users size={10} />
+                                              {taskCommentsByTaskId[task.id]?.length ?? 0}
                                             </span>
                                           )}
                                           {task && (
