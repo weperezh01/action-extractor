@@ -2278,9 +2278,10 @@ export function ResultPanel({
                                   <div className="p-3">
                                     {/* Content column — full width */}
                                     <div className="min-w-0">
-                                      {/* Top bar: checkbox + index | status + three-dots */}
+                                      {/* Top bar: checkbox + index + stats | activity/evidence + status + three-dots */}
                                       <div className="flex items-center justify-between gap-2 mb-1">
-                                        <div className="flex items-center gap-2">
+                                        {/* ── Left: checkbox · number · community stats ── */}
+                                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                                           <div className="relative flex-shrink-0">
                                             <input
                                               type="checkbox"
@@ -2301,8 +2302,40 @@ export function ResultPanel({
                                           <span className="inline-flex h-6 w-fit min-w-[2.3rem] items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 px-1.5 font-mono text-[11px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
                                             {subItemNumber}
                                           </span>
+                                          {/* Community micro-stats */}
+                                          <div className="flex items-center gap-2">
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Me gusta">
+                                              <ThumbsUp size={10} />
+                                              {taskLikeSummaryByTaskId[task?.id ?? '']?.likesCount ?? 0}
+                                            </span>
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Compartidos">
+                                              <Share2 size={10} />
+                                              0
+                                            </span>
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Seguidores">
+                                              <Bell size={10} />
+                                              0
+                                            </span>
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Visualizaciones">
+                                              <Eye size={10} />
+                                              0
+                                            </span>
+                                          </div>
                                         </div>
+                                        {/* ── Right: activity · evidence · status · three-dots ── */}
                                         <div className="flex items-center gap-1.5 flex-shrink-0">
+                                          {task && task.events.length > 0 && (
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Actividad">
+                                              <Zap size={10} />
+                                              {task.events.length}
+                                            </span>
+                                          )}
+                                          {task && taskAttachments.length > 0 && (
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Evidencias">
+                                              <ImageIcon size={10} />
+                                              {taskAttachments.length}
+                                            </span>
+                                          )}
                                           {task && (
                                             <span className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(task.status)}`}>
                                               {getTaskStatusLabel(task.status)}
