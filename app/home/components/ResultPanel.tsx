@@ -3,6 +3,7 @@ import {
   AlignLeft,
   AlertTriangle,
   Bell,
+  Eye,
   Brain,
   CheckCircle2,
   ChevronDown,
@@ -2650,6 +2651,15 @@ export function ResultPanel({
                                                   <Bell size={12} />
                                                   Seguir
                                                 </button>
+
+                                                {/* Visualizaciones — sin funcionalidad aún */}
+                                                <span
+                                                  title="Próximamente"
+                                                  className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-400 opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-500"
+                                                >
+                                                  <Eye size={12} />
+                                                  0
+                                                </span>
                                               </div>
                                             )}
 
