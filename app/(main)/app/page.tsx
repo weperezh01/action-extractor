@@ -13,6 +13,7 @@ import {
   LogOut,
   Moon,
   Newspaper,
+  Settings2,
   Sun,
 } from 'lucide-react'
 import {
@@ -1480,9 +1481,10 @@ function ActionExtractor() {
 
   return (
     <div className="min-h-screen bg-white text-zinc-900 dark:bg-black dark:text-zinc-100">
-      <nav className="sticky top-0 z-10 flex items-center justify-between border-b border-zinc-200 bg-white/95 px-6 py-4 backdrop-blur dark:border-white/10 dark:bg-black/90">
-        <div className="flex items-center gap-3">
-          <div className="relative h-9 w-9 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-white/15 dark:bg-zinc-950">
+      <nav className="sticky top-0 z-10 flex items-center justify-between border-b border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur md:px-6 md:py-4 dark:border-white/10 dark:bg-black/90">
+        {/* ── Logo + title ── */}
+        <div className="flex min-w-0 items-center gap-2 md:gap-3">
+          <div className="relative h-8 w-8 flex-shrink-0 overflow-hidden rounded-lg border border-zinc-200 bg-white md:h-9 md:w-9 dark:border-white/15 dark:bg-zinc-950">
             <Image
               src="/roi-logo.png"
               alt="Roi Action Extractor App logo"
@@ -1492,12 +1494,17 @@ function ActionExtractor() {
               priority
             />
           </div>
-          <span className="text-base font-bold tracking-tight text-zinc-900 dark:text-zinc-100 md:text-xl">
-            Roi Action Extractor App
+          {/* Full name on md+, short name on sm, hidden on xs */}
+          <span className="hidden text-sm font-bold tracking-tight text-zinc-900 sm:inline md:text-xl dark:text-zinc-100">
+            <span className="md:hidden">ROI Extractor</span>
+            <span className="hidden md:inline">Roi Action Extractor App</span>
           </span>
         </div>
 
-        <div className="flex items-center gap-3">
+        {/* ── Right controls ── */}
+        <div className="flex items-center gap-1.5 md:gap-3">
+
+          {/* Privacy / Terms — desktop only */}
           <div className="hidden items-center gap-3 text-xs font-medium text-zinc-500 md:flex dark:text-zinc-400">
             <Link className="transition-colors hover:text-zinc-800 dark:hover:text-zinc-100" href="/privacy-policy">
               Política de Privacidad
@@ -1507,39 +1514,48 @@ function ActionExtractor() {
             </Link>
           </div>
 
+          {/* Theme toggle — icon only on mobile, icon+label on sm+ */}
           <button
             onClick={toggleTheme}
-            className="inline-flex h-10 items-center gap-2 rounded-lg border border-zinc-300 bg-transparent px-3 text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:border-white/15 dark:text-zinc-300 dark:hover:bg-white/5 dark:hover:text-zinc-100 dark:shadow-[0_20px_44px_-24px_rgba(148,163,184,0.72)]"
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-transparent px-2.5 text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 md:h-10 md:px-3 dark:border-white/15 dark:text-zinc-300 dark:hover:bg-white/5 dark:hover:text-zinc-100"
             aria-label={theme === 'dark' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
             title={theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}
           >
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-            <span className="text-sm font-medium whitespace-nowrap">
+            <span className="hidden text-sm font-medium sm:inline whitespace-nowrap">
               {theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}
             </span>
           </button>
 
           {user ? (
             <>
-              <span className="hidden text-sm text-zinc-600 dark:text-zinc-300 md:inline">
-                {user.name} ({user.email})
+              {/* User email — desktop only */}
+              <span className="hidden max-w-[160px] truncate text-sm text-zinc-600 lg:inline dark:text-zinc-300">
+                {user.name ?? user.email}
               </span>
+
+              {/* Settings — icon only on mobile, icon+text on sm+ */}
               <Link
                 href="/settings"
-                className="rounded-lg border border-zinc-300 bg-transparent px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-white/15 dark:text-zinc-200 dark:hover:bg-white/5 dark:shadow-[0_20px_44px_-24px_rgba(148,163,184,0.72)]"
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-transparent px-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 md:h-10 md:px-3 dark:border-white/15 dark:text-zinc-200 dark:hover:bg-white/5"
+                title="Configuración"
               >
-                Configuración
+                <Settings2 size={16} />
+                <span className="hidden sm:inline">Configuración</span>
               </Link>
+
+              {/* Logout — icon only on mobile, icon+text on sm+ */}
               <button
                 onClick={handleLogout}
-                className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors duration-200 hover:bg-violet-700 dark:shadow-[0_24px_52px_-22px_rgba(139,92,246,0.96)]"
+                className="inline-flex h-9 items-center gap-2 rounded-lg bg-violet-600 px-2.5 text-sm font-medium text-white transition-colors duration-200 hover:bg-violet-700 md:h-10 md:px-4 dark:shadow-[0_24px_52px_-22px_rgba(139,92,246,0.96)]"
+                title="Salir"
               >
                 <LogOut size={16} />
-                Salir
+                <span className="hidden sm:inline">Salir</span>
               </button>
             </>
           ) : (
-            <span className="text-sm text-zinc-500 dark:text-zinc-400">Acceso requerido</span>
+            <span className="text-xs text-zinc-500 sm:text-sm dark:text-zinc-400">Acceso requerido</span>
           )}
         </div>
       </nav>
