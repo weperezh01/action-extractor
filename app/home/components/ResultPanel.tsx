@@ -324,7 +324,10 @@ export function ResultPanel({
   const [taskOpenSectionByTaskId, setTaskOpenSectionByTaskId] = useState<
     Record<string, 'gestion' | 'actividad' | 'evidencias' | null>
   >({})
-  // Community is open by default and toggled independently of the other sections
+  // One selected task at a time — community renders only for the selected task
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  // Per-task community visibility (true = shown, false = hidden by user toggle)
+  // Defaults to true when the task is first selected
   const [taskCommunityOpenByTaskId, setTaskCommunityOpenByTaskId] = useState<
     Record<string, boolean>
   >({})
@@ -457,6 +460,7 @@ export function ResultPanel({
     setTaskCommunityErrorByTaskId({})
     setTaskCommentDraftByTaskId({})
     setTaskOpenSectionByTaskId({})
+    setSelectedTaskId(null)
     setTaskCommunityOpenByTaskId({})
     autoFetchedCommunityRef.current = new Set()
     setTaskEstadoExpandedByTaskId({})
@@ -2245,11 +2249,11 @@ export function ResultPanel({
                               const isTaskActivityExpanded = openSection === 'actividad'
                               const isTaskGestionExpanded = openSection === 'gestion'
                               const isTaskEvidenceExpanded = openSection === 'evidencias'
-                              // Community is independent: open by default, toggled via its own header
-                              const isTaskCommunityExpanded = task
-                                ? (taskCommunityOpenByTaskId[task.id] ?? true)
-                                : false
-                              // Auto-fetch community data the first time the section becomes visible
+                              // Community shows only for the selected task, and only if not hidden by user
+                              const isTaskSelected = task ? task.id === selectedTaskId : false
+                              const isTaskCommunityExpanded =
+                                isTaskSelected && (taskCommunityOpenByTaskId[task?.id ?? ''] ?? true)
+                              // Auto-fetch community the first time the selected task's community becomes visible
                               if (isTaskCommunityExpanded && task && !(task.id in taskCommentsByTaskId) && !autoFetchedCommunityRef.current.has(task.id)) {
                                 autoFetchedCommunityRef.current.add(task.id)
                                 void fetchTaskCommunity(task.id)
@@ -2369,10 +2373,23 @@ export function ResultPanel({
                                         </div>
                                       </div>
 
-                                      {/* Text — full width, plain display */}
-                                      <div className="w-full rounded-lg px-1 py-0.5">
+                                      {/* Text — click to select this task (opens community) */}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (!task) return
+                                          setSelectedTaskId((prev) =>
+                                            prev === task.id ? null : task.id
+                                          )
+                                        }}
+                                        className={`w-full text-left rounded-lg px-1 py-0.5 transition-colors ${
+                                          isTaskSelected
+                                            ? 'bg-violet-50 dark:bg-violet-900/20'
+                                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                                        }`}
+                                      >
                                         <span className="text-slate-600 leading-relaxed text-sm dark:text-slate-300">{item}</span>
-                                      </div>
+                                      </button>
 
                                       {isTaskMutating && (
                                         <Loader2 size={14} className="mt-1 animate-spin text-indigo-500 dark:text-indigo-300" />
@@ -2545,46 +2562,47 @@ export function ResultPanel({
                                     </div>
                                   </div>
 
-                                  {/* Comunidad inline collapsible */}
-                                  <div
-                                    aria-hidden={!isTaskCommunityExpanded || !task}
-                                    className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
-                                      isTaskCommunityExpanded && task
-                                        ? 'grid-rows-[1fr] opacity-100'
-                                        : 'grid-rows-[0fr] opacity-0'
-                                    }`}
-                                  >
-                                    <div className="overflow-hidden">
-                                      <div className="border-t border-slate-200 px-3 py-3 dark:border-slate-700">
-                                        {task && (
-                                          <>
-                                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                              <button
-                                                type="button"
-                                                onClick={() => {
-                                                  if (!task) return
-                                                  setTaskCommunityOpenByTaskId((prev) => ({
-                                                    ...prev,
-                                                    [task.id]: !(prev[task.id] ?? true),
-                                                  }))
-                                                }}
-                                                className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-700 dark:text-slate-300 dark:hover:text-slate-100 transition-colors"
-                                              >
-                                                <MessageSquare size={12} />
-                                                Comunidad
-                                                {isTaskCommunityExpanded
-                                                  ? <ChevronUp size={10} className="opacity-60" />
-                                                  : <ChevronDown size={10} className="opacity-60" />
-                                                }
-                                              </button>
-                                              {(isTaskCommunityLoading || isTaskCommunityMutating) && (
-                                                <p className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400">
-                                                  <Loader2 size={12} className="animate-spin" />
-                                                  Actualizando...
-                                                </p>
-                                              )}
-                                            </div>
+                                  {/* Comunidad — solo visible cuando el ítem está seleccionado */}
+                                  {isTaskSelected && task && (
+                                    <div className="border-t border-slate-100 dark:border-slate-800">
+                                      {/* Header siempre visible: toggle comunidad */}
+                                      <div className="flex flex-wrap items-center justify-between gap-2 px-3 pt-2 pb-1">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setTaskCommunityOpenByTaskId((prev) => ({
+                                              ...prev,
+                                              [task.id]: !(prev[task.id] ?? true),
+                                            }))
+                                          }}
+                                          className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-700 dark:text-slate-300 dark:hover:text-slate-100 transition-colors"
+                                        >
+                                          <MessageSquare size={12} />
+                                          Comunidad
+                                          {isTaskCommunityExpanded
+                                            ? <ChevronUp size={10} className="opacity-60" />
+                                            : <ChevronDown size={10} className="opacity-60" />
+                                          }
+                                        </button>
+                                        {(isTaskCommunityLoading || isTaskCommunityMutating) && (
+                                          <p className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400">
+                                            <Loader2 size={12} className="animate-spin" />
+                                            Actualizando...
+                                          </p>
+                                        )}
+                                      </div>
 
+                                      {/* Contenido colapsable */}
+                                      <div
+                                        aria-hidden={!isTaskCommunityExpanded}
+                                        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
+                                          isTaskCommunityExpanded
+                                            ? 'grid-rows-[1fr] opacity-100'
+                                            : 'grid-rows-[0fr] opacity-0'
+                                        }`}
+                                      >
+                                        <div className="overflow-hidden">
+                                          <div className="px-3 pb-3">
                                             {taskCommunityError && (
                                               <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
                                                 {taskCommunityError}
@@ -2704,11 +2722,11 @@ export function ResultPanel({
                                                 ))}
                                               </ul>
                                             )}
-                                          </>
-                                        )}
+                                          </div>
+                                        </div>
                                       </div>
                                     </div>
-                                  </div>
+                                  )}
 
                                   <div
                                     aria-hidden={!isTaskExpanded || !task}
