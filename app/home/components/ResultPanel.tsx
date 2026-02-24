@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlignLeft,
   AlertTriangle,
+  Bell,
   Brain,
   CheckCircle2,
   ChevronDown,
@@ -321,8 +322,14 @@ export function ResultPanel({
   >({})
   const [taskCommentDraftByTaskId, setTaskCommentDraftByTaskId] = useState<Record<string, string>>({})
   const [taskOpenSectionByTaskId, setTaskOpenSectionByTaskId] = useState<
-    Record<string, 'gestion' | 'actividad' | 'evidencias' | 'comunidad' | null>
+    Record<string, 'gestion' | 'actividad' | 'evidencias' | null>
   >({})
+  // Community is open by default and toggled independently of the other sections
+  const [taskCommunityOpenByTaskId, setTaskCommunityOpenByTaskId] = useState<
+    Record<string, boolean>
+  >({})
+  // Tracks tasks whose community data has already been auto-fetched (per mount)
+  const autoFetchedCommunityRef = useRef<Set<string>>(new Set())
   const [taskEstadoExpandedByTaskId, setTaskEstadoExpandedByTaskId] = useState<
     Record<string, boolean>
   >({})
@@ -450,6 +457,8 @@ export function ResultPanel({
     setTaskCommunityErrorByTaskId({})
     setTaskCommentDraftByTaskId({})
     setTaskOpenSectionByTaskId({})
+    setTaskCommunityOpenByTaskId({})
+    autoFetchedCommunityRef.current = new Set()
     setTaskEstadoExpandedByTaskId({})
     setTaskAddEvidenceExpandedByTaskId({})
     taskFileInputRefs.current = {}
@@ -2230,13 +2239,21 @@ export function ResultPanel({
                               const isTaskCommunityMutating = task
                                 ? taskCommunityMutationId === task.id
                                 : false
-                              const openSection = task
+                                              const openSection = task
                                 ? (taskOpenSectionByTaskId[task.id] ?? null)
                                 : null
                               const isTaskActivityExpanded = openSection === 'actividad'
                               const isTaskGestionExpanded = openSection === 'gestion'
                               const isTaskEvidenceExpanded = openSection === 'evidencias'
-                              const isTaskCommunityExpanded = openSection === 'comunidad'
+                              // Community is independent: open by default, toggled via its own header
+                              const isTaskCommunityExpanded = task
+                                ? (taskCommunityOpenByTaskId[task.id] ?? true)
+                                : false
+                              // Auto-fetch community data the first time the section becomes visible
+                              if (isTaskCommunityExpanded && task && !(task.id in taskCommentsByTaskId) && !autoFetchedCommunityRef.current.has(task.id)) {
+                                autoFetchedCommunityRef.current.add(task.id)
+                                void fetchTaskCommunity(task.id)
+                              }
                               const isTaskEstadoExpanded = task
                                 ? (taskEstadoExpandedByTaskId[task.id] ?? false)
                                 : false
@@ -2352,28 +2369,10 @@ export function ResultPanel({
                                         </div>
                                       </div>
 
-                                      {/* Text — full width, clickable for community */}
-                                      <button
-                                        type="button"
-                                        className={`w-full text-left rounded-lg px-1 py-0.5 transition-colors ${
-                                          isTaskCommunityExpanded
-                                            ? 'bg-violet-50 dark:bg-violet-900/20'
-                                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
-                                        }`}
-                                        onClick={() => {
-                                          if (!task) return
-                                          const isOpening = (taskOpenSectionByTaskId[task.id] ?? null) !== 'comunidad'
-                                          setTaskOpenSectionByTaskId((prev) => ({
-                                            ...prev,
-                                            [task.id]: prev[task.id] === 'comunidad' ? null : 'comunidad',
-                                          }))
-                                          if (isOpening && !(task.id in taskCommentsByTaskId)) {
-                                            void fetchTaskCommunity(task.id)
-                                          }
-                                        }}
-                                      >
+                                      {/* Text — full width, plain display */}
+                                      <div className="w-full rounded-lg px-1 py-0.5">
                                         <span className="text-slate-600 leading-relaxed text-sm dark:text-slate-300">{item}</span>
-                                      </button>
+                                      </div>
 
                                       {isTaskMutating && (
                                         <Loader2 size={14} className="mt-1 animate-spin text-indigo-500 dark:text-indigo-300" />
@@ -2560,10 +2559,24 @@ export function ResultPanel({
                                         {task && (
                                           <>
                                             <div className="flex flex-wrap items-center justify-between gap-2">
-                                              <p className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  if (!task) return
+                                                  setTaskCommunityOpenByTaskId((prev) => ({
+                                                    ...prev,
+                                                    [task.id]: !(prev[task.id] ?? true),
+                                                  }))
+                                                }}
+                                                className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-700 dark:text-slate-300 dark:hover:text-slate-100 transition-colors"
+                                              >
                                                 <MessageSquare size={12} />
                                                 Comunidad
-                                              </p>
+                                                {isTaskCommunityExpanded
+                                                  ? <ChevronUp size={10} className="opacity-60" />
+                                                  : <ChevronDown size={10} className="opacity-60" />
+                                                }
+                                              </button>
                                               {(isTaskCommunityLoading || isTaskCommunityMutating) && (
                                                 <p className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400">
                                                   <Loader2 size={12} className="animate-spin" />
@@ -2579,7 +2592,8 @@ export function ResultPanel({
                                             )}
 
                                             {taskLikeSummary && (
-                                              <div className="mt-2">
+                                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                {/* Me gusta */}
                                                 <button
                                                   type="button"
                                                   onClick={() => void handleToggleTaskLike(task)}
@@ -2595,6 +2609,28 @@ export function ResultPanel({
                                                   <span className="rounded bg-slate-200/60 px-1 py-0.5 text-[10px] dark:bg-slate-700/80">
                                                     {taskLikeSummary.likesCount}
                                                   </span>
+                                                </button>
+
+                                                {/* Compartir — sin funcionalidad aún */}
+                                                <button
+                                                  type="button"
+                                                  disabled
+                                                  title="Próximamente"
+                                                  className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-500 opacity-60 cursor-not-allowed dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400"
+                                                >
+                                                  <Share2 size={12} />
+                                                  Compartir
+                                                </button>
+
+                                                {/* Seguir — sin funcionalidad aún */}
+                                                <button
+                                                  type="button"
+                                                  disabled
+                                                  title="Próximamente"
+                                                  className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-500 opacity-60 cursor-not-allowed dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400"
+                                                >
+                                                  <Bell size={12} />
+                                                  Seguir
                                                 </button>
                                               </div>
                                             )}
