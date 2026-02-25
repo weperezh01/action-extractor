@@ -14,7 +14,7 @@ function parseExtractionId(raw: unknown) {
 }
 
 function parseVisibility(raw: unknown): ExtractionShareVisibility | null {
-  if (raw === 'public' || raw === 'private') {
+  if (raw === 'public' || raw === 'private' || raw === 'unlisted' || raw === 'circle') {
     return raw
   }
   return null

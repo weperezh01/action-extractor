@@ -3,6 +3,7 @@
 import Image from 'next/image'
 import { AlignLeft, FileText, Folder, Globe, PenLine, Play } from 'lucide-react'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
+import { getShareVisibilityLabel } from '@/app/home/lib/share-visibility'
 import { formatHistoryDate } from '@/app/home/lib/utils'
 import type { HistoryItem, SourceType } from '@/app/home/lib/types'
 import type { FolderItem } from '@/app/home/components/FolderDock'
@@ -132,10 +133,14 @@ export function PlaybookSideTabs({
                         className={`rounded-full border px-2 py-0.5 font-semibold ${
                           item.shareVisibility === 'public'
                             ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                            : 'border-slate-200 bg-slate-100 text-slate-600'
+                            : item.shareVisibility === 'unlisted'
+                              ? 'border-amber-200 bg-amber-50 text-amber-700'
+                              : item.shareVisibility === 'circle'
+                                ? 'border-sky-200 bg-sky-50 text-sky-700'
+                                : 'border-slate-200 bg-slate-100 text-slate-600'
                         }`}
                       >
-                        {item.shareVisibility === 'public' ? 'Público' : 'Privado'}
+                        {getShareVisibilityLabel(item.shareVisibility)}
                       </span>
                       {assignedFolder && (
                         <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-semibold ${folderMeta?.active ?? ''}`}>

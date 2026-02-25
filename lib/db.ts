@@ -51,6 +51,22 @@ export interface DbExtractionFolder {
   updated_at: string
 }
 
+export interface DbExtractionMember {
+  extraction_id: string
+  user_id: string
+  role: ExtractionMemberRole
+  created_at: string
+  user_name: string | null
+  user_email: string | null
+}
+
+export interface DbCircleExtraction {
+  extraction: DbExtraction
+  access_role: ExtractionMemberRole
+  owner_name: string | null
+  owner_email: string | null
+}
+
 export interface DbVideoCache {
   video_id: string
   video_title: string | null
@@ -123,7 +139,52 @@ export interface DbGoogleDocsConnection {
   last_used_at: string
 }
 
-export type ExtractionShareVisibility = 'private' | 'public'
+export type ExtractionShareVisibility = 'private' | 'circle' | 'unlisted' | 'public'
+export type ExtractionMemberRole = 'editor' | 'viewer'
+export type ExtractionAccessRole = 'owner' | ExtractionMemberRole
+
+export type CommunityPostVisibility = 'private' | 'circle' | 'followers' | 'public'
+export type CommunityPostReactionType = 'like'
+export type CommunityPostAttachmentType = 'link' | 'image' | 'audio' | 'video' | 'file'
+export type CommunityPostAttachmentStorageProvider = 'external' | 'cloudinary'
+
+export interface DbCommunityPost {
+  id: string
+  user_id: string
+  user_name: string | null
+  user_email: string | null
+  content: string
+  visibility: CommunityPostVisibility
+  metadata_json: string
+  source_extraction_id: string | null
+  source_task_id: string | null
+  source_label: string | null
+  reactions_count: number
+  comments_count: number
+  views_count: number
+  reacted_by_me: boolean
+  following_author: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface DbCommunityPostComment {
+  id: string
+  post_id: string
+  user_id: string
+  user_name: string | null
+  user_email: string | null
+  content: string
+  created_at: string
+  updated_at: string
+}
+
+export interface DbCommunityPostReactionSummary {
+  post_id: string
+  reaction_type: CommunityPostReactionType
+  reactions_count: number
+  reacted_by_me: boolean
+}
 
 export type ExtractionTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed'
 export type ExtractionTaskEventType = 'note' | 'pending_action' | 'blocker' | 'resolved'
@@ -194,6 +255,12 @@ export interface DbExtractionTaskLikeSummary {
   extraction_id: string
   likes_count: number
   liked_by_me: boolean
+  shares_count: number
+  shared_by_me: boolean
+  followers_count: number
+  following_by_me: boolean
+  views_count: number
+  viewed_by_me: boolean
 }
 
 export type ChatMessageRole = 'user' | 'assistant'
@@ -339,6 +406,25 @@ interface DbExtractionFolderRow {
   updated_at: Date | string
 }
 
+interface DbExtractionMemberRow {
+  extraction_id: string
+  user_id: string
+  role: string
+  created_at: Date | string
+  user_name: string | null
+  user_email: string | null
+}
+
+interface DbCircleExtractionRow extends DbExtractionRow {
+  access_role: string
+  owner_name: string | null
+  owner_email: string | null
+}
+
+interface DbExtractionAccessRow extends DbExtractionRow {
+  access_role: string | null
+}
+
 interface DbVideoCacheRow {
   video_id: string
   video_title: string | null
@@ -473,6 +559,43 @@ interface DbExtractionTaskCommentRow {
 interface DbExtractionTaskLikeSummaryRow {
   likes_count: number | string
   liked_by_me: boolean
+  shares_count: number | string
+  shared_by_me: boolean
+  followers_count: number | string
+  following_by_me: boolean
+  views_count: number | string
+  viewed_by_me: boolean
+}
+
+interface DbCommunityPostRow {
+  id: string
+  user_id: string
+  user_name: string | null
+  user_email: string | null
+  content: string
+  visibility: string
+  metadata_json: string
+  source_extraction_id: string | null
+  source_task_id: string | null
+  source_label: string | null
+  reactions_count: number | string
+  comments_count: number | string
+  views_count: number | string
+  reacted_by_me: boolean | null
+  following_author: boolean | null
+  created_at: Date | string
+  updated_at: Date | string
+}
+
+interface DbCommunityPostCommentRow {
+  id: string
+  post_id: string
+  user_id: string
+  content: string
+  created_at: Date | string
+  updated_at: Date | string
+  user_name: string | null
+  user_email: string | null
 }
 
 interface DbChatConversationRow {
@@ -495,6 +618,11 @@ interface DbChatMessageRow {
 }
 
 interface DbExtractionRateLimitRow {
+  window_start: Date | string
+  request_count: number | string
+}
+
+interface DbCommunityActionRateLimitRow {
   window_start: Date | string
   request_count: number | string
 }
@@ -692,6 +820,15 @@ const INIT_SQL = `
     PRIMARY KEY (user_id, window_start)
   );
 
+  CREATE TABLE IF NOT EXISTS community_action_rate_limits (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    action_key TEXT NOT NULL,
+    window_start TIMESTAMPTZ NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, action_key, window_start)
+  );
+
   CREATE TABLE IF NOT EXISTS extraction_tasks (
     id TEXT PRIMARY KEY,
     extraction_id TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
@@ -755,6 +892,33 @@ const INIT_SQL = `
     UNIQUE (task_id, user_id)
   );
 
+  CREATE TABLE IF NOT EXISTS extraction_task_follows (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES extraction_tasks(id) ON DELETE CASCADE,
+    extraction_id TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (task_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS extraction_task_shares (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES extraction_tasks(id) ON DELETE CASCADE,
+    extraction_id TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (task_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS extraction_task_views (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES extraction_tasks(id) ON DELETE CASCADE,
+    extraction_id TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (task_id, user_id)
+  );
+
   CREATE TABLE IF NOT EXISTS chat_conversations (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -798,6 +962,12 @@ const INIT_SQL = `
   ALTER TABLE extraction_task_comments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   ALTER TABLE extraction_task_likes ADD COLUMN IF NOT EXISTS extraction_id TEXT REFERENCES extractions(id) ON DELETE CASCADE;
   ALTER TABLE extraction_task_likes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE extraction_task_follows ADD COLUMN IF NOT EXISTS extraction_id TEXT REFERENCES extractions(id) ON DELETE CASCADE;
+  ALTER TABLE extraction_task_follows ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE extraction_task_shares ADD COLUMN IF NOT EXISTS extraction_id TEXT REFERENCES extractions(id) ON DELETE CASCADE;
+  ALTER TABLE extraction_task_shares ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE extraction_task_views ADD COLUMN IF NOT EXISTS extraction_id TEXT REFERENCES extractions(id) ON DELETE CASCADE;
+  ALTER TABLE extraction_task_views ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT 'Asistente de Contenidos';
   ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
@@ -836,6 +1006,8 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_todoist_connections_last_used_at ON todoist_connections(last_used_at);
   CREATE INDEX IF NOT EXISTS idx_google_docs_connections_last_used_at ON google_docs_connections(last_used_at);
   CREATE INDEX IF NOT EXISTS idx_extraction_rate_limits_window_start ON extraction_rate_limits(window_start);
+  CREATE INDEX IF NOT EXISTS idx_community_action_rate_limits_window_start ON community_action_rate_limits(window_start);
+  CREATE INDEX IF NOT EXISTS idx_community_action_rate_limits_action_key ON community_action_rate_limits(action_key);
   CREATE INDEX IF NOT EXISTS idx_extraction_tasks_extraction_id ON extraction_tasks(extraction_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_tasks_user_id ON extraction_tasks(user_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_tasks_status ON extraction_tasks(status);
@@ -851,6 +1023,15 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_extraction_task_likes_task_id ON extraction_task_likes(task_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_task_likes_extraction_id ON extraction_task_likes(extraction_id);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_extraction_task_likes_task_user_unique ON extraction_task_likes(task_id, user_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_task_follows_task_id ON extraction_task_follows(task_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_task_follows_extraction_id ON extraction_task_follows(extraction_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_extraction_task_follows_task_user_unique ON extraction_task_follows(task_id, user_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_task_shares_task_id ON extraction_task_shares(task_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_task_shares_extraction_id ON extraction_task_shares(extraction_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_extraction_task_shares_task_user_unique ON extraction_task_shares(task_id, user_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_task_views_task_id ON extraction_task_views(task_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_task_views_extraction_id ON extraction_task_views(extraction_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_extraction_task_views_task_user_unique ON extraction_task_views(task_id, user_id);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_conversations_user_id ON chat_conversations(user_id);
   CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_created ON chat_messages(conversation_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_chat_messages_user_created ON chat_messages(user_id, created_at);
@@ -894,16 +1075,30 @@ const INIT_SQL = `
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
+  CREATE TABLE IF NOT EXISTS extraction_members (
+    extraction_id TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'viewer',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (extraction_id, user_id),
+    CONSTRAINT extraction_members_role_check CHECK (role IN ('editor', 'viewer'))
+  );
+
   ALTER TABLE extraction_folders ADD COLUMN IF NOT EXISTS user_id TEXT;
   ALTER TABLE extraction_folders ADD COLUMN IF NOT EXISTS name TEXT;
   ALTER TABLE extraction_folders ADD COLUMN IF NOT EXISTS color TEXT NOT NULL DEFAULT 'indigo';
   ALTER TABLE extraction_folders ADD COLUMN IF NOT EXISTS parent_id TEXT;
   ALTER TABLE extraction_folders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   ALTER TABLE extraction_folders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE extraction_members ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'viewer';
+  ALTER TABLE extraction_members ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
   CREATE INDEX IF NOT EXISTS idx_extraction_folders_user_id ON extraction_folders(user_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_folders_parent_id ON extraction_folders(parent_id);
   CREATE INDEX IF NOT EXISTS idx_extractions_folder_id ON extractions(folder_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_members_user_id ON extraction_members(user_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_members_extraction_id ON extraction_members(extraction_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_members_role ON extraction_members(role);
 
   CREATE TABLE IF NOT EXISTS guest_extraction_limits (
     guest_id    TEXT    NOT NULL,
@@ -974,9 +1169,118 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_guest_task_attachments_task_id ON guest_task_attachments(task_id);
   CREATE INDEX IF NOT EXISTS idx_guest_task_comments_task_id ON guest_task_comments(task_id);
   CREATE INDEX IF NOT EXISTS idx_guest_task_likes_task_id ON guest_task_likes(task_id);
+
+  CREATE TABLE IF NOT EXISTS community_posts (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    visibility TEXT NOT NULL DEFAULT 'public',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT community_posts_visibility_check CHECK (visibility IN ('private', 'circle', 'followers', 'public'))
+  );
+
+  CREATE TABLE IF NOT EXISTS community_post_sources (
+    id TEXT PRIMARY KEY,
+    post_id TEXT NOT NULL REFERENCES community_posts(id) ON DELETE CASCADE,
+    extraction_id TEXT REFERENCES extractions(id) ON DELETE CASCADE,
+    task_id TEXT REFERENCES extraction_tasks(id) ON DELETE CASCADE,
+    source_label TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS community_post_attachments (
+    id TEXT PRIMARY KEY,
+    post_id TEXT NOT NULL REFERENCES community_posts(id) ON DELETE CASCADE,
+    attachment_type TEXT NOT NULL DEFAULT 'link',
+    storage_provider TEXT NOT NULL DEFAULT 'external',
+    url TEXT NOT NULL,
+    thumbnail_url TEXT,
+    title TEXT,
+    mime_type TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT community_post_attachments_type_check CHECK (attachment_type IN ('link', 'image', 'audio', 'video', 'file')),
+    CONSTRAINT community_post_attachments_storage_check CHECK (storage_provider IN ('external', 'cloudinary'))
+  );
+
+  CREATE TABLE IF NOT EXISTS community_follows (
+    follower_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    following_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (follower_user_id, following_user_id),
+    CONSTRAINT community_follows_not_self CHECK (follower_user_id <> following_user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS community_post_reactions (
+    id TEXT PRIMARY KEY,
+    post_id TEXT NOT NULL REFERENCES community_posts(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reaction_type TEXT NOT NULL DEFAULT 'like',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT community_post_reactions_type_check CHECK (reaction_type IN ('like')),
+    UNIQUE (post_id, user_id, reaction_type)
+  );
+
+  CREATE TABLE IF NOT EXISTS community_post_comments (
+    id TEXT PRIMARY KEY,
+    post_id TEXT NOT NULL REFERENCES community_posts(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS community_post_views (
+    id TEXT PRIMARY KEY,
+    post_id TEXT NOT NULL REFERENCES community_posts(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (post_id, user_id)
+  );
+
+  ALTER TABLE community_posts ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public';
+  ALTER TABLE community_posts ADD COLUMN IF NOT EXISTS metadata_json TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE community_posts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE community_posts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE community_post_sources ADD COLUMN IF NOT EXISTS extraction_id TEXT REFERENCES extractions(id) ON DELETE CASCADE;
+  ALTER TABLE community_post_sources ADD COLUMN IF NOT EXISTS task_id TEXT REFERENCES extraction_tasks(id) ON DELETE CASCADE;
+  ALTER TABLE community_post_sources ADD COLUMN IF NOT EXISTS source_label TEXT;
+  ALTER TABLE community_post_sources ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE community_post_attachments ADD COLUMN IF NOT EXISTS attachment_type TEXT NOT NULL DEFAULT 'link';
+  ALTER TABLE community_post_attachments ADD COLUMN IF NOT EXISTS storage_provider TEXT NOT NULL DEFAULT 'external';
+  ALTER TABLE community_post_attachments ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
+  ALTER TABLE community_post_attachments ADD COLUMN IF NOT EXISTS title TEXT;
+  ALTER TABLE community_post_attachments ADD COLUMN IF NOT EXISTS mime_type TEXT;
+  ALTER TABLE community_post_attachments ADD COLUMN IF NOT EXISTS metadata_json TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE community_post_attachments ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE community_post_attachments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE community_post_reactions ADD COLUMN IF NOT EXISTS reaction_type TEXT NOT NULL DEFAULT 'like';
+  ALTER TABLE community_post_reactions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE community_post_comments ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE community_post_comments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE community_post_views ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+  CREATE INDEX IF NOT EXISTS idx_community_posts_user_id ON community_posts(user_id);
+  CREATE INDEX IF NOT EXISTS idx_community_posts_visibility ON community_posts(visibility);
+  CREATE INDEX IF NOT EXISTS idx_community_posts_created_at ON community_posts(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_community_post_sources_post_id ON community_post_sources(post_id);
+  CREATE INDEX IF NOT EXISTS idx_community_post_sources_extraction_id ON community_post_sources(extraction_id);
+  CREATE INDEX IF NOT EXISTS idx_community_post_sources_task_id ON community_post_sources(task_id);
+  CREATE INDEX IF NOT EXISTS idx_community_post_attachments_post_id ON community_post_attachments(post_id);
+  CREATE INDEX IF NOT EXISTS idx_community_follows_follower ON community_follows(follower_user_id);
+  CREATE INDEX IF NOT EXISTS idx_community_follows_following ON community_follows(following_user_id);
+  CREATE INDEX IF NOT EXISTS idx_community_post_reactions_post_id ON community_post_reactions(post_id);
+  CREATE INDEX IF NOT EXISTS idx_community_post_reactions_user_id ON community_post_reactions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_community_post_comments_post_id ON community_post_comments(post_id);
+  CREATE INDEX IF NOT EXISTS idx_community_post_comments_user_id ON community_post_comments(user_id);
+  CREATE INDEX IF NOT EXISTS idx_community_post_views_post_id ON community_post_views(post_id);
+  CREATE INDEX IF NOT EXISTS idx_community_post_views_user_id ON community_post_views(user_id);
 `
 
-const DB_INIT_SIGNATURE = '2026-02-24-folders-db-v1'
+const DB_INIT_SIGNATURE = '2026-02-24-community-stage3-v3'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -1038,7 +1342,29 @@ function parseDbNullableInteger(value: unknown) {
 }
 
 function normalizeExtractionShareVisibility(value: unknown): ExtractionShareVisibility {
-  return value === 'public' ? 'public' : 'private'
+  if (value === 'public') return 'public'
+  if (value === 'unlisted') return 'unlisted'
+  if (value === 'circle') return 'circle'
+  return 'private'
+}
+
+function normalizeCommunityPostVisibility(value: unknown): CommunityPostVisibility {
+  if (value === 'private') return 'private'
+  if (value === 'circle') return 'circle'
+  if (value === 'followers') return 'followers'
+  return 'public'
+}
+
+function normalizeExtractionMemberRole(value: unknown): ExtractionMemberRole {
+  if (value === 'editor') return 'editor'
+  return 'viewer'
+}
+
+function normalizeExtractionAccessRole(value: unknown): ExtractionAccessRole | null {
+  if (value === 'owner') return 'owner'
+  if (value === 'editor') return 'editor'
+  if (value === 'viewer') return 'viewer'
+  return null
 }
 
 function mapUserRow(row: DbUserRow): DbUser {
@@ -1119,6 +1445,17 @@ function mapExtractionFolderRow(row: DbExtractionFolderRow): DbExtractionFolder 
     parent_id: row.parent_id ?? null,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
+  }
+}
+
+function mapExtractionMemberRow(row: DbExtractionMemberRow): DbExtractionMember {
+  return {
+    extraction_id: row.extraction_id,
+    user_id: row.user_id,
+    role: normalizeExtractionMemberRole(row.role),
+    created_at: toIso(row.created_at),
+    user_name: row.user_name ?? null,
+    user_email: row.user_email ?? null,
   }
 }
 
@@ -1289,6 +1626,41 @@ function mapExtractionTaskCommentRow(row: DbExtractionTaskCommentRow): DbExtract
   }
 }
 
+function mapCommunityPostRow(row: DbCommunityPostRow): DbCommunityPost {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    user_name: row.user_name ?? null,
+    user_email: row.user_email ?? null,
+    content: row.content,
+    visibility: normalizeCommunityPostVisibility(row.visibility),
+    metadata_json: row.metadata_json || '{}',
+    source_extraction_id: row.source_extraction_id ?? null,
+    source_task_id: row.source_task_id ?? null,
+    source_label: row.source_label ?? null,
+    reactions_count: parseDbInteger(row.reactions_count),
+    comments_count: parseDbInteger(row.comments_count),
+    views_count: parseDbInteger(row.views_count),
+    reacted_by_me: row.reacted_by_me === true,
+    following_author: row.following_author === true,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  }
+}
+
+function mapCommunityPostCommentRow(row: DbCommunityPostCommentRow): DbCommunityPostComment {
+  return {
+    id: row.id,
+    post_id: row.post_id,
+    user_id: row.user_id,
+    user_name: row.user_name ?? null,
+    user_email: row.user_email ?? null,
+    content: row.content,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  }
+}
+
 function normalizeChatMessageRole(value: unknown): ChatMessageRole {
   return value === 'assistant' ? 'assistant' : 'user'
 }
@@ -1315,6 +1687,102 @@ function mapChatMessageRow(row: DbChatMessageRow): DbChatMessage {
     updated_at: toIso(row.updated_at),
   }
 }
+
+const COMMUNITY_POST_CAN_VIEW_SQL = `
+  (
+    p.user_id = $1
+    OR p.visibility = 'public'
+    OR (
+      p.visibility = 'followers'
+      AND EXISTS (
+        SELECT 1
+        FROM community_follows cf
+        WHERE
+          cf.follower_user_id = $1
+          AND cf.following_user_id = p.user_id
+      )
+    )
+    OR (
+      p.visibility = 'circle'
+      AND EXISTS (
+        SELECT 1
+        FROM community_post_sources cps
+        INNER JOIN extractions e ON e.id = cps.extraction_id
+        LEFT JOIN extraction_members em
+          ON em.extraction_id = e.id
+         AND em.user_id = $1
+        WHERE
+          cps.post_id = p.id
+          AND (
+            e.user_id = $1
+            OR em.user_id IS NOT NULL
+          )
+      )
+    )
+  )
+`
+
+const COMMUNITY_POST_SELECT_SQL = `
+  SELECT
+    p.id,
+    p.user_id,
+    u.name AS user_name,
+    u.email AS user_email,
+    p.content,
+    p.visibility,
+    p.metadata_json,
+    src.extraction_id AS source_extraction_id,
+    src.task_id AS source_task_id,
+    src.source_label,
+    COALESCE(rc.reactions_count, 0)::int AS reactions_count,
+    COALESCE(cc.comments_count, 0)::int AS comments_count,
+    COALESCE(vc.views_count, 0)::int AS views_count,
+    COALESCE(rc.reacted_by_me, FALSE) AS reacted_by_me,
+    EXISTS (
+      SELECT 1
+      FROM community_follows cf
+      WHERE
+        cf.follower_user_id = $1
+        AND cf.following_user_id = p.user_id
+    ) AS following_author,
+    p.created_at,
+    p.updated_at
+  FROM community_posts p
+  INNER JOIN users u
+    ON u.id = p.user_id
+  LEFT JOIN LATERAL (
+    SELECT
+      cps.extraction_id,
+      cps.task_id,
+      cps.source_label
+    FROM community_post_sources cps
+    WHERE cps.post_id = p.id
+    ORDER BY cps.created_at ASC, cps.id ASC
+    LIMIT 1
+  ) src ON TRUE
+  LEFT JOIN (
+    SELECT
+      post_id,
+      COUNT(*)::int AS reactions_count,
+      BOOL_OR(user_id = $1) AS reacted_by_me
+    FROM community_post_reactions
+    GROUP BY post_id
+  ) rc ON rc.post_id = p.id
+  LEFT JOIN (
+    SELECT
+      post_id,
+      COUNT(*)::int AS comments_count
+    FROM community_post_comments
+    GROUP BY post_id
+  ) cc ON cc.post_id = p.id
+  LEFT JOIN (
+    SELECT
+      post_id,
+      COUNT(*)::int AS views_count
+    FROM community_post_views
+    GROUP BY post_id
+  ) vc ON vc.post_id = p.id
+`
 
 export async function ensureDbReady() {
   await getDbReadyPromise()
@@ -1571,6 +2039,53 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
   return rows.map(mapExtractionRow)
 }
 
+export async function listCircleExtractionsForMember(userId: string, limit = 30) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbCircleExtractionRow>(
+    `
+      SELECT
+        e.id,
+        e.user_id,
+        e.url,
+        e.video_id,
+        e.video_title,
+        e.thumbnail_url,
+        e.extraction_mode,
+        e.objective,
+        e.phases_json,
+        e.pro_tip,
+        e.metadata_json,
+        e.share_visibility,
+        e.created_at,
+        e.source_type,
+        e.source_label,
+        e.folder_id,
+        m.role AS access_role,
+        owner.name AS owner_name,
+        owner.email AS owner_email
+      FROM extraction_members m
+      INNER JOIN extractions e ON e.id = m.extraction_id
+      INNER JOIN users owner ON owner.id = e.user_id
+      WHERE
+        m.user_id = $1
+        AND e.user_id <> $1
+        AND e.share_visibility = 'circle'
+      ORDER BY e.created_at DESC, e.id DESC
+      LIMIT $2
+    `,
+    [userId, limit]
+  )
+
+  return rows
+    .map((row) => ({
+      extraction: mapExtractionRow(row),
+      access_role: normalizeExtractionMemberRole(row.access_role),
+      owner_name: row.owner_name ?? null,
+      owner_email: row.owner_email ?? null,
+    }))
+    .filter((row): row is DbCircleExtraction => row.access_role === 'editor' || row.access_role === 'viewer')
+}
+
 export async function findExtractionOrderNumberForUser(input: { id: string; userId: string }) {
   await ensureDbReady()
   const { rows } = await pool.query<DbExtractionOrderNumberRow>(
@@ -1649,6 +2164,52 @@ export async function findExtractionById(id: string) {
   return rows[0] ? mapExtractionRow(rows[0]) : null
 }
 
+export async function findExtractionAccessForUser(input: { id: string; userId: string }) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionAccessRow>(
+    `
+      SELECT
+        e.id,
+        e.user_id,
+        e.url,
+        e.video_id,
+        e.video_title,
+        e.thumbnail_url,
+        e.extraction_mode,
+        e.objective,
+        e.phases_json,
+        e.pro_tip,
+        e.metadata_json,
+        e.share_visibility,
+        e.created_at,
+        e.source_type,
+        e.source_label,
+        e.folder_id,
+        CASE
+          WHEN e.user_id = $2 THEN 'owner'
+          WHEN e.share_visibility = 'circle' THEN m.role
+          ELSE NULL
+        END AS access_role
+      FROM extractions e
+      LEFT JOIN extraction_members m
+        ON m.extraction_id = e.id
+        AND m.user_id = $2
+      WHERE e.id = $1
+      LIMIT 1
+    `,
+    [input.id, input.userId]
+  )
+
+  if (!rows[0]) {
+    return { extraction: null, role: null as ExtractionAccessRole | null }
+  }
+
+  return {
+    extraction: mapExtractionRow(rows[0]),
+    role: normalizeExtractionAccessRole(rows[0].access_role),
+  }
+}
+
 export async function findExtractionByIdForUser(input: { id: string; userId: string }) {
   await ensureDbReady()
   const { rows } = await pool.query<DbExtractionRow>(
@@ -1674,6 +2235,104 @@ export async function findExtractionByIdForUser(input: { id: string; userId: str
     [input.id, input.userId]
   )
   return rows[0] ? mapExtractionRow(rows[0]) : null
+}
+
+export async function listExtractionMembersForOwner(input: { extractionId: string; ownerUserId: string }) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionMemberRow>(
+    `
+      SELECT
+        m.extraction_id,
+        m.user_id,
+        m.role,
+        m.created_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM extraction_members m
+      INNER JOIN extractions e
+        ON e.id = m.extraction_id
+      INNER JOIN users u
+        ON u.id = m.user_id
+      WHERE
+        m.extraction_id = $1
+        AND e.user_id = $2
+      ORDER BY m.created_at ASC
+    `,
+    [input.extractionId, input.ownerUserId]
+  )
+  return rows.map(mapExtractionMemberRow)
+}
+
+export async function upsertExtractionMemberForOwner(input: {
+  extractionId: string
+  ownerUserId: string
+  memberUserId: string
+  role: ExtractionMemberRole
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionMemberRow>(
+    `
+      WITH target_extraction AS (
+        SELECT id
+        FROM extractions
+        WHERE id = $1 AND user_id = $2
+        LIMIT 1
+      ),
+      upserted AS (
+        INSERT INTO extraction_members (
+          extraction_id,
+          user_id,
+          role
+        )
+        SELECT
+          target_extraction.id,
+          $3,
+          $4
+        FROM target_extraction
+        WHERE $3 <> $2
+        ON CONFLICT (extraction_id, user_id)
+        DO UPDATE SET role = EXCLUDED.role
+        RETURNING
+          extraction_id,
+          user_id,
+          role,
+          created_at
+      )
+      SELECT
+        upserted.extraction_id,
+        upserted.user_id,
+        upserted.role,
+        upserted.created_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM upserted
+      INNER JOIN users u ON u.id = upserted.user_id
+      LIMIT 1
+    `,
+    [input.extractionId, input.ownerUserId, input.memberUserId, input.role]
+  )
+  return rows[0] ? mapExtractionMemberRow(rows[0]) : null
+}
+
+export async function removeExtractionMemberForOwner(input: {
+  extractionId: string
+  ownerUserId: string
+  memberUserId: string
+}) {
+  await ensureDbReady()
+  const result = await pool.query(
+    `
+      DELETE FROM extraction_members m
+      USING extractions e
+      WHERE
+        m.extraction_id = $1
+        AND m.user_id = $2
+        AND e.id = m.extraction_id
+        AND e.user_id = $3
+    `,
+    [input.extractionId, input.memberUserId, input.ownerUserId]
+  )
+  return result.rowCount ?? 0
 }
 
 export async function updateExtractionShareVisibilityForUser(input: {
@@ -1716,9 +2375,24 @@ export async function updateExtractionPhasesForUser(input: {
   await ensureDbReady()
   const { rows } = await pool.query<DbExtractionRow>(
     `
-      UPDATE extractions
+      UPDATE extractions e
       SET phases_json = $1
-      WHERE id = $2 AND user_id = $3
+      WHERE
+        e.id = $2
+        AND (
+          e.user_id = $3
+          OR (
+            e.share_visibility = 'circle'
+            AND EXISTS (
+              SELECT 1
+              FROM extraction_members m
+              WHERE
+                m.extraction_id = e.id
+                AND m.user_id = $3
+                AND m.role = 'editor'
+            )
+          )
+        )
       RETURNING
         id,
         user_id,
@@ -1732,7 +2406,10 @@ export async function updateExtractionPhasesForUser(input: {
         pro_tip,
         metadata_json,
         share_visibility,
-        created_at
+        created_at,
+        source_type,
+        source_label,
+        folder_id
     `,
     [input.phasesJson, input.id, input.userId]
   )
@@ -2099,9 +2776,9 @@ export async function syncExtractionTasksForUser(input: {
       await client.query(
         `
           DELETE FROM extraction_tasks
-          WHERE extraction_id = $1 AND user_id = $2
+          WHERE extraction_id = $1
         `,
-        [input.extractionId, input.userId]
+        [input.extractionId]
       )
 
       await client.query('COMMIT')
@@ -2125,10 +2802,10 @@ export async function syncExtractionTasksForUser(input: {
           created_at,
           updated_at
         FROM extraction_tasks
-        WHERE extraction_id = $1 AND user_id = $2
+        WHERE extraction_id = $1
         ORDER BY phase_id ASC, item_index ASC, created_at ASC
       `,
-      [input.extractionId, input.userId]
+      [input.extractionId]
     )
 
     const existingTasks = existingRows.rows.map(mapExtractionTaskRow)
@@ -2189,10 +2866,9 @@ export async function syncExtractionTasksForUser(input: {
         `
           DELETE FROM extraction_tasks
           WHERE extraction_id = $1
-            AND user_id = $2
-            AND id = ANY($3::text[])
+            AND id = ANY($2::text[])
         `,
-        [input.extractionId, input.userId, taskIdsToDelete]
+        [input.extractionId, taskIdsToDelete]
       )
     }
 
@@ -2207,9 +2883,9 @@ export async function syncExtractionTasksForUser(input: {
             phase_id = $1,
             item_index = $2,
             updated_at = NOW()
-          WHERE id = $3 AND extraction_id = $4 AND user_id = $5
+          WHERE id = $3 AND extraction_id = $4
         `,
-        [temporaryBase - index, temporaryBase - index, row.taskId, input.extractionId, input.userId]
+        [temporaryBase - index, temporaryBase - index, row.taskId, input.extractionId]
       )
     }
 
@@ -2224,7 +2900,7 @@ export async function syncExtractionTasksForUser(input: {
               item_index = $3,
               item_text = $4,
               updated_at = NOW()
-            WHERE id = $5 AND extraction_id = $6 AND user_id = $7
+            WHERE id = $5 AND extraction_id = $6
           `,
           [
             row.phaseId,
@@ -2233,7 +2909,6 @@ export async function syncExtractionTasksForUser(input: {
             row.itemText,
             row.taskId,
             input.extractionId,
-            input.userId,
           ]
         )
       } else {
@@ -2274,12 +2949,11 @@ export async function syncExtractionTasksForUser(input: {
   }
 
   return listExtractionTasksWithEventsForUser({
-    userId: input.userId,
     extractionId: input.extractionId,
   })
 }
 
-export async function listExtractionTasksWithEventsForUser(input: { userId: string; extractionId: string }) {
+export async function listExtractionTasksWithEventsForUser(input: { extractionId: string }) {
   await ensureDbReady()
 
   const taskRows = await pool.query<DbExtractionTaskRow>(
@@ -2299,10 +2973,10 @@ export async function listExtractionTasksWithEventsForUser(input: { userId: stri
         created_at,
         updated_at
       FROM extraction_tasks
-      WHERE user_id = $1 AND extraction_id = $2
+      WHERE extraction_id = $1
       ORDER BY phase_id ASC, item_index ASC
     `,
-    [input.userId, input.extractionId]
+    [input.extractionId]
   )
 
   const tasks = taskRows.rows.map(mapExtractionTaskRow)
@@ -2325,10 +2999,10 @@ export async function listExtractionTasksWithEventsForUser(input: { userId: stri
         u.email AS user_email
       FROM extraction_task_events e
       LEFT JOIN users u ON u.id = e.user_id
-      WHERE e.user_id = $1 AND e.task_id = ANY($2::text[])
+      WHERE e.task_id = ANY($1::text[])
       ORDER BY e.created_at DESC
     `,
-    [input.userId, taskIds]
+    [taskIds]
   )
 
   const eventsByTaskId = new Map<string, DbExtractionTaskEvent[]>()
@@ -2414,7 +3088,6 @@ export async function listExtractionTasksWithEventsForSharedExtraction(extractio
 export async function findExtractionTaskByIdForUser(input: {
   taskId: string
   extractionId: string
-  userId: string
 }) {
   await ensureDbReady()
   const { rows } = await pool.query<DbExtractionTaskRow>(
@@ -2434,10 +3107,10 @@ export async function findExtractionTaskByIdForUser(input: {
         created_at,
         updated_at
       FROM extraction_tasks
-      WHERE id = $1 AND extraction_id = $2 AND user_id = $3
+      WHERE id = $1 AND extraction_id = $2
       LIMIT 1
     `,
-    [input.taskId, input.extractionId, input.userId]
+    [input.taskId, input.extractionId]
   )
 
   return rows[0] ? mapExtractionTaskRow(rows[0]) : null
@@ -2446,7 +3119,6 @@ export async function findExtractionTaskByIdForUser(input: {
 export async function updateExtractionTaskStateForUser(input: {
   taskId: string
   extractionId: string
-  userId: string
   checked: boolean
   status: ExtractionTaskStatus
 }) {
@@ -2462,7 +3134,7 @@ export async function updateExtractionTaskStateForUser(input: {
           ELSE NULL
         END,
         updated_at = NOW()
-      WHERE id = $3 AND extraction_id = $4 AND user_id = $5
+      WHERE id = $3 AND extraction_id = $4
       RETURNING
         id,
         extraction_id,
@@ -2478,7 +3150,7 @@ export async function updateExtractionTaskStateForUser(input: {
         created_at,
         updated_at
     `,
-    [input.checked, input.status, input.taskId, input.extractionId, input.userId]
+    [input.checked, input.status, input.taskId, input.extractionId]
   )
 
   return rows[0] ? mapExtractionTaskRow(rows[0]) : null
@@ -2498,7 +3170,7 @@ export async function createExtractionTaskEventForUser(input: {
       WITH target_task AS (
         SELECT id
         FROM extraction_tasks
-        WHERE id = $1 AND extraction_id = $2 AND user_id = $3
+        WHERE id = $1 AND extraction_id = $2
         LIMIT 1
       )
       INSERT INTO extraction_task_events (
@@ -2543,7 +3215,6 @@ export async function createExtractionTaskEventForUser(input: {
 export async function listExtractionTaskAttachmentsForUser(input: {
   taskId: string
   extractionId: string
-  userId: string
 }) {
   await ensureDbReady()
   const { rows } = await pool.query<DbExtractionTaskAttachmentRow>(
@@ -2571,11 +3242,10 @@ export async function listExtractionTaskAttachmentsForUser(input: {
       WHERE
         a.task_id = $1
         AND a.extraction_id = $2
-        AND a.user_id = $3
-        AND t.user_id = $3
+        AND t.extraction_id = $2
       ORDER BY a.created_at DESC
     `,
-    [input.taskId, input.extractionId, input.userId]
+    [input.taskId, input.extractionId]
   )
 
   return rows.map(mapExtractionTaskAttachmentRow)
@@ -2635,7 +3305,7 @@ export async function createExtractionTaskAttachmentForUser(input: {
       WITH target_task AS (
         SELECT id
         FROM extraction_tasks
-        WHERE id = $1 AND extraction_id = $2 AND user_id = $3
+        WHERE id = $1 AND extraction_id = $2
         LIMIT 1
       )
       INSERT INTO extraction_task_attachments (
@@ -2705,7 +3375,6 @@ export async function deleteExtractionTaskAttachmentByIdForUser(input: {
   attachmentId: string
   taskId: string
   extractionId: string
-  userId: string
 }) {
   await ensureDbReady()
   const { rows } = await pool.query<DbExtractionTaskAttachmentRow>(
@@ -2716,10 +3385,8 @@ export async function deleteExtractionTaskAttachmentByIdForUser(input: {
         a.id = $1
         AND a.task_id = $2
         AND a.extraction_id = $3
-        AND a.user_id = $4
         AND t.id = a.task_id
         AND t.extraction_id = $3
-        AND t.user_id = $4
       RETURNING
         a.id,
         a.task_id,
@@ -2736,7 +3403,7 @@ export async function deleteExtractionTaskAttachmentByIdForUser(input: {
         a.created_at,
         a.updated_at
     `,
-    [input.attachmentId, input.taskId, input.extractionId, input.userId]
+    [input.attachmentId, input.taskId, input.extractionId]
   )
 
   return rows[0] ? mapExtractionTaskAttachmentRow(rows[0]) : null
@@ -2843,14 +3510,18 @@ export async function deleteExtractionTaskCommentByIdForUser(input: {
   const { rows } = await pool.query<DbExtractionTaskCommentRow>(
     `
       DELETE FROM extraction_task_comments c
-      USING extraction_tasks t
+      USING extraction_tasks t, extractions e
       WHERE
         c.id = $1
         AND c.task_id = $2
         AND c.extraction_id = $3
-        AND c.user_id = $4
         AND t.id = c.task_id
         AND t.extraction_id = $3
+        AND e.id = t.extraction_id
+        AND (
+          c.user_id = $4
+          OR e.user_id = $4
+        )
       RETURNING
         c.id,
         c.task_id,
@@ -2878,15 +3549,71 @@ export async function getExtractionTaskLikeSummaryForUser(input: {
   const { rows } = await pool.query<DbExtractionTaskLikeSummaryRow>(
     `
       SELECT
-        COUNT(l.id)::int AS likes_count,
-        BOOL_OR(l.user_id = $3) AS liked_by_me
+        (
+          SELECT COUNT(*)::int
+          FROM extraction_task_likes l
+          WHERE
+            l.task_id = t.id
+            AND l.extraction_id = t.extraction_id
+        ) AS likes_count,
+        EXISTS (
+          SELECT 1
+          FROM extraction_task_likes l
+          WHERE
+            l.task_id = t.id
+            AND l.extraction_id = t.extraction_id
+            AND l.user_id = $3
+        ) AS liked_by_me,
+        (
+          SELECT COUNT(*)::int
+          FROM extraction_task_shares s
+          WHERE
+            s.task_id = t.id
+            AND s.extraction_id = t.extraction_id
+        ) AS shares_count,
+        EXISTS (
+          SELECT 1
+          FROM extraction_task_shares s
+          WHERE
+            s.task_id = t.id
+            AND s.extraction_id = t.extraction_id
+            AND s.user_id = $3
+        ) AS shared_by_me,
+        (
+          SELECT COUNT(*)::int
+          FROM extraction_task_follows f
+          WHERE
+            f.task_id = t.id
+            AND f.extraction_id = t.extraction_id
+        ) AS followers_count,
+        EXISTS (
+          SELECT 1
+          FROM extraction_task_follows f
+          WHERE
+            f.task_id = t.id
+            AND f.extraction_id = t.extraction_id
+            AND f.user_id = $3
+        ) AS following_by_me,
+        (
+          SELECT COUNT(*)::int
+          FROM extraction_task_views v
+          WHERE
+            v.task_id = t.id
+            AND v.extraction_id = t.extraction_id
+        ) AS views_count,
+        EXISTS (
+          SELECT 1
+          FROM extraction_task_views v
+          WHERE
+            v.task_id = t.id
+            AND v.extraction_id = t.extraction_id
+            AND v.user_id = $3
+        ) AS viewed_by_me
       FROM extraction_tasks t
-      LEFT JOIN extraction_task_likes l
-        ON l.task_id = t.id
-        AND l.extraction_id = t.extraction_id
       WHERE
         t.id = $1
         AND t.extraction_id = $2
+      LIMIT 1
     `,
     [input.taskId, input.extractionId, input.userId]
   )
@@ -2897,6 +3624,12 @@ export async function getExtractionTaskLikeSummaryForUser(input: {
     extraction_id: input.extractionId,
     likes_count: row ? parseDbInteger(row.likes_count) : 0,
     liked_by_me: row?.liked_by_me === true,
+    shares_count: row ? parseDbInteger(row.shares_count) : 0,
+    shared_by_me: row?.shared_by_me === true,
+    followers_count: row ? parseDbInteger(row.followers_count) : 0,
+    following_by_me: row?.following_by_me === true,
+    views_count: row ? parseDbInteger(row.views_count) : 0,
+    viewed_by_me: row?.viewed_by_me === true,
   } satisfies DbExtractionTaskLikeSummary
 }
 
@@ -2936,7 +3669,6 @@ export async function toggleExtractionTaskLikeForUser(input: {
       [input.taskId, input.extractionId, input.userId]
     )
 
-    let likedByMe = false
     if (existing.rows[0]) {
       await client.query(
         `
@@ -2945,7 +3677,6 @@ export async function toggleExtractionTaskLikeForUser(input: {
         `,
         [existing.rows[0].id]
       )
-      likedByMe = false
     } else {
       await client.query(
         `
@@ -2959,31 +3690,163 @@ export async function toggleExtractionTaskLikeForUser(input: {
         `,
         [randomUUID(), input.taskId, input.extractionId, input.userId]
       )
-      likedByMe = true
     }
 
-    const summaryRows = await client.query<{ likes_count: number | string }>(
-      `
-        SELECT COUNT(id)::int AS likes_count
-        FROM extraction_task_likes
-        WHERE task_id = $1 AND extraction_id = $2
-      `,
-      [input.taskId, input.extractionId]
-    )
-
     await client.query('COMMIT')
-    return {
-      task_id: input.taskId,
-      extraction_id: input.extractionId,
-      likes_count: summaryRows.rows[0] ? parseDbInteger(summaryRows.rows[0].likes_count) : 0,
-      liked_by_me: likedByMe,
-    } satisfies DbExtractionTaskLikeSummary
+    return getExtractionTaskLikeSummaryForUser(input)
   } catch (error) {
     await client.query('ROLLBACK')
     throw error
   } finally {
     client.release()
   }
+}
+
+export async function toggleExtractionTaskFollowForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+}) {
+  await ensureDbReady()
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const taskOwnershipCheck = await client.query(
+      `
+        SELECT id
+        FROM extraction_tasks
+        WHERE id = $1 AND extraction_id = $2
+        LIMIT 1
+      `,
+      [input.taskId, input.extractionId]
+    )
+
+    if (!taskOwnershipCheck.rows[0]) {
+      await client.query('ROLLBACK')
+      return null
+    }
+
+    const existing = await client.query(
+      `
+        SELECT id
+        FROM extraction_task_follows
+        WHERE task_id = $1 AND extraction_id = $2 AND user_id = $3
+        LIMIT 1
+      `,
+      [input.taskId, input.extractionId, input.userId]
+    )
+
+    if (existing.rows[0]) {
+      await client.query(
+        `
+          DELETE FROM extraction_task_follows
+          WHERE id = $1
+        `,
+        [existing.rows[0].id]
+      )
+    } else {
+      await client.query(
+        `
+          INSERT INTO extraction_task_follows (
+            id,
+            task_id,
+            extraction_id,
+            user_id
+          )
+          VALUES ($1, $2, $3, $4)
+        `,
+        [randomUUID(), input.taskId, input.extractionId, input.userId]
+      )
+    }
+
+    await client.query('COMMIT')
+    return getExtractionTaskLikeSummaryForUser(input)
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function recordExtractionTaskShareForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+}) {
+  await ensureDbReady()
+
+  const taskOwnershipCheck = await pool.query<{ id: string }>(
+    `
+      SELECT id
+      FROM extraction_tasks
+      WHERE id = $1 AND extraction_id = $2
+      LIMIT 1
+    `,
+    [input.taskId, input.extractionId]
+  )
+
+  if (!taskOwnershipCheck.rows[0]) {
+    return null
+  }
+
+  await pool.query(
+    `
+      INSERT INTO extraction_task_shares (
+        id,
+        task_id,
+        extraction_id,
+        user_id
+      )
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (task_id, user_id)
+      DO NOTHING
+    `,
+    [randomUUID(), input.taskId, input.extractionId, input.userId]
+  )
+
+  return getExtractionTaskLikeSummaryForUser(input)
+}
+
+export async function recordExtractionTaskViewForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+}) {
+  await ensureDbReady()
+
+  const taskOwnershipCheck = await pool.query<{ id: string }>(
+    `
+      SELECT id
+      FROM extraction_tasks
+      WHERE id = $1 AND extraction_id = $2
+      LIMIT 1
+    `,
+    [input.taskId, input.extractionId]
+  )
+
+  if (!taskOwnershipCheck.rows[0]) {
+    return null
+  }
+
+  await pool.query(
+    `
+      INSERT INTO extraction_task_views (
+        id,
+        task_id,
+        extraction_id,
+        user_id
+      )
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (task_id, user_id)
+      DO NOTHING
+    `,
+    [randomUUID(), input.taskId, input.extractionId, input.userId]
+  )
+
+  return getExtractionTaskLikeSummaryForUser(input)
 }
 
 export async function createOrGetShareToken(input: { extractionId: string; userId: string }) {
@@ -3023,7 +3886,7 @@ export async function findSharedExtractionByToken(token: string) {
       FROM share_tokens st
       INNER JOIN extractions e ON e.id = st.extraction_id
       WHERE st.token = $1
-        AND e.share_visibility = 'public'
+        AND e.share_visibility IN ('public', 'unlisted')
       LIMIT 1
     `,
     [token]
@@ -3042,6 +3905,567 @@ export async function findSharedExtractionByToken(token: string) {
   )
 
   return mapExtractionRow(row)
+}
+
+export interface CreateCommunityPostAttachmentInput {
+  attachmentType: CommunityPostAttachmentType
+  storageProvider: CommunityPostAttachmentStorageProvider
+  url: string
+  thumbnailUrl?: string | null
+  title?: string | null
+  mimeType?: string | null
+  metadataJson?: string
+}
+
+export interface CreateCommunityPostInput {
+  userId: string
+  content: string
+  visibility: CommunityPostVisibility
+  metadataJson?: string
+  source?: {
+    extractionId?: string | null
+    taskId?: string | null
+    sourceLabel?: string | null
+  } | null
+  attachments?: CreateCommunityPostAttachmentInput[]
+}
+
+function normalizeQueryLimit(value: number | undefined, fallback = 20, max = 100) {
+  if (!Number.isFinite(value)) return fallback
+  const parsed = Math.trunc(value as number)
+  if (parsed <= 0) return fallback
+  return Math.min(parsed, max)
+}
+
+export async function getCommunityPostAccessForUser(input: { postId: string; userId: string }) {
+  await ensureDbReady()
+  const { rows } = await pool.query<{
+    id: string
+    user_id: string
+    visibility: string
+    can_view: boolean | null
+  }>(
+    `
+      SELECT
+        p.id,
+        p.user_id,
+        p.visibility,
+        ${COMMUNITY_POST_CAN_VIEW_SQL} AS can_view
+      FROM community_posts p
+      WHERE p.id = $2
+      LIMIT 1
+    `,
+    [input.userId, input.postId]
+  )
+
+  const row = rows[0]
+  if (!row) {
+    return {
+      post: null,
+      can_view: false,
+    }
+  }
+
+  return {
+    post: {
+      id: row.id,
+      user_id: row.user_id,
+      visibility: normalizeCommunityPostVisibility(row.visibility),
+    },
+    can_view: row.can_view === true,
+  }
+}
+
+export async function findCommunityPostByIdForUser(input: { postId: string; userId: string }) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbCommunityPostRow>(
+    `
+      ${COMMUNITY_POST_SELECT_SQL}
+      WHERE
+        p.id = $2
+        AND ${COMMUNITY_POST_CAN_VIEW_SQL}
+      LIMIT 1
+    `,
+    [input.userId, input.postId]
+  )
+  return rows[0] ? mapCommunityPostRow(rows[0]) : null
+}
+
+export async function listCommunityExplorePostsForUser(input: {
+  userId: string
+  limit?: number
+}) {
+  await ensureDbReady()
+  const safeLimit = normalizeQueryLimit(input.limit, 20, 100)
+
+  const { rows } = await pool.query<DbCommunityPostRow>(
+    `
+      ${COMMUNITY_POST_SELECT_SQL}
+      WHERE
+        ${COMMUNITY_POST_CAN_VIEW_SQL}
+        AND p.visibility = 'public'
+      ORDER BY p.created_at DESC, p.id DESC
+      LIMIT $2
+    `,
+    [input.userId, safeLimit]
+  )
+
+  return rows.map(mapCommunityPostRow)
+}
+
+export async function listCommunityHomePostsForUser(input: {
+  userId: string
+  limit?: number
+}) {
+  await ensureDbReady()
+  const safeLimit = normalizeQueryLimit(input.limit, 20, 100)
+
+  const { rows } = await pool.query<DbCommunityPostRow>(
+    `
+      ${COMMUNITY_POST_SELECT_SQL}
+      WHERE
+        ${COMMUNITY_POST_CAN_VIEW_SQL}
+        AND (
+          p.user_id = $1
+          OR p.visibility = 'circle'
+          OR EXISTS (
+            SELECT 1
+            FROM community_follows cf
+            WHERE
+              cf.follower_user_id = $1
+              AND cf.following_user_id = p.user_id
+          )
+        )
+      ORDER BY p.created_at DESC, p.id DESC
+      LIMIT $2
+    `,
+    [input.userId, safeLimit]
+  )
+
+  return rows.map(mapCommunityPostRow)
+}
+
+export async function listCommunityPostsByExtractionForUser(input: {
+  userId: string
+  extractionId: string
+  limit?: number
+}) {
+  await ensureDbReady()
+  const safeLimit = normalizeQueryLimit(input.limit, 20, 100)
+
+  const { rows } = await pool.query<DbCommunityPostRow>(
+    `
+      ${COMMUNITY_POST_SELECT_SQL}
+      WHERE
+        ${COMMUNITY_POST_CAN_VIEW_SQL}
+        AND EXISTS (
+          SELECT 1
+          FROM community_post_sources cps
+          WHERE
+            cps.post_id = p.id
+            AND cps.extraction_id = $2
+        )
+      ORDER BY p.created_at DESC, p.id DESC
+      LIMIT $3
+    `,
+    [input.userId, input.extractionId, safeLimit]
+  )
+
+  return rows.map(mapCommunityPostRow)
+}
+
+export async function createCommunityPostForUser(input: CreateCommunityPostInput) {
+  await ensureDbReady()
+
+  const client = await pool.connect()
+  const postId = randomUUID()
+  try {
+    await client.query('BEGIN')
+
+    await client.query(
+      `
+        INSERT INTO community_posts (
+          id,
+          user_id,
+          content,
+          visibility,
+          metadata_json
+        )
+        VALUES ($1, $2, $3, $4, $5)
+      `,
+      [postId, input.userId, input.content, input.visibility, input.metadataJson ?? '{}']
+    )
+
+    const source = input.source ?? null
+    if (source && (source.extractionId || source.taskId || source.sourceLabel)) {
+      await client.query(
+        `
+          INSERT INTO community_post_sources (
+            id,
+            post_id,
+            extraction_id,
+            task_id,
+            source_label
+          )
+          VALUES ($1, $2, $3, $4, $5)
+        `,
+        [
+          randomUUID(),
+          postId,
+          source.extractionId ?? null,
+          source.taskId ?? null,
+          source.sourceLabel ?? null,
+        ]
+      )
+    }
+
+    const attachments = Array.isArray(input.attachments) ? input.attachments : []
+    for (const attachment of attachments) {
+      await client.query(
+        `
+          INSERT INTO community_post_attachments (
+            id,
+            post_id,
+            attachment_type,
+            storage_provider,
+            url,
+            thumbnail_url,
+            title,
+            mime_type,
+            metadata_json
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `,
+        [
+          randomUUID(),
+          postId,
+          attachment.attachmentType,
+          attachment.storageProvider,
+          attachment.url,
+          attachment.thumbnailUrl ?? null,
+          attachment.title ?? null,
+          attachment.mimeType ?? null,
+          attachment.metadataJson ?? '{}',
+        ]
+      )
+    }
+
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+
+  return findCommunityPostByIdForUser({ postId, userId: input.userId })
+}
+
+export async function recordCommunityPostViewsForUser(input: {
+  userId: string
+  postIds: string[]
+}) {
+  await ensureDbReady()
+  const uniqueIds = Array.from(
+    new Set(
+      input.postIds
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0)
+    )
+  )
+
+  if (uniqueIds.length === 0) return
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    for (const postId of uniqueIds) {
+      await client.query(
+        `
+          INSERT INTO community_post_views (
+            id,
+            post_id,
+            user_id
+          )
+          VALUES ($1, $2, $3)
+          ON CONFLICT (post_id, user_id)
+          DO NOTHING
+        `,
+        [randomUUID(), postId, input.userId]
+      )
+    }
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function toggleCommunityPostReactionForUser(input: {
+  postId: string
+  userId: string
+  reactionType?: CommunityPostReactionType
+}) {
+  await ensureDbReady()
+  const reactionType: CommunityPostReactionType = input.reactionType ?? 'like'
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const existing = await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM community_post_reactions
+        WHERE
+          post_id = $1
+          AND user_id = $2
+          AND reaction_type = $3
+        LIMIT 1
+      `,
+      [input.postId, input.userId, reactionType]
+    )
+
+    let reactedByMe = false
+    if (existing.rows[0]) {
+      await client.query(
+        `
+          DELETE FROM community_post_reactions
+          WHERE id = $1
+        `,
+        [existing.rows[0].id]
+      )
+      reactedByMe = false
+    } else {
+      await client.query(
+        `
+          INSERT INTO community_post_reactions (
+            id,
+            post_id,
+            user_id,
+            reaction_type
+          )
+          VALUES ($1, $2, $3, $4)
+        `,
+        [randomUUID(), input.postId, input.userId, reactionType]
+      )
+      reactedByMe = true
+    }
+
+    const summary = await client.query<{ reactions_count: number | string }>(
+      `
+        SELECT COUNT(*)::int AS reactions_count
+        FROM community_post_reactions
+        WHERE
+          post_id = $1
+          AND reaction_type = $2
+      `,
+      [input.postId, reactionType]
+    )
+
+    await client.query('COMMIT')
+    return {
+      post_id: input.postId,
+      reaction_type: reactionType,
+      reactions_count: summary.rows[0] ? parseDbInteger(summary.rows[0].reactions_count) : 0,
+      reacted_by_me: reactedByMe,
+    } satisfies DbCommunityPostReactionSummary
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function listCommunityPostCommentsForUser(input: {
+  postId: string
+  limit?: number
+}) {
+  await ensureDbReady()
+  const safeLimit = normalizeQueryLimit(input.limit, 100, 300)
+
+  const { rows } = await pool.query<DbCommunityPostCommentRow>(
+    `
+      SELECT
+        c.id,
+        c.post_id,
+        c.user_id,
+        c.content,
+        c.created_at,
+        c.updated_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM community_post_comments c
+      INNER JOIN users u ON u.id = c.user_id
+      WHERE c.post_id = $1
+      ORDER BY c.created_at ASC, c.id ASC
+      LIMIT $2
+    `,
+    [input.postId, safeLimit]
+  )
+
+  return rows.map(mapCommunityPostCommentRow)
+}
+
+export async function createCommunityPostCommentForUser(input: {
+  postId: string
+  userId: string
+  content: string
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbCommunityPostCommentRow>(
+    `
+      WITH inserted AS (
+        INSERT INTO community_post_comments (
+          id,
+          post_id,
+          user_id,
+          content
+        )
+        VALUES ($1, $2, $3, $4)
+        RETURNING
+          id,
+          post_id,
+          user_id,
+          content,
+          created_at,
+          updated_at
+      )
+      SELECT
+        i.id,
+        i.post_id,
+        i.user_id,
+        i.content,
+        i.created_at,
+        i.updated_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM inserted i
+      INNER JOIN users u ON u.id = i.user_id
+      LIMIT 1
+    `,
+    [randomUUID(), input.postId, input.userId, input.content]
+  )
+
+  return rows[0] ? mapCommunityPostCommentRow(rows[0]) : null
+}
+
+export async function deleteCommunityPostCommentByIdForUser(input: {
+  postId: string
+  commentId: string
+  actorUserId: string
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbCommunityPostCommentRow>(
+    `
+      WITH deleted AS (
+        DELETE FROM community_post_comments c
+        USING community_posts p
+        WHERE
+          c.id = $1
+          AND c.post_id = $2
+          AND p.id = c.post_id
+          AND (
+            c.user_id = $3
+            OR p.user_id = $3
+          )
+        RETURNING
+          c.id,
+          c.post_id,
+          c.user_id,
+          c.content,
+          c.created_at,
+          c.updated_at
+      )
+      SELECT
+        d.id,
+        d.post_id,
+        d.user_id,
+        d.content,
+        d.created_at,
+        d.updated_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM deleted d
+      LEFT JOIN users u ON u.id = d.user_id
+      LIMIT 1
+    `,
+    [input.commentId, input.postId, input.actorUserId]
+  )
+
+  return rows[0] ? mapCommunityPostCommentRow(rows[0]) : null
+}
+
+export async function isCommunityUserFollowedBy(input: {
+  followerUserId: string
+  followingUserId: string
+}) {
+  await ensureDbReady()
+  if (!input.followerUserId || !input.followingUserId) return false
+  if (input.followerUserId === input.followingUserId) return false
+
+  const { rows } = await pool.query<{ followed: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM community_follows
+        WHERE
+          follower_user_id = $1
+          AND following_user_id = $2
+      ) AS followed
+    `,
+    [input.followerUserId, input.followingUserId]
+  )
+
+  return rows[0]?.followed === true
+}
+
+export async function followCommunityUser(input: {
+  followerUserId: string
+  followingUserId: string
+}) {
+  await ensureDbReady()
+  if (!input.followerUserId || !input.followingUserId) return false
+  if (input.followerUserId === input.followingUserId) return false
+
+  await pool.query(
+    `
+      INSERT INTO community_follows (
+        follower_user_id,
+        following_user_id
+      )
+      VALUES ($1, $2)
+      ON CONFLICT (follower_user_id, following_user_id)
+      DO NOTHING
+    `,
+    [input.followerUserId, input.followingUserId]
+  )
+
+  return true
+}
+
+export async function unfollowCommunityUser(input: {
+  followerUserId: string
+  followingUserId: string
+}) {
+  await ensureDbReady()
+  if (!input.followerUserId || !input.followingUserId) return false
+  if (input.followerUserId === input.followingUserId) return false
+
+  const result = await pool.query(
+    `
+      DELETE FROM community_follows
+      WHERE
+        follower_user_id = $1
+        AND following_user_id = $2
+    `,
+    [input.followerUserId, input.followingUserId]
+  )
+
+  return (result.rowCount ?? 0) > 0
 }
 
 export async function findNotionConnectionByUserId(userId: string) {
@@ -3510,6 +4934,124 @@ export async function getExtractionRateLimitUsageByUser(input: {
 
   const windowStart = row?.window_start ? new Date(toIso(row.window_start)) : new Date()
   const resetAtMs = windowStart.getTime() + 60 * 60 * 1000
+  const resetAt = Number.isFinite(resetAtMs) ? new Date(resetAtMs).toISOString() : new Date().toISOString()
+
+  return {
+    limit: input.limit,
+    used,
+    remaining: Math.max(0, input.limit - used),
+    reset_at: resetAt,
+    allowed: used < input.limit,
+  }
+}
+
+export async function consumeCommunityActionRateLimitByUser(input: {
+  userId: string
+  actionKey: string
+  limit: number
+  windowMinutes: number
+}): Promise<UserExtractionRateLimitUsage> {
+  await ensureDbReady()
+
+  const windowMinutes = Number.isFinite(input.windowMinutes)
+    ? Math.min(24 * 60, Math.max(1, Math.trunc(input.windowMinutes)))
+    : 60
+
+  const { rows } = await pool.query<DbCommunityActionRateLimitRow>(
+    `
+      WITH current_window AS (
+        SELECT to_timestamp(
+          floor(extract(epoch from NOW()) / ($3::int * 60))
+          * ($3::int * 60)
+        ) AS window_start
+      )
+      INSERT INTO community_action_rate_limits (
+        user_id,
+        action_key,
+        window_start,
+        request_count
+      )
+      SELECT
+        $1,
+        $2,
+        cw.window_start,
+        1
+      FROM current_window cw
+      ON CONFLICT (user_id, action_key, window_start)
+      DO UPDATE SET
+        request_count = community_action_rate_limits.request_count + 1,
+        updated_at = NOW()
+      RETURNING window_start, request_count
+    `,
+    [input.userId, input.actionKey, windowMinutes]
+  )
+
+  const row = rows[0]
+  if (!row) {
+    throw new Error('No se pudo registrar el consumo del rate limit de comunidad.')
+  }
+
+  const usedRaw =
+    typeof row.request_count === 'number'
+      ? row.request_count
+      : Number.parseInt(String(row.request_count), 10)
+  const used = Number.isFinite(usedRaw) ? usedRaw : input.limit + 1
+
+  const windowStart = new Date(toIso(row.window_start))
+  const resetAtMs = windowStart.getTime() + windowMinutes * 60 * 1000
+  const resetAt = Number.isFinite(resetAtMs) ? new Date(resetAtMs).toISOString() : new Date().toISOString()
+
+  return {
+    limit: input.limit,
+    used,
+    remaining: Math.max(0, input.limit - used),
+    reset_at: resetAt,
+    allowed: used <= input.limit,
+  }
+}
+
+export async function getCommunityActionRateLimitUsageByUser(input: {
+  userId: string
+  actionKey: string
+  limit: number
+  windowMinutes: number
+}): Promise<UserExtractionRateLimitUsage> {
+  await ensureDbReady()
+
+  const windowMinutes = Number.isFinite(input.windowMinutes)
+    ? Math.min(24 * 60, Math.max(1, Math.trunc(input.windowMinutes)))
+    : 60
+
+  const { rows } = await pool.query<DbCommunityActionRateLimitRow>(
+    `
+      WITH current_window AS (
+        SELECT to_timestamp(
+          floor(extract(epoch from NOW()) / ($3::int * 60))
+          * ($3::int * 60)
+        ) AS window_start
+      )
+      SELECT
+        cw.window_start AS window_start,
+        COALESCE(carl.request_count, 0) AS request_count
+      FROM current_window cw
+      LEFT JOIN community_action_rate_limits carl
+        ON carl.user_id = $1
+       AND carl.action_key = $2
+       AND carl.window_start = cw.window_start
+      LIMIT 1
+    `,
+    [input.userId, input.actionKey, windowMinutes]
+  )
+
+  const row = rows[0]
+  const usedRaw =
+    typeof row?.request_count === 'number'
+      ? row.request_count
+      : Number.parseInt(String(row?.request_count ?? 0), 10)
+  const used = Number.isFinite(usedRaw) ? Math.max(0, usedRaw) : 0
+
+  const windowStart = row?.window_start ? new Date(toIso(row.window_start)) : new Date()
+  const resetAtMs = windowStart.getTime() + windowMinutes * 60 * 1000
   const resetAt = Number.isFinite(resetAtMs) ? new Date(resetAtMs).toISOString() : new Date().toISOString()
 
   return {

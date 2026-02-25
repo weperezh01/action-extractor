@@ -409,6 +409,7 @@ export function SharedTaskTimeline({
           return (
             <article
               key={task.id}
+              id={`task-${task.id}`}
               className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900"
             >
               <button

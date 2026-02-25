@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
-  findExtractionByIdForUser,
+  findExtractionAccessForUser,
   syncExtractionTasksForUser,
   updateExtractionPhasesForUser,
 } from '@/lib/db'
@@ -71,12 +71,18 @@ export async function PATCH(
       return NextResponse.json({ error: 'extractionId inválido.' }, { status: 400 })
     }
 
-    const extraction = await findExtractionByIdForUser({
+    const access = await findExtractionAccessForUser({
       id: extractionId,
       userId: user.id,
     })
-    if (!extraction) {
+    if (!access.extraction) {
       return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
+    }
+    if (!access.role) {
+      return NextResponse.json({ error: 'No tienes acceso a esta extracción.' }, { status: 403 })
+    }
+    if (access.role !== 'owner' && access.role !== 'editor') {
+      return NextResponse.json({ error: 'No tienes permisos para editar esta extracción.' }, { status: 403 })
     }
 
     let body: unknown

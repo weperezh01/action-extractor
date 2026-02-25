@@ -1,6 +1,7 @@
 import type { ExtractionMode } from '@/lib/extraction-modes'
 
-export type ShareVisibility = 'private' | 'public'
+export type ShareVisibility = 'private' | 'circle' | 'unlisted' | 'public'
+export type ExtractionAccessRole = 'owner' | 'editor' | 'viewer'
 
 export type SourceType = 'youtube' | 'web_url' | 'pdf' | 'docx' | 'text' | 'manual'
 
@@ -21,6 +22,9 @@ export interface ExtractResult {
   id?: string
   orderNumber?: number
   shareVisibility?: ShareVisibility
+  accessRole?: ExtractionAccessRole
+  ownerName?: string | null
+  ownerEmail?: string | null
   createdAt?: string
   cached?: boolean
   url?: string | null
@@ -46,6 +50,21 @@ export interface HistoryItem extends ExtractResult {
   sourceType?: SourceType
   sourceLabel?: string | null
   folderId?: string | null
+}
+
+export interface ExtractionMember {
+  extractionId: string
+  userId: string
+  role: Exclude<ExtractionAccessRole, 'owner'>
+  createdAt: string
+  userName: string | null
+  userEmail: string | null
+}
+
+export interface SharedExtractionItem extends HistoryItem {
+  accessRole: Exclude<ExtractionAccessRole, 'owner'>
+  ownerName: string | null
+  ownerEmail: string | null
 }
 
 export type InteractiveTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed'
@@ -116,6 +135,12 @@ export interface InteractiveTaskLikeSummary {
   extractionId: string
   likesCount: number
   likedByMe: boolean
+  sharesCount?: number
+  sharedByMe?: boolean
+  followersCount?: number
+  followingByMe?: boolean
+  viewsCount?: number
+  viewedByMe?: boolean
 }
 
 export interface SessionUser {

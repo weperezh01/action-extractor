@@ -4,6 +4,7 @@ import type { FolderItem } from '@/app/home/components/FolderDock'
 import { FOLDER_COLORS } from '@/app/home/components/FolderDock'
 import Image from 'next/image'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
+import { getShareVisibilityLabel, isShareVisibilityShareable } from '@/app/home/lib/share-visibility'
 import { formatHistoryDate } from '@/app/home/lib/utils'
 import type { HistoryItem, SourceType } from '@/app/home/lib/types'
 
@@ -325,10 +326,14 @@ export function HistoryPanel({
                       className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
                         item.shareVisibility === 'public'
                           ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300'
-                          : 'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                          : item.shareVisibility === 'unlisted'
+                            ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/25 dark:text-amber-300'
+                            : item.shareVisibility === 'circle'
+                              ? 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-900/25 dark:text-sky-300'
+                              : 'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
                       }`}
                     >
-                      {item.shareVisibility === 'public' ? 'Público' : 'Privado'}
+                      {getShareVisibilityLabel(item.shareVisibility)}
                     </span>
                     {item.folderId && folders.length > 0 && (() => {
                       const f = folders.find(x => x.id === item.folderId)
@@ -456,15 +461,15 @@ export function HistoryPanel({
                         <button
                           type="button"
                           onClick={() => triggerItemAction(item.id, () => onCopyShareLink(item))}
-                          disabled={historyShareLoadingItemId === item.id || item.shareVisibility !== 'public'}
+                          disabled={historyShareLoadingItemId === item.id || !isShareVisibilityShareable(item.shareVisibility)}
                           className={`${quickButtonClass} border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-950/30 dark:text-violet-300 dark:hover:bg-violet-950/50`}
                           aria-label={`Compartir extracción ${item.videoTitle ?? item.sourceLabel ?? item.url ?? "extracción"}`}
                         >
                           <Share2 size={12} />
                           {historyShareLoadingItemId === item.id
                             ? 'Compartiendo...'
-                            : item.shareVisibility !== 'public'
-                              ? 'Solo público'
+                            : !isShareVisibilityShareable(item.shareVisibility)
+                              ? 'Público o enlace'
                             : historyShareCopiedItemId === item.id
                               ? 'Enlace copiado'
                               : 'Compartir'}

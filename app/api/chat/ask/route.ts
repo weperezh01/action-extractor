@@ -112,7 +112,6 @@ async function buildActiveExtractionTasksBlock(input: {
   activeExtractionId: string
 }) {
   const tasks = await listExtractionTasksWithEventsForUser({
-    userId: input.userId,
     extractionId: input.activeExtractionId,
   })
 

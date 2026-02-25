@@ -3,10 +3,13 @@ import { getUserFromRequest } from '@/lib/auth'
 import {
   createExtractionTaskCommentForUser,
   deleteExtractionTaskCommentByIdForUser,
-  findExtractionById,
+  findExtractionAccessForUser,
   findExtractionTaskByIdForUser,
   getExtractionTaskLikeSummaryForUser,
   listExtractionTaskCommentsForUser,
+  recordExtractionTaskShareForUser,
+  recordExtractionTaskViewForUser,
+  toggleExtractionTaskFollowForUser,
   toggleExtractionTaskLikeForUser,
 } from '@/lib/db'
 import {
@@ -59,6 +62,12 @@ async function buildGuestCommunityPayload(input: {
       extractionId: input.extractionId,
       likesCount: likeSummary.likesCount,
       likedByMe: likeSummary.likedByMe,
+      sharesCount: 0,
+      sharedByMe: false,
+      followersCount: 0,
+      followingByMe: false,
+      viewsCount: 0,
+      viewedByMe: false,
     },
   }
 }
@@ -80,7 +89,7 @@ function toClientComment(
 }
 
 async function buildCommunityPayload(input: { taskId: string; extractionId: string; userId: string }) {
-  const [comments, likeSummary] = await Promise.all([
+  const [comments, summary] = await Promise.all([
     listExtractionTaskCommentsForUser(input),
     getExtractionTaskLikeSummaryForUser(input),
   ])
@@ -88,10 +97,16 @@ async function buildCommunityPayload(input: { taskId: string; extractionId: stri
   return {
     comments: comments.map(toClientComment),
     likeSummary: {
-      taskId: likeSummary.task_id,
-      extractionId: likeSummary.extraction_id,
-      likesCount: likeSummary.likes_count,
-      likedByMe: likeSummary.liked_by_me,
+      taskId: summary.task_id,
+      extractionId: summary.extraction_id,
+      likesCount: summary.likes_count,
+      likedByMe: summary.liked_by_me,
+      sharesCount: summary.shares_count,
+      sharedByMe: summary.shared_by_me,
+      followersCount: summary.followers_count,
+      followingByMe: summary.following_by_me,
+      viewsCount: summary.views_count,
+      viewedByMe: summary.viewed_by_me,
     },
   }
 }
@@ -101,21 +116,25 @@ async function resolveCommunityAccess(input: {
   taskId: string
   actorUserId: string
 }) {
-  const extraction = await findExtractionById(input.extractionId)
+  const access = await findExtractionAccessForUser({
+    id: input.extractionId,
+    userId: input.actorUserId,
+  })
+  const extraction = access.extraction
   if (!extraction) {
     return { ok: false as const, status: 404 as const, error: 'No se encontró la extracción solicitada.' }
   }
 
-  const isOwner = extraction.user_id === input.actorUserId
-  const isPublic = extraction.share_visibility === 'public'
-  if (!isOwner && !isPublic) {
+  const isPublicLinkVisibility =
+    extraction.share_visibility === 'public' || extraction.share_visibility === 'unlisted'
+  const hasCircleAccess = access.role !== null
+  if (!hasCircleAccess && !isPublicLinkVisibility) {
     return { ok: false as const, status: 403 as const, error: 'No tienes acceso a esta extracción.' }
   }
 
   const task = await findExtractionTaskByIdForUser({
     taskId: input.taskId,
     extractionId: input.extractionId,
-    userId: extraction.user_id,
   })
   if (!task) {
     return { ok: false as const, status: 404 as const, error: 'No se encontró el subítem solicitado.' }
@@ -123,7 +142,6 @@ async function resolveCommunityAccess(input: {
 
   return {
     ok: true as const,
-    ownerUserId: extraction.user_id,
   }
 }
 
@@ -164,6 +182,15 @@ export async function GET(
     })
     if (!access.ok) {
       return NextResponse.json({ error: access.error }, { status: access.status })
+    }
+
+    const viewed = await recordExtractionTaskViewForUser({
+      taskId,
+      extractionId,
+      userId: user.id,
+    })
+    if (!viewed) {
+      return NextResponse.json({ error: 'No se encontró el subítem solicitado.' }, { status: 404 })
     }
 
     return NextResponse.json(await buildCommunityPayload({ taskId, extractionId, userId: user.id }))
@@ -245,6 +272,13 @@ export async function POST(
         return guestCommunity()
       }
 
+      if (action === 'toggle_follow' || action === 'record_share') {
+        return NextResponse.json(
+          { error: 'Esta acción requiere una cuenta registrada.' },
+          { status: 400 }
+        )
+      }
+
       return NextResponse.json({ error: 'Acción no soportada.' }, { status: 400 })
     }
 
@@ -318,6 +352,32 @@ export async function POST(
       })
       if (!toggled) {
         return NextResponse.json({ error: 'No se pudo actualizar el like.' }, { status: 404 })
+      }
+
+      return NextResponse.json(await buildCommunityPayload({ taskId, extractionId, userId: user.id }))
+    }
+
+    if (action === 'toggle_follow') {
+      const toggled = await toggleExtractionTaskFollowForUser({
+        taskId,
+        extractionId,
+        userId: user.id,
+      })
+      if (!toggled) {
+        return NextResponse.json({ error: 'No se pudo actualizar el seguimiento.' }, { status: 404 })
+      }
+
+      return NextResponse.json(await buildCommunityPayload({ taskId, extractionId, userId: user.id }))
+    }
+
+    if (action === 'record_share') {
+      const shared = await recordExtractionTaskShareForUser({
+        taskId,
+        extractionId,
+        userId: user.id,
+      })
+      if (!shared) {
+        return NextResponse.json({ error: 'No se pudo registrar el compartido.' }, { status: 404 })
       }
 
       return NextResponse.json(await buildCommunityPayload({ taskId, extractionId, userId: user.id }))

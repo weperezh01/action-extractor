@@ -3,9 +3,11 @@ import { getUserFromRequest } from '@/lib/auth'
 import { uploadFileToCloudinary } from '@/lib/cloudinary'
 import {
   createExtractionTaskAttachmentForUser,
+  findExtractionAccessForUser,
   findExtractionTaskByIdForUser,
   listExtractionTaskAttachmentsForUser,
   type DbExtractionTaskAttachment,
+  type ExtractionAccessRole,
   type ExtractionTaskAttachmentType,
 } from '@/lib/db'
 import {
@@ -95,6 +97,32 @@ function getMaxUploadBytes() {
   return mb * 1024 * 1024
 }
 
+async function resolveAuthAttachmentAccess(input: {
+  extractionId: string
+  actorUserId: string
+}): Promise<
+  { ok: true; role: ExtractionAccessRole; canEdit: boolean } | { ok: false; status: 403 | 404; error: string }
+> {
+  const access = await findExtractionAccessForUser({
+    id: input.extractionId,
+    userId: input.actorUserId,
+  })
+
+  if (!access.extraction) {
+    return { ok: false, status: 404, error: 'No se encontró la extracción solicitada.' }
+  }
+
+  if (!access.role) {
+    return { ok: false, status: 403, error: 'No tienes acceso a esta extracción.' }
+  }
+
+  return {
+    ok: true,
+    role: access.role,
+    canEdit: access.role === 'owner' || access.role === 'editor',
+  }
+}
+
 export async function GET(
   req: NextRequest,
   context: { params: { extractionId: string; taskId: string } }
@@ -126,10 +154,17 @@ export async function GET(
       return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
 
+    const access = await resolveAuthAttachmentAccess({
+      extractionId,
+      actorUserId: user.id,
+    })
+    if (!access.ok) {
+      return NextResponse.json({ error: access.error }, { status: access.status })
+    }
+
     const task = await findExtractionTaskByIdForUser({
       taskId,
       extractionId,
-      userId: user.id,
     })
     if (!task) {
       return NextResponse.json({ error: 'No se encontró el subítem solicitado.' }, { status: 404 })
@@ -138,7 +173,6 @@ export async function GET(
     const attachments = await listExtractionTaskAttachmentsForUser({
       taskId,
       extractionId,
-      userId: user.id,
     })
 
     return NextResponse.json({
@@ -254,10 +288,20 @@ export async function POST(
       return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
 
+    const access = await resolveAuthAttachmentAccess({
+      extractionId,
+      actorUserId: user.id,
+    })
+    if (!access.ok) {
+      return NextResponse.json({ error: access.error }, { status: access.status })
+    }
+    if (!access.canEdit) {
+      return NextResponse.json({ error: 'No tienes permisos para editar evidencias.' }, { status: 403 })
+    }
+
     const task = await findExtractionTaskByIdForUser({
       taskId,
       extractionId,
-      userId: user.id,
     })
     if (!task) {
       return NextResponse.json({ error: 'No se encontró el subítem solicitado.' }, { status: 404 })

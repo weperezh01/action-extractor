@@ -33,11 +33,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
     }
 
-    if (extraction.share_visibility !== 'public') {
+    if (extraction.share_visibility === 'circle') {
       return NextResponse.json(
         {
           error:
-            'Este contenido está privado. Cámbialo a Público para generar un enlace compartible.',
+            'Este playbook está en modo Círculo. Compártelo agregando miembros por correo en lugar de enlace.',
+        },
+        { status: 409 }
+      )
+    }
+
+    if (extraction.share_visibility !== 'public' && extraction.share_visibility !== 'unlisted') {
+      return NextResponse.json(
+        {
+          error:
+            'Este contenido no es compartible. Cámbialo a Público o Solo con enlace.',
         },
         { status: 409 }
       )

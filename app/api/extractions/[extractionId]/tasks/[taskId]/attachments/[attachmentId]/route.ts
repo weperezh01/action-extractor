@@ -3,7 +3,9 @@ import { getUserFromRequest } from '@/lib/auth'
 import { deleteCloudinaryAsset } from '@/lib/cloudinary'
 import {
   deleteExtractionTaskAttachmentByIdForUser,
+  findExtractionAccessForUser,
   findExtractionTaskByIdForUser,
+  type ExtractionAccessRole,
 } from '@/lib/db'
 import { deleteGuestTaskAttachment, findGuestTaskById } from '@/lib/guest-tasks'
 
@@ -22,6 +24,32 @@ function safeParseObject(value: string) {
     return parsed && typeof parsed === 'object' ? parsed : {}
   } catch {
     return {}
+  }
+}
+
+async function resolveAuthAttachmentAccess(input: {
+  extractionId: string
+  actorUserId: string
+}): Promise<
+  { ok: true; role: ExtractionAccessRole; canEdit: boolean } | { ok: false; status: 403 | 404; error: string }
+> {
+  const access = await findExtractionAccessForUser({
+    id: input.extractionId,
+    userId: input.actorUserId,
+  })
+
+  if (!access.extraction) {
+    return { ok: false, status: 404, error: 'No se encontró la extracción solicitada.' }
+  }
+
+  if (!access.role) {
+    return { ok: false, status: 403, error: 'No tienes acceso a esta extracción.' }
+  }
+
+  return {
+    ok: true,
+    role: access.role,
+    canEdit: access.role === 'owner' || access.role === 'editor',
   }
 }
 
@@ -60,10 +88,20 @@ export async function DELETE(
       return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
 
+    const access = await resolveAuthAttachmentAccess({
+      extractionId,
+      actorUserId: user.id,
+    })
+    if (!access.ok) {
+      return NextResponse.json({ error: access.error }, { status: access.status })
+    }
+    if (!access.canEdit) {
+      return NextResponse.json({ error: 'No tienes permisos para editar evidencias.' }, { status: 403 })
+    }
+
     const task = await findExtractionTaskByIdForUser({
       taskId,
       extractionId,
-      userId: user.id,
     })
     if (!task) {
       return NextResponse.json({ error: 'No se encontró el subítem solicitado.' }, { status: 404 })
@@ -73,7 +111,6 @@ export async function DELETE(
       attachmentId,
       taskId,
       extractionId,
-      userId: user.id,
     })
     if (!deleted) {
       return NextResponse.json({ error: 'No se encontró la evidencia solicitada.' }, { status: 404 })

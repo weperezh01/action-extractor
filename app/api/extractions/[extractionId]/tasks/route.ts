@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
   createExtractionTaskEventForUser,
-  findExtractionByIdForUser,
+  findExtractionAccessForUser,
   findExtractionTaskByIdForUser,
   listExtractionTasksWithEventsForUser,
   syncExtractionTasksForUser,
   updateExtractionTaskStateForUser,
+  type ExtractionAccessRole,
   type ExtractionTaskEventType,
   type ExtractionTaskStatus,
 } from '@/lib/db'
@@ -100,9 +101,7 @@ function parseSyncPhases(payload: unknown) {
     .filter((phase): phase is { id: number; title: string; items: string[] } => Boolean(phase))
 }
 
-function toClientTask(
-  task: Awaited<ReturnType<typeof listExtractionTasksWithEventsForUser>>[number]
-) {
+function toClientTask(task: Awaited<ReturnType<typeof listExtractionTasksWithEventsForUser>>[number]) {
   return {
     id: task.id,
     extractionId: task.extraction_id,
@@ -129,9 +128,35 @@ function toClientTask(
   }
 }
 
-async function getTasksResponse(userId: string, extractionId: string) {
-  const tasks = await listExtractionTasksWithEventsForUser({ userId, extractionId })
+async function getTasksResponse(extractionId: string) {
+  const tasks = await listExtractionTasksWithEventsForUser({ extractionId })
   return tasks.map(toClientTask)
+}
+
+interface AuthTaskAccess {
+  role: ExtractionAccessRole
+  canEdit: boolean
+}
+
+async function resolveAuthTaskAccess(input: {
+  extractionId: string
+  actorUserId: string
+}): Promise<{ ok: true; access: AuthTaskAccess } | { ok: false; status: 403 | 404; error: string }> {
+  const accessResult = await findExtractionAccessForUser({
+    id: input.extractionId,
+    userId: input.actorUserId,
+  })
+
+  if (!accessResult.extraction) {
+    return { ok: false, status: 404, error: 'No se encontró la extracción solicitada.' }
+  }
+
+  if (!accessResult.role) {
+    return { ok: false, status: 403, error: 'No tienes acceso a esta extracción.' }
+  }
+
+  const canEdit = accessResult.role === 'owner' || accessResult.role === 'editor'
+  return { ok: true, access: { role: accessResult.role, canEdit } }
 }
 
 export async function GET(
@@ -160,16 +185,16 @@ export async function GET(
       return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
 
-    const extraction = await findExtractionByIdForUser({
-      id: extractionId,
-      userId: user.id,
+    const access = await resolveAuthTaskAccess({
+      extractionId,
+      actorUserId: user.id,
     })
-    if (!extraction) {
-      return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
+    if (!access.ok) {
+      return NextResponse.json({ error: access.error }, { status: access.status })
     }
 
     return NextResponse.json({
-      tasks: await getTasksResponse(user.id, extractionId),
+      tasks: await getTasksResponse(extractionId),
     })
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'No se pudieron cargar las tareas.'
@@ -351,15 +376,19 @@ export async function POST(
       return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
 
-    const extraction = await findExtractionByIdForUser({
-      id: extractionId,
-      userId: user.id,
+    const access = await resolveAuthTaskAccess({
+      extractionId,
+      actorUserId: user.id,
     })
-    if (!extraction) {
-      return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
+    if (!access.ok) {
+      return NextResponse.json({ error: access.error }, { status: access.status })
     }
 
     if (action === 'sync') {
+      if (!access.access.canEdit) {
+        return NextResponse.json({ error: 'No tienes permisos para editar esta extracción.' }, { status: 403 })
+      }
+
       const phases = parseSyncPhases((body as { phases?: unknown }).phases)
       if (phases.length === 0) {
         return NextResponse.json(
@@ -375,11 +404,15 @@ export async function POST(
       })
 
       return NextResponse.json({
-        tasks: await getTasksResponse(user.id, extractionId),
+        tasks: await getTasksResponse(extractionId),
       })
     }
 
     if (action === 'update') {
+      if (!access.access.canEdit) {
+        return NextResponse.json({ error: 'No tienes permisos para editar esta extracción.' }, { status: 403 })
+      }
+
       const taskId =
         typeof (body as { taskId?: unknown }).taskId === 'string'
           ? (body as { taskId: string }).taskId.trim()
@@ -391,7 +424,6 @@ export async function POST(
       const currentTask = await findExtractionTaskByIdForUser({
         taskId,
         extractionId,
-        userId: user.id,
       })
       if (!currentTask) {
         return NextResponse.json({ error: 'No se encontró la tarea solicitada.' }, { status: 404 })
@@ -439,7 +471,6 @@ export async function POST(
       const updatedTask = await updateExtractionTaskStateForUser({
         taskId,
         extractionId,
-        userId: user.id,
         checked: nextChecked,
         status: nextStatus,
       })
@@ -472,11 +503,15 @@ export async function POST(
       }
 
       return NextResponse.json({
-        tasks: await getTasksResponse(user.id, extractionId),
+        tasks: await getTasksResponse(extractionId),
       })
     }
 
     if (action === 'add_event') {
+      if (!access.access.canEdit) {
+        return NextResponse.json({ error: 'No tienes permisos para editar esta extracción.' }, { status: 403 })
+      }
+
       const taskId =
         typeof (body as { taskId?: unknown }).taskId === 'string'
           ? (body as { taskId: string }).taskId.trim()
@@ -520,7 +555,7 @@ export async function POST(
       }
 
       return NextResponse.json({
-        tasks: await getTasksResponse(user.id, extractionId),
+        tasks: await getTasksResponse(extractionId),
       })
     }
 

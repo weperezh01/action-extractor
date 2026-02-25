@@ -4,6 +4,11 @@ import { useCallback, useState } from 'react'
 import { buildExtractionMarkdown } from '@/lib/export-content'
 import { normalizeExtractionMode, type ExtractionMode } from '@/lib/extraction-modes'
 import { ResultPanel } from '@/app/home/components/ResultPanel'
+import {
+  getShareVisibilityChangeNotice,
+  isShareVisibilityShareable,
+  normalizeShareVisibility,
+} from '@/app/home/lib/share-visibility'
 import type { ExtractResult, HistoryItem, Phase, ShareVisibility } from '@/app/home/lib/types'
 
 interface ExtractionFeedCardProps {
@@ -111,7 +116,7 @@ export function ExtractionFeedCard({
   const [localResult, setLocalResult] = useState<ExtractResult>({
     id: item.id,
     orderNumber: item.orderNumber,
-    shareVisibility: item.shareVisibility === 'public' ? 'public' : 'private',
+    shareVisibility: normalizeShareVisibility(item.shareVisibility),
     createdAt: item.createdAt,
     url: item.url,
     videoId: item.videoId ?? null,
@@ -151,8 +156,8 @@ export function ExtractionFeedCard({
   const handleCopyShareLink = useCallback(async () => {
     const extractionId = localResult.id?.trim()
     if (!extractionId || shareLoading) return
-    if (localResult.shareVisibility !== 'public') {
-      onError('Este contenido está privado. Cámbialo a Público para compartirlo.')
+    if (!isShareVisibilityShareable(normalizeShareVisibility(localResult.shareVisibility))) {
+      onError('Este contenido no es compartible. Cámbialo a Público o Solo con enlace.')
       return
     }
 
@@ -178,7 +183,7 @@ export function ExtractionFeedCard({
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
             : res.status === 409
-              ? 'Este contenido está privado. Cámbialo a Público para compartirlo.'
+              ? 'Este contenido no es compartible. Cámbialo a Público o Solo con enlace.'
               : 'No se pudo generar el enlace compartible.'
         onError(message)
         return
@@ -206,8 +211,7 @@ export function ExtractionFeedCard({
       const extractionId = localResult.id?.trim()
       if (!extractionId || shareVisibilityLoading) return
 
-      const currentVisibility: ShareVisibility =
-        localResult.shareVisibility === 'public' ? 'public' : 'private'
+      const currentVisibility = normalizeShareVisibility(localResult.shareVisibility)
       if (currentVisibility === nextVisibility) return
 
       setShareVisibilityLoading(true)
@@ -241,17 +245,11 @@ export function ExtractionFeedCard({
           return
         }
 
-        const persistedVisibility: ShareVisibility =
-          data?.shareVisibility === 'public' ? 'public' : 'private'
+        const persistedVisibility = normalizeShareVisibility(data?.shareVisibility)
 
         setLocalResult((prev) => ({ ...prev, shareVisibility: persistedVisibility }))
-        if (persistedVisibility !== 'public') setShareCopied(false)
-
-        onNotice(
-          persistedVisibility === 'public'
-            ? 'Contenido marcado como Público. Ya puedes compartir su enlace.'
-            : 'Contenido marcado como Privado. El enlace compartido dejará de estar disponible.'
-        )
+        if (!isShareVisibilityShareable(persistedVisibility)) setShareCopied(false)
+        onNotice(getShareVisibilityChangeNotice(persistedVisibility))
       } catch {
         onError('No se pudo actualizar la visibilidad. Intenta nuevamente.')
         setLocalResult((prev) => ({ ...prev, shareVisibility: currentVisibility }))
@@ -467,7 +465,7 @@ export function ExtractionFeedCard({
         isExportingPdf={isExportingPdf}
         shareLoading={shareLoading}
         shareCopied={shareCopied}
-        shareVisibility={localResult.shareVisibility === 'public' ? 'public' : 'private'}
+        shareVisibility={normalizeShareVisibility(localResult.shareVisibility)}
         shareVisibilityLoading={shareVisibilityLoading}
         notionConfigured={notionConfigured}
         notionConnected={notionConnected}

@@ -1,0 +1,390 @@
+✅ 4 estados recomendados para share_visibility
+
+private — solo tú (default al crear el playbook).
+
+circle — solo tu círculo / colegas (cuando tengas extraction_members o una tabla similar).
+
+unlisted (“solo con enlace”) — no aparece en el muro/Explore, pero cualquiera con el link puede verlo.
+
+public — aparece en el muro/Explore y es visible públicamente.
+
+Por qué “unlisted” es el mejor #4 en tu caso
+
+Ahora mismo tu sistema de compartir solo permite generar link si está en public (en app/api/share/route.ts haces if (extraction.share_visibility !== 'public') return 409). Y el endpoint que resuelve el token también exige e.share_visibility = 'public' en DB (findSharedExtractionByToken en lib/db.ts).
+Entonces “unlisted” te da el comportamiento típico de “compartible por link” sin obligarte a hacerlo público/descubrible.
+
+Cómo encaja con tu implementación actual (rápido y limpio)
+
+Extiendes el type:
+
+ExtractionShareVisibility = 'private' | 'circle' | 'unlisted' | 'public'
+
+Cambias normalizeExtractionShareVisibility(...) para aceptar esos 4 valores.
+
+Ajustas POST /api/share para permitir token si share_visibility IN ('public','unlisted').
+
+Ajustas findSharedExtractionByToken para permitir token si share_visibility IN ('public','unlisted').
+
+En el “muro/Explore”, filtras solo public.
+
+Nota práctica (para cuando implementes “circle”)
+
+“circle” requiere modelo de miembros/roles (ej. extraction_members) para validar permisos. Mientras no exista, puedes:
+
+Dejar “circle” oculto en UI, o
+
+Implementarlo como “placeholder” sin uso real hasta tener la tabla.
+
+Si quieres, te escribo el prompt exacto para Claude con los cambios concretos (archivos + condiciones + queries) para implementar unlisted y preparar circle sin romper nada.
+
+ahhh si es como invitado directo algo asi. OK ;) Pues ya que tú tienes toda la información Entonces es hora de que definitivamente hagas La guía definitiva para los desarrolladores y/o agentes de inteligencia artificial
+Thought for 11s
+Called tool
+Thought for a few seconds
+Called tool
+Thought for 8s
+Called tool
+Thought for a few seconds
+Called tool
+
+Aquí va la Guía Definitiva (solo Comunidad/Social), adaptada 100% a tu repo y stack (Next.js 14 App Router + TS + Tailwind + pg raw SQL + INIT_SQL en lib/db.ts + sin RLS). Incluye:
+
+Lo que YA tienes (likes/comentarios por subítem y reglas de acceso).
+
+Lo que falta para que sea comunidad real (descubrimiento + feed + follow).
+
+Cómo ampliar share_visibility de 2 → 4 estados (incluye el estado #4 “unlisted / invitado por link”).
+
+Especificaciones listas para devs o agentes IA (Claude).
+
+0) Estado actual del repo (hechos verificables)
+0.1 Comunidad por subítem ya existe
+
+Ya tienes un endpoint completo:
+
+GET/POST app/api/extractions/[extractionId]/tasks/[taskId]/community/route.ts
+
+Acciones soportadas (POST):
+
+add_comment
+
+delete_comment
+
+toggle_like
+
+Y el acceso está así:
+
+Si el extraction.share_visibility === 'public' → cualquiera autenticado puede ver/like/comentar
+
+Si no es público → solo owner (por ahora)
+
+Esto está implementado en resolveCommunityAccess() y usa:
+
+findExtractionById()
+
+findExtractionTaskByIdForUser() (ojo: lo pide con userId = extraction.user_id para “leer como owner” y evitar fuga de data).
+
+✅ Conclusión: el “Like” ya funciona multiusuario; el problema de “solo me doy like yo” es que no existe descubrimiento/entrada de otros usuarios al contenido.
+
+0.2 share_visibility hoy es solo private|public
+
+Tu API oficial de visibilidad lo valida así:
+
+app/api/extractions/[extractionId]/visibility/route.ts
+
+parseVisibility() solo acepta 'public' o 'private'.
+
+1) Visión de Comunidad: 2 capas (muy importante)
+
+Tu comunidad tiene 2 “superficies” distintas que NO se deben mezclar:
+
+Capa A — Comunidad por Subítem (lo que ya tienes)
+
+Likes y comentarios dentro de un subítem
+
+Solo se activa cuando el playbook/extraction es visible para otros
+
+Esto es excelente como primera fase porque convierte tus subítems en “unidad de ejecución con evidencia”.
+
+Capa B — Comunidad tipo Red Social (lo que falta)
+
+Perfil público + follow
+
+Feed (muro)
+
+Posts (unidad social)
+
+Compartir, views, notificaciones, etc.
+
+Sin esta capa B, aunque tengas likes/comments en subítems, nadie llega a verlos salvo con links.
+
+2) La pieza que te faltaba: share_visibility en 4 estados
+
+Tú recordabas 4 estados. Los recomendados, alineados con “invitado directo / por link”, son:
+
+private — solo owner (default al crear)
+
+circle — solo círculo/colaboradores (requiere tabla de miembros)
+
+unlisted — solo con link (“invitado directo”), NO aparece en Explore/Feed
+
+public — visible y descubrible
+
+Por qué unlisted es el #4 correcto
+
+Porque hoy tu “share” está amarrado a public. Con unlisted:
+
+puedes compartir a un colega sin hacerlo público
+
+desbloqueas “visitas reales” (y por tanto likes/comentarios reales)
+
+3) Implementación exacta de share_visibility 4 estados (en tu stack)
+3.1 Cambios de tipo/validación (API visibility)
+
+Archivo:
+
+app/api/extractions/[extractionId]/visibility/route.ts
+
+Cambiar:
+
+parseVisibility() para aceptar:
+
+'private' | 'circle' | 'unlisted' | 'public'
+
+Regla de compatibilidad:
+
+Si aún no tienes circle implementado, puedes aceptar el valor pero no exponerlo en UI (o devolver 400 si prefieres).
+
+3.2 Cambios en /api/share (generar link)
+
+Archivo:
+
+app/api/share/route.ts
+
+Hoy: permite solo si share_visibility === 'public'.
+Nuevo:
+
+permitir si share_visibility IN ('public','unlisted').
+
+3.3 Cambios en DB (resolver token de share)
+
+En lib/db.ts tienes una función tipo findSharedExtractionByToken (por el comportamiento actual).
+Hoy suele filtrar share_visibility = 'public'.
+Nuevo:
+
+permitir IN ('public','unlisted').
+
+3.4 Regla de acceso para comunidad por subítem (IMPORTANTÍSIMO)
+
+En resolveCommunityAccess() (community route de tasks), hoy consideras “acceso público” si:
+
+extraction.share_visibility === 'public'
+
+Nuevo:
+
+“visible para otros” si:
+
+'public' o 'unlisted'
+
+y más adelante 'circle' si actor es miembro del círculo
+
+Resultado:
+
+otras personas podrán entrar por link a un extraction unlisted y dar like/comentar en subítems.
+
+4) Para que otros usuarios lleguen: 3 caminos de “tráfico” (prioridad)
+
+Tienes 3 mecanismos para que dejen likes/comentarios personas reales:
+
+4.1 Compartir por link (unlisted) ✅ primero
+
+Owner marca extraction como unlisted
+
+genera link /share/[token]
+
+comparte por WhatsApp/Telegram
+
+colegas entran, ven, comentan/like
+
+Esto es “invitado directo”, justo lo que mencionaste.
+
+4.2 Explorar (public) ✅ segundo
+
+Solo para extractions public
+
+Debe existir una sección “Explore” con:
+
+playbooks públicos recientes
+
+filtro por tags / categoría
+
+4.3 Follow + Feed ✅ tercero (red social completa)
+
+Los usuarios siguen a otros
+
+Feed muestra novedades:
+
+“X publicó un avance”
+
+“X completó un subítem”
+
+“X agregó evidencia”
+
+5) Roadmap definitivo de Comunidad/Social (para tu repo)
+Fase 1 — Consolidar “Comunidad por Subítem” (rápido)
+
+Ya tienes:
+
+comments + likes por task
+
+Falta:
+
+Agregar unlisted y permitir share token para unlisted.
+
+UI clara en /share/[token]:
+
+Mostrar “Comunidad” (likes/comments) de cada task
+
+CTA: “Regístrate para comentar” (si no autenticado) — ya tienes ShareSignupCTA.tsx.
+
+(Opcional) “count badges” visibles: likesCount / commentsCount.
+
+✅ Resultado: ya hay interacción real multiusuario sin construir red social completa.
+
+Fase 2 — “Círculo” (circle) y permisos
+
+Para circle necesitas una tabla de miembros.
+
+Tabla sugerida
+
+extraction_members
+
+extraction_id
+
+user_id
+
+role: owner|editor|viewer
+
+created_at
+
+Reglas:
+
+owner/editor: puede editar estructura + evidencias
+
+viewer: puede ver, comentar, like
+
+Luego, share_visibility='circle' significa:
+
+solo owner + miembros pueden leer
+
+✅ Resultado: colaboración real sin hacerlo público.
+
+Fase 3 — Red Social (Feed + Follow + Posts)
+
+Esto es lo que hace que la comunidad “viva” sin depender de links.
+
+3.1 Entidades mínimas (Postgres, raw SQL)
+
+community_posts
+
+community_post_sources (link a extraction/task)
+
+community_post_attachments (Cloudinary)
+
+community_follows
+
+community_post_reactions
+
+community_post_comments
+
+community_post_views
+
+(luego) notifications
+
+3.2 Feeds mínimos
+
+Home feed: seguidos + círculo
+
+Explore feed: público
+
+Feed por extraction/playbook
+
+3.3 “Publicar update” desde subítem (tu ventaja competitiva)
+
+Botón dentro del subítem:
+
+“Publicar actualización”
+
+crea un Post con:
+
+acción + resultado + aprendizaje
+
+adjuntos Cloudinary
+
+source = extraction_id + task_id
+
+✅ Resultado: “LinkedIn + GitHub” real.
+
+6) “Guía para agentes IA”: Prompt definitivo (solo Comunidad/Social)
+
+Pégaselo a Claude tal cual. Está escrito para tu repo y tus convenciones:
+
+Proyecto: action-extractor
+Stack:
+- Next.js 14 App Router (Route Handlers)
+- TypeScript, Tailwind
+- Postgres 16 con pg (raw SQL)
+- Sin ORM, sin migrator: INIT_SQL en lib/db.ts
+- Sin RLS: permisos en app-layer
+
+Objetivo (solo Comunidad/Social):
+Tenemos 2 capas:
+A) Comunidad por subítem (ya existe): likes + comentarios en /api/extractions/[extractionId]/tasks/[taskId]/community
+B) Comunidad tipo red social (a implementar): perfiles + follow + feed + posts con evidencia
+
+FASE 1 (prioridad alta): expandir share_visibility 2→4 estados
+Estados deseados:
+- private (default)
+- circle (solo círculo/miembros)
+- unlisted (solo con link / invitado directo, NO descubrible)
+- public (descubrible)
+Tareas:
+1) Actualizar type ExtractionShareVisibility y normalización/validación para aceptar esos 4 valores.
+2) Cambiar app/api/extractions/[extractionId]/visibility/route.ts parseVisibility() para aceptar: private|circle|unlisted|public.
+3) Cambiar app/api/share/route.ts: permitir generar token si share_visibility IN ('public','unlisted') (antes solo public).
+4) Cambiar resolver DB de token (findSharedExtractionByToken o equivalente en lib/db.ts) para permitir IN ('public','unlisted') (antes solo public).
+5) Cambiar acceso de comunidad por subítem en app/api/.../tasks/.../community/route.ts:
+   - actualmente considera publico solo si share_visibility==='public'
+   - actualizar: visible-a-otros si share_visibility in ('public','unlisted')
+   - y preparar soporte para 'circle' cuando exista extraction_members.
+
+FASE 2: circle (colaboradores)
+Implementar tabla extraction_members(extraction_id,user_id,role) y reglas:
+- owner/editor: edita estructura y evidencias
+- viewer: puede ver + comentar + like
+Actualizar resolveCommunityAccess() para permitir 'circle' si actor es miembro.
+
+FASE 3: red social (posts + feeds)
+Implementar tablas community_* (posts, attachments cloudinary, follows, reactions, comments, views) + endpoints:
+- /api/community/feed/home
+- /api/community/feed/explore
+- /api/community/feed/extractions/[extractionId]
+- /api/community/posts (crear post, link a extraction/task)
+- /api/community/posts/[postId]/reactions
+- /api/community/posts/[postId]/comments
+- /api/community/follows/[userId]
+Reglas de visibilidad del post: private/circle/followers/public.
+
+Entrega:
+- diffs concretos, archivos tocados, y explicación breve.
+- mantener estilo actual (parseId, errores JSON, getUserFromRequest).
+- aplicar rate-limit en create post/comment/follow.
+7) Qué te recomiendo hacer mañana (orden exacto)
+
+Implementar unlisted + permitir share token para unlisted.
+
+Permitir comunidad (likes/comments) en unlisted también (no solo public).
+
+UI: botón rápido “Compartir con colegas” que cambie a unlisted y genere el link.
+
+Con eso, de inmediato otras personas podrán ver y dar like/comentar sin que tengas que construir la red social completa todavía.

@@ -29,6 +29,7 @@ import {
 } from '@/lib/output-language'
 import { ExtractionForm } from '@/app/home/components/ExtractionForm'
 import { AuthAccessPanel } from '@/app/home/components/AuthAccessPanel'
+import { CommunityPanel } from '@/app/home/components/CommunityPanel'
 import { GoogleIcon } from '@/app/home/components/GoogleIcon'
 import { ExtractionFeedCard } from '@/app/home/components/ExtractionFeedCard'
 import { HistoryPanel } from '@/app/home/components/HistoryPanel'
@@ -47,7 +48,22 @@ import {
   parseSseFrame,
   resolveInitialTheme,
 } from '@/app/home/lib/utils'
-import type { ExtractResult, HistoryItem, Phase, ShareVisibility, SourceType, Theme } from '@/app/home/lib/types'
+import {
+  getShareVisibilityChangeNotice,
+  isShareVisibilityShareable,
+  normalizeShareVisibility,
+} from '@/app/home/lib/share-visibility'
+import type {
+  ExtractResult,
+  ExtractionAccessRole,
+  ExtractionMember,
+  HistoryItem,
+  Phase,
+  ShareVisibility,
+  SharedExtractionItem,
+  SourceType,
+  Theme,
+} from '@/app/home/lib/types'
 import type { UploadedFileState } from '@/app/home/components/ExtractionForm'
 import { detectSourceType } from '@/lib/source-detector'
 
@@ -186,6 +202,12 @@ function ActionExtractor() {
   const [shareVisibilityLoading, setShareVisibilityLoading] = useState(false)
   const [historyShareLoadingItemId, setHistoryShareLoadingItemId] = useState<string | null>(null)
   const [historyShareCopiedItemId, setHistoryShareCopiedItemId] = useState<string | null>(null)
+  const [sharedWithMe, setSharedWithMe] = useState<SharedExtractionItem[]>([])
+  const [sharedWithMeLoading, setSharedWithMeLoading] = useState(false)
+  const [resultAccessRole, setResultAccessRole] = useState<ExtractionAccessRole>('owner')
+  const [circleMembers, setCircleMembers] = useState<ExtractionMember[]>([])
+  const [circleMembersLoading, setCircleMembersLoading] = useState(false)
+  const [circleMemberMutationLoading, setCircleMemberMutationLoading] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [streamStatus, setStreamStatus] = useState<string | null>(null)
   const [streamPreview, setStreamPreview] = useState('')
@@ -233,6 +255,57 @@ function ActionExtractor() {
     clearAllHistory,
   } = useHistory()
 
+  const loadSharedWithMe = useCallback(async () => {
+    setSharedWithMeLoading(true)
+    try {
+      const res = await fetch('/api/shared-with-me', { cache: 'no-store' })
+      if (res.status === 401) {
+        setSharedWithMe([])
+        return
+      }
+      const data = (await res.json().catch(() => null)) as
+        | { items?: unknown }
+        | null
+      if (!res.ok) {
+        setSharedWithMe([])
+        return
+      }
+      const items = Array.isArray(data?.items) ? (data.items as SharedExtractionItem[]) : []
+      setSharedWithMe(items)
+    } catch {
+      setSharedWithMe([])
+    } finally {
+      setSharedWithMeLoading(false)
+    }
+  }, [])
+
+  const loadCircleMembers = useCallback(async (extractionId: string) => {
+    const id = extractionId.trim()
+    if (!id) {
+      setCircleMembers([])
+      return
+    }
+    setCircleMembersLoading(true)
+    try {
+      const res = await fetch(`/api/extractions/${encodeURIComponent(id)}/members`, {
+        cache: 'no-store',
+      })
+      if (!res.ok) {
+        setCircleMembers([])
+        return
+      }
+      const data = (await res.json().catch(() => null)) as
+        | { members?: unknown }
+        | null
+      const members = Array.isArray(data?.members) ? (data.members as ExtractionMember[]) : []
+      setCircleMembers(members)
+    } catch {
+      setCircleMembers([])
+    } finally {
+      setCircleMembersLoading(false)
+    }
+  }, [])
+
   const resetExtractionUiState = useCallback(() => {
     setResult(null)
     setIsResultBookClosed(false)
@@ -246,6 +319,10 @@ function ActionExtractor() {
     setStreamStatus(null)
     setStreamPreview('')
     setShouldScrollToResult(false)
+    setResultAccessRole('owner')
+    setCircleMembers([])
+    setCircleMembersLoading(false)
+    setCircleMemberMutationLoading(false)
   }, [])
 
   const handleFileSelect = useCallback(async (file: File) => {
@@ -308,13 +385,14 @@ function ActionExtractor() {
     setReauthRequired(false)
     resetHistory()
     resetFolders()
+    setSharedWithMe([])
     setActiveFolderIds([])
     resetExtractionUiState()
   }, [resetExtractionUiState, resetFolders, resetHistory])
 
   const handleAuthenticated = useCallback(async () => {
-    await Promise.all([loadHistory(), loadFolders()])
-  }, [loadHistory, loadFolders])
+    await Promise.all([loadHistory(), loadFolders(), loadSharedWithMe()])
+  }, [loadFolders, loadHistory, loadSharedWithMe])
 
   const {
     sessionLoading,
@@ -374,6 +452,11 @@ function ActionExtractor() {
     setUser(null)
     resetHistory()
     resetFolders()
+    setSharedWithMe([])
+    setCircleMembers([])
+    setCircleMembersLoading(false)
+    setCircleMemberMutationLoading(false)
+    setResultAccessRole('owner')
     setActiveFolderIds([])
     setNotice(null)
     setStreamStatus(null)
@@ -393,6 +476,16 @@ function ActionExtractor() {
       return next.length === previous.length ? previous : next
     })
   }, [folders])
+
+  useEffect(() => {
+    const extractionId = result?.id?.trim()
+    if (!extractionId || resultAccessRole !== 'owner') {
+      setCircleMembers([])
+      setCircleMembersLoading(false)
+      return
+    }
+    void loadCircleMembers(extractionId)
+  }, [loadCircleMembers, result?.id, resultAccessRole])
 
   useEffect(() => {
     if (!shouldScrollToResult || isProcessing || !result) return
@@ -786,16 +879,18 @@ function ActionExtractor() {
       if (parsed.event === 'result') {
         if (payload && typeof payload === 'object') {
           const resolvedMode = normalizeExtractionMode((payload as { mode?: unknown }).mode)
-          const resolvedShareVisibility: ShareVisibility =
-            (payload as { shareVisibility?: unknown }).shareVisibility === 'public'
-              ? 'public'
-              : 'private'
+          const resolvedShareVisibility = normalizeShareVisibility(
+            (payload as { shareVisibility?: unknown }).shareVisibility
+          )
           const fromCache = (payload as { cached?: unknown }).cached === true
           setResult({
             ...(payload as ExtractResult),
             mode: resolvedMode,
             shareVisibility: resolvedShareVisibility,
+            accessRole: 'owner',
           })
+          setResultAccessRole('owner')
+          setCircleMembers([])
           setIsResultBookClosed(false)
           setExtractionMode(resolvedMode)
           setShareCopied(false)
@@ -927,9 +1022,13 @@ function ActionExtractor() {
   }
 
   const handleCopyShareLink = async () => {
+    if (resultAccessRole !== 'owner') {
+      setError('Solo el owner puede generar enlaces compartibles.')
+      return
+    }
     if (!result?.id || shareLoading) return
-    if (result.shareVisibility !== 'public') {
-      setError('Este contenido está privado. Cámbialo a Público para compartirlo.')
+    if (!isShareVisibilityShareable(normalizeShareVisibility(result.shareVisibility))) {
+      setError('Este contenido no es compartible. Cámbialo a Público o Solo con enlace.')
       return
     }
 
@@ -957,7 +1056,7 @@ function ActionExtractor() {
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
             : res.status === 409
-              ? 'Este contenido está privado. Cámbialo a Público para compartirlo.'
+              ? 'Este contenido no es compartible. Cámbialo a Público o Solo con enlace.'
             : 'No se pudo generar el enlace compartible.'
         setError(message)
         return
@@ -983,8 +1082,8 @@ function ActionExtractor() {
   const handleCopyShareLinkFromHistory = async (item: HistoryItem) => {
     const extractionId = item.id?.trim()
     if (!extractionId || historyShareLoadingItemId) return
-    if (item.shareVisibility !== 'public') {
-      setError('Este contenido está privado. Cámbialo a Público para compartirlo.')
+    if (!isShareVisibilityShareable(normalizeShareVisibility(item.shareVisibility))) {
+      setError('Este contenido no es compartible. Cámbialo a Público o Solo con enlace.')
       return
     }
 
@@ -1012,7 +1111,7 @@ function ActionExtractor() {
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
             : res.status === 409
-              ? 'Este contenido está privado. Cámbialo a Público para compartirlo.'
+              ? 'Este contenido no es compartible. Cámbialo a Público o Solo con enlace.'
             : 'No se pudo generar el enlace compartible.'
         setError(message)
         return
@@ -1039,10 +1138,14 @@ function ActionExtractor() {
   }
 
   const handleUpdateShareVisibility = async (nextVisibility: ShareVisibility) => {
+    if (resultAccessRole !== 'owner') {
+      setError('Solo el owner puede cambiar la visibilidad.')
+      return
+    }
     const extractionId = result?.id?.trim()
     if (!extractionId || shareVisibilityLoading) return
 
-    const currentVisibility: ShareVisibility = result?.shareVisibility === 'public' ? 'public' : 'private'
+    const currentVisibility = normalizeShareVisibility(result?.shareVisibility)
     if (currentVisibility === nextVisibility) return
 
     setError(null)
@@ -1096,8 +1199,7 @@ function ActionExtractor() {
         return
       }
 
-      const persistedVisibility: ShareVisibility =
-        data?.shareVisibility === 'public' ? 'public' : 'private'
+      const persistedVisibility = normalizeShareVisibility(data?.shareVisibility)
 
       setResult((previous) => {
         if (!previous || previous.id !== extractionId) return previous
@@ -1107,15 +1209,11 @@ function ActionExtractor() {
         }
       })
 
-      if (persistedVisibility !== 'public') {
+      if (!isShareVisibilityShareable(persistedVisibility)) {
         setShareCopied(false)
       }
 
-      setNotice(
-        persistedVisibility === 'public'
-          ? 'Contenido marcado como Público. Ya puedes compartir su enlace.'
-          : 'Contenido marcado como Privado. El enlace compartido dejará de estar disponible.'
-      )
+      setNotice(getShareVisibilityChangeNotice(persistedVisibility))
       void loadHistory()
     } catch {
       setError('No se pudo actualizar la visibilidad. Intenta nuevamente.')
@@ -1133,6 +1231,7 @@ function ActionExtractor() {
 
   const handleSaveResultMeta = useCallback(
     async (meta: { title: string; thumbnailUrl: string | null; objective: string }) => {
+      if (resultAccessRole !== 'owner') return false
       const extractionId = result?.id?.trim()
       if (!extractionId) return false
       setError(null)
@@ -1169,11 +1268,12 @@ function ActionExtractor() {
         return false
       }
     },
-    [handleUnauthorized, loadHistory, result]
+    [handleUnauthorized, loadHistory, result, resultAccessRole]
   )
 
   const handleAssignFolder = useCallback(
     async (extractionId: string, folderId: string | null) => {
+      if (resultAccessRole !== 'owner') return
       try {
         const res = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/folder`, {
           method: 'PATCH',
@@ -1199,11 +1299,97 @@ function ActionExtractor() {
         setError('Error de conexión al asignar carpeta.')
       }
     },
-    [handleUnauthorized, setError, setHistory, setResult]
+    [handleUnauthorized, resultAccessRole, setError, setHistory, setResult]
+  )
+
+  const handleAddCircleMember = useCallback(
+    async (input: { email: string; role: 'editor' | 'viewer' }) => {
+      const extractionId = result?.id?.trim()
+      if (!extractionId || resultAccessRole !== 'owner') return false
+
+      setCircleMemberMutationLoading(true)
+      setError(null)
+      try {
+        const res = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/members`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+        })
+
+        if (res.status === 401) {
+          handleUnauthorized()
+          setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+          return false
+        }
+
+        const data = (await res.json().catch(() => null)) as { error?: unknown } | null
+        if (!res.ok) {
+          setError(
+            typeof data?.error === 'string' && data.error.trim()
+              ? data.error
+              : 'No se pudo agregar el miembro.'
+          )
+          return false
+        }
+
+        await loadCircleMembers(extractionId)
+        setNotice('Miembro agregado al círculo.')
+        return true
+      } catch {
+        setError('Error de conexión al agregar el miembro.')
+        return false
+      } finally {
+        setCircleMemberMutationLoading(false)
+      }
+    },
+    [handleUnauthorized, loadCircleMembers, result?.id, resultAccessRole]
+  )
+
+  const handleRemoveCircleMember = useCallback(
+    async (memberUserId: string) => {
+      const extractionId = result?.id?.trim()
+      if (!extractionId || resultAccessRole !== 'owner') return false
+
+      setCircleMemberMutationLoading(true)
+      setError(null)
+      try {
+        const res = await fetch(
+          `/api/extractions/${encodeURIComponent(extractionId)}/members/${encodeURIComponent(memberUserId)}`,
+          { method: 'DELETE' }
+        )
+
+        if (res.status === 401) {
+          handleUnauthorized()
+          setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+          return false
+        }
+
+        const data = (await res.json().catch(() => null)) as { error?: unknown } | null
+        if (!res.ok) {
+          setError(
+            typeof data?.error === 'string' && data.error.trim()
+              ? data.error
+              : 'No se pudo eliminar el miembro.'
+          )
+          return false
+        }
+
+        await loadCircleMembers(extractionId)
+        setNotice('Miembro eliminado del círculo.')
+        return true
+      } catch {
+        setError('Error de conexión al eliminar el miembro.')
+        return false
+      } finally {
+        setCircleMemberMutationLoading(false)
+      }
+    },
+    [handleUnauthorized, loadCircleMembers, result?.id, resultAccessRole]
   )
 
   const handleSaveResultPhases = useCallback(
     async (phases: Phase[]) => {
+      if (resultAccessRole !== 'owner' && resultAccessRole !== 'editor') return false
       const extractionId = result?.id?.trim()
       if (!extractionId) {
         setError('No se puede guardar: esta extracción no está en historial.')
@@ -1256,7 +1442,7 @@ function ActionExtractor() {
         return false
       }
     },
-    [handleUnauthorized, loadHistory, result]
+    [handleUnauthorized, loadHistory, result, resultAccessRole]
   )
 
   const handleDownloadPdf = async (source?: ExtractResult | HistoryItem) => {
@@ -1399,7 +1585,7 @@ function ActionExtractor() {
     setResult({
       id: item.id,
       orderNumber: item.orderNumber,
-      shareVisibility: item.shareVisibility === 'public' ? 'public' : 'private',
+      shareVisibility: normalizeShareVisibility(item.shareVisibility),
       createdAt: item.createdAt,
       folderId: item.folderId ?? null,
       url: item.url ?? null,
@@ -1413,7 +1599,51 @@ function ActionExtractor() {
       metadata: item.metadata,
       sourceType: item.sourceType,
       sourceLabel: item.sourceLabel ?? null,
+      accessRole: 'owner',
     })
+    setResultAccessRole('owner')
+    setCircleMembers([])
+    if (item.id) {
+      void loadCircleMembers(item.id)
+    }
+    setIsResultBookClosed(false)
+    setActivePhase(null)
+    setError(null)
+    setShareCopied(false)
+    setShareVisibilityLoading(false)
+    setStreamStatus(null)
+    setStreamPreview('')
+    setShouldScrollToResult(true)
+  }
+
+  const openSharedItem = (item: SharedExtractionItem) => {
+    const mode = normalizeExtractionMode(item.mode)
+    setUrl(item.url ?? '')
+    setUploadedFile(null)
+    setExtractionMode(mode)
+    setResult({
+      id: item.id,
+      orderNumber: item.orderNumber,
+      shareVisibility: normalizeShareVisibility(item.shareVisibility),
+      createdAt: item.createdAt,
+      folderId: item.folderId ?? null,
+      url: item.url ?? null,
+      videoId: item.videoId ?? null,
+      videoTitle: item.videoTitle ?? null,
+      thumbnailUrl: item.thumbnailUrl ?? null,
+      mode,
+      objective: item.objective,
+      phases: item.phases,
+      proTip: item.proTip,
+      metadata: item.metadata,
+      sourceType: item.sourceType,
+      sourceLabel: item.sourceLabel ?? null,
+      accessRole: item.accessRole,
+      ownerName: item.ownerName,
+      ownerEmail: item.ownerEmail,
+    })
+    setResultAccessRole(item.accessRole)
+    setCircleMembers([])
     setIsResultBookClosed(false)
     setActivePhase(null)
     setError(null)
@@ -1705,6 +1935,8 @@ function ActionExtractor() {
                     onClearFile={handleClearFile}
                   onManualResult={(manualResult) => {
                     setResult(manualResult)
+                    setResultAccessRole('owner')
+                    setCircleMembers([])
                     setIsResultBookClosed(false)
                     setUrl('')
                     setUploadedFile(null)
@@ -1883,7 +2115,7 @@ function ActionExtractor() {
                     isExportingPdf={isExportingPdf}
                     shareLoading={shareLoading}
                     shareCopied={shareCopied}
-                    shareVisibility={result.shareVisibility === 'public' ? 'public' : 'private'}
+                    shareVisibility={normalizeShareVisibility(result.shareVisibility)}
                     shareVisibilityLoading={shareVisibilityLoading}
                     notionConfigured={notionConfigured}
                     notionConnected={notionConnected}
@@ -1916,6 +2148,12 @@ function ActionExtractor() {
                     onClose={() => setIsResultBookClosed(true)}
                     folders={folders}
                     onAssignFolder={handleAssignFolder}
+                    accessRole={resultAccessRole}
+                    members={circleMembers}
+                    membersLoading={circleMembersLoading}
+                    memberMutationLoading={circleMemberMutationLoading}
+                    onAddMember={handleAddCircleMember}
+                    onRemoveMember={handleRemoveCircleMember}
                     onExportToNotion={() => handleExportToNotion(result.id)}
                     onConnectNotion={handleConnectNotion}
                     onExportToTrello={() => handleExportToTrello(result.id)}
@@ -1960,6 +2198,65 @@ function ActionExtractor() {
                 </div>
               )}
             </div>
+
+            <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    Compartidos conmigo
+                  </p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Playbooks de círculo donde tienes acceso como viewer o editor.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void loadSharedWithMe()}
+                  disabled={sharedWithMeLoading}
+                  className="inline-flex h-8 items-center rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                >
+                  {sharedWithMeLoading ? 'Actualizando...' : 'Actualizar'}
+                </button>
+              </div>
+
+              {sharedWithMeLoading ? (
+                <p className="text-sm text-slate-500 dark:text-slate-400">Cargando compartidos...</p>
+              ) : sharedWithMe.length === 0 ? (
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Aún no tienes playbooks compartidos en círculo.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {sharedWithMe.map((item) => (
+                    <li key={item.id}>
+                      <button
+                        type="button"
+                        onClick={() => openSharedItem(item)}
+                        className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-left transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/40 dark:hover:bg-slate-800"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
+                            {item.videoTitle || item.sourceLabel || item.objective || 'Sin título'}
+                          </p>
+                          <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                            Owner: {item.ownerName?.trim() || item.ownerEmail || 'Sin datos'}
+                          </p>
+                        </div>
+                        <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700 dark:border-sky-700 dark:bg-sky-900/25 dark:text-sky-300">
+                          {item.accessRole === 'editor' ? 'Editor' : 'Viewer'}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <CommunityPanel
+              currentExtractionId={result?.id ?? null}
+              onError={setError}
+              onNotice={setNotice}
+            />
 
             <div ref={historyAnchorRef} className="scroll-mt-24 pt-6 md:pt-10">
               {/* View mode toggle */}

@@ -45,6 +45,8 @@ import {
   type ExtractionMode,
 } from '@/lib/extraction-modes'
 import type {
+  ExtractionAccessRole,
+  ExtractionMember,
   ExtractResult,
   InteractiveTaskAttachment,
   InteractiveTaskComment,
@@ -57,6 +59,10 @@ import type {
   SourceType,
 } from '@/app/home/lib/types'
 import type { FolderItem } from '@/app/home/components/FolderDock'
+import {
+  isShareVisibilityShareable,
+  getShareVisibilityLabel,
+} from '@/app/home/lib/share-visibility'
 
 interface ResultPanelProps {
   result: ExtractResult
@@ -121,6 +127,12 @@ interface ResultPanelProps {
   onClose?: () => void
   folders?: FolderItem[]
   onAssignFolder?: (extractionId: string, folderId: string | null) => void | Promise<void>
+  accessRole?: ExtractionAccessRole
+  members?: ExtractionMember[]
+  membersLoading?: boolean
+  memberMutationLoading?: boolean
+  onAddMember?: (input: { email: string; role: 'editor' | 'viewer' }) => Promise<boolean>
+  onRemoveMember?: (memberUserId: string) => Promise<boolean>
 }
 
 type PlaybookCloseStage = 'idle' | 'folding' | 'cover'
@@ -311,6 +323,12 @@ export function ResultPanel({
   onClose,
   folders = [],
   onAssignFolder,
+  accessRole = 'owner',
+  members = [],
+  membersLoading = false,
+  memberMutationLoading = false,
+  onAddMember,
+  onRemoveMember,
 }: ResultPanelProps) {
   const resolvedMode = normalizeExtractionMode(result.mode ?? extractionMode)
   const sourceUrl = (result.url ?? url).trim()
@@ -340,6 +358,15 @@ export function ResultPanel({
     typeof bookFolderLabel === 'string' && bookFolderLabel.trim().length > 0
       ? bookFolderLabel.trim()
       : 'Playbooks sueltos'
+  const isShareableVisibility = isShareVisibilityShareable(shareVisibility)
+  const isOwnerAccess = accessRole === 'owner'
+  const canEditTaskContent = accessRole === 'owner' || accessRole === 'editor'
+  const canEditMeta = isOwnerAccess
+  const canEditStructure = canEditTaskContent
+  const canManageFolder = isOwnerAccess
+  const canManageVisibility = isOwnerAccess
+  const canManageMembers = isOwnerAccess
+  const isGuestExtraction = (result.id?.trim() ?? '').startsWith('g-')
   const currentPageTurnSnapshot = useMemo<PlaybookPageTurnSnapshot>(
     () => ({
       sourceSectionLabel,
@@ -417,14 +444,20 @@ export function ResultPanel({
     Record<string, string | null>
   >({})
   const [taskCommentDraftByTaskId, setTaskCommentDraftByTaskId] = useState<Record<string, string>>({})
+  const [taskShareCopiedByTaskId, setTaskShareCopiedByTaskId] = useState<Record<string, boolean>>({})
   const [taskOpenSectionByTaskId, setTaskOpenSectionByTaskId] = useState<
-    Record<string, 'gestion' | 'actividad' | 'evidencias' | null>
+    Record<string, 'gestion' | 'actividad' | null>
   >({})
   // One selected task at a time — community renders only for the selected task
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   // Per-task community visibility (true = shown, false = hidden by user toggle)
   // Defaults to true when the task is first selected
   const [taskCommunityOpenByTaskId, setTaskCommunityOpenByTaskId] = useState<
+    Record<string, boolean>
+  >({})
+  // Per-task evidence visibility (true = shown, false = hidden by user toggle)
+  // Defaults to true when the task is first selected
+  const [taskEvidenceOpenByTaskId, setTaskEvidenceOpenByTaskId] = useState<
     Record<string, boolean>
   >({})
   // Tracks tasks whose community data has already been auto-fetched (per mount)
@@ -451,6 +484,9 @@ export function ResultPanel({
   const [metaSaving, setMetaSaving] = useState(false)
   const [metaError, setMetaError] = useState<string | null>(null)
   const [metaCloudinaryAvailable, setMetaCloudinaryAvailable] = useState<boolean | null>(null)
+  const [memberEmailDraft, setMemberEmailDraft] = useState('')
+  const [memberRoleDraft, setMemberRoleDraft] = useState<'editor' | 'viewer'>('viewer')
+  const [memberError, setMemberError] = useState<string | null>(null)
   const metaThumbInputRef = useRef<HTMLInputElement>(null)
   const phasesSignature = useMemo(() => JSON.stringify(result.phases), [result.phases])
   const isAnyActionLoading =
@@ -612,6 +648,9 @@ export function ResultPanel({
     setIsMetaEditing(false)
     setMetaError(null)
     setMetaCloudinaryAvailable(null)
+    setMemberEmailDraft('')
+    setMemberRoleDraft('viewer')
+    setMemberError(null)
   }, [result.id])
 
   // Probe Cloudinary availability when meta edit mode opens
@@ -644,6 +683,7 @@ export function ResultPanel({
     setTaskOpenSectionByTaskId({})
     setSelectedTaskId(null)
     setTaskCommunityOpenByTaskId({})
+    setTaskEvidenceOpenByTaskId({})
     autoFetchedCommunityRef.current = new Set()
     setTaskEstadoExpandedByTaskId({})
     setTaskAddEvidenceExpandedByTaskId({})
@@ -668,19 +708,24 @@ export function ResultPanel({
 
     const controller = new AbortController()
 
-    const syncTasks = async () => {
+    const loadTasks = async () => {
       setTasksLoading(true)
       setTasksError(null)
       try {
-        const response = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/tasks`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'sync',
-            phases: result.phases,
-          }),
-          signal: controller.signal,
-        })
+        const response = canEditTaskContent
+          ? await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/tasks`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'sync',
+                phases: result.phases,
+              }),
+              signal: controller.signal,
+            })
+          : await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/tasks`, {
+              method: 'GET',
+              signal: controller.signal,
+            })
 
         const payload = (await response.json().catch(() => null)) as
           | { tasks?: unknown; error?: unknown }
@@ -713,12 +758,12 @@ export function ResultPanel({
       }
     }
 
-    void syncTasks()
+    void loadTasks()
 
     return () => {
       controller.abort()
     }
-  }, [phasesSignature, result.id, result.phases])
+  }, [canEditTaskContent, phasesSignature, result.id, result.phases])
 
   useEffect(() => {
     setEventDraftContent('')
@@ -828,6 +873,12 @@ export function ResultPanel({
               extractionId,
               likesCount: 0,
               likedByMe: false,
+              sharesCount: 0,
+              sharedByMe: false,
+              followersCount: 0,
+              followingByMe: false,
+              viewsCount: 0,
+              viewedByMe: false,
             }
 
       setTaskCommentsByTaskId((previous) => ({
@@ -889,6 +940,24 @@ export function ResultPanel({
     void fetchTaskCommunity(mobileSheetTaskId)
   }, [mobileSheetTaskId, mobileSheetTab])
 
+  useEffect(() => {
+    if (!taskMenuOpenId) return
+
+    const handleOutsideTaskMenuClick = (event: MouseEvent | TouchEvent) => {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      if (target.closest('[data-task-menu-root="true"]')) return
+      setTaskMenuOpenId(null)
+    }
+
+    document.addEventListener('mousedown', handleOutsideTaskMenuClick)
+    document.addEventListener('touchstart', handleOutsideTaskMenuClick)
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideTaskMenuClick)
+      document.removeEventListener('touchstart', handleOutsideTaskMenuClick)
+    }
+  }, [taskMenuOpenId])
+
   const refreshTaskCollection = async (payload: Record<string, unknown>) => {
     const extractionId = result.id?.trim()
     if (!extractionId) return false
@@ -920,6 +989,7 @@ export function ResultPanel({
   }
 
   const handleTaskToggle = async (task: InteractiveTask, checked: boolean) => {
+    if (!canEditTaskContent) return
     setTaskMutationLoadingId(task.id)
     try {
       await refreshTaskCollection({
@@ -933,6 +1003,7 @@ export function ResultPanel({
   }
 
   const handleTaskStatusChange = async (task: InteractiveTask, status: InteractiveTaskStatus) => {
+    if (!canEditTaskContent) return
     setTaskMutationLoadingId(task.id)
     try {
       await refreshTaskCollection({
@@ -946,6 +1017,7 @@ export function ResultPanel({
   }
 
   const handleAddTaskEvent = async (task: InteractiveTask, eventType: InteractiveTaskEventType) => {
+    if (!canEditTaskContent) return
     const content = eventDraftContent.trim()
     if (!content) return
 
@@ -967,12 +1039,14 @@ export function ResultPanel({
   }
 
   const handleOpenTaskFilePicker = (taskId: string) => {
+    if (!canEditTaskContent) return
     const node = taskFileInputRefs.current[taskId]
     if (!node) return
     node.click()
   }
 
   const handleTaskFileSelected = async (task: InteractiveTask, file: File | null) => {
+    if (!canEditTaskContent) return
     if (!file) return
     const extractionId = result.id?.trim()
     if (!extractionId) return
@@ -1033,6 +1107,7 @@ export function ResultPanel({
   }
 
   const handleAddTaskYoutubeLink = async (task: InteractiveTask) => {
+    if (!canEditTaskContent) return
     const extractionId = result.id?.trim()
     if (!extractionId) return
 
@@ -1091,6 +1166,7 @@ export function ResultPanel({
     task: InteractiveTask,
     attachment: InteractiveTaskAttachment
   ) => {
+    if (!canEditTaskContent) return
     const extractionId = result.id?.trim()
     if (!extractionId) return
 
@@ -1143,6 +1219,7 @@ export function ResultPanel({
   }
 
   const handleAddTaskNote = async (task: InteractiveTask) => {
+    if (!canEditTaskContent) return
     const extractionId = result.id?.trim()
     if (!extractionId) return
     const noteText = (noteDraftByTaskId[task.id] ?? '').trim()
@@ -1241,6 +1318,12 @@ export function ResultPanel({
               extractionId,
               likesCount: 0,
               likedByMe: false,
+              sharesCount: 0,
+              sharedByMe: false,
+              followersCount: 0,
+              followingByMe: false,
+              viewsCount: 0,
+              viewedByMe: false,
             }
 
       setTaskCommentsByTaskId((previous) => ({
@@ -1294,6 +1377,96 @@ export function ResultPanel({
     await mutateTaskCommunity(task.id, {
       action: 'toggle_like',
     })
+  }
+
+  const handleToggleTaskFollow = async (task: InteractiveTask) => {
+    if (isGuestExtraction) {
+      setTaskCommunityErrorByTaskId((previous) => ({
+        ...previous,
+        [task.id]: 'Seguir subítems requiere una cuenta registrada.',
+      }))
+      return
+    }
+
+    await mutateTaskCommunity(task.id, {
+      action: 'toggle_follow',
+    })
+  }
+
+  const handleShareTask = async (task: InteractiveTask) => {
+    if (typeof window === 'undefined') return
+
+    const extractionId = result.id?.trim()
+    if (!extractionId) return
+
+    setTaskCommunityErrorByTaskId((previous) => ({
+      ...previous,
+      [task.id]: null,
+    }))
+
+    const taskHash = `#task-${task.id}`
+    const fallbackShareUrl = `${window.location.origin}${window.location.pathname}${window.location.search}${taskHash}`
+    let shareUrl = fallbackShareUrl
+
+    if (!isGuestExtraction && canManageVisibility && isShareableVisibility) {
+      try {
+        const response = await fetch('/api/share', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ extractionId }),
+        })
+        const payload = (await response.json().catch(() => null)) as
+          | { token?: unknown; error?: unknown }
+          | null
+
+        if (response.ok) {
+          const token = typeof payload?.token === 'string' ? payload.token.trim() : ''
+          if (token) {
+            shareUrl = `${window.location.origin}/share/${token}${taskHash}`
+          }
+        } else {
+          const message =
+            typeof payload?.error === 'string' && payload.error.trim()
+              ? payload.error
+              : 'No se pudo generar el enlace compartible del subítem.'
+          setTaskCommunityErrorByTaskId((previous) => ({
+            ...previous,
+            [task.id]: message,
+          }))
+        }
+      } catch {
+        setTaskCommunityErrorByTaskId((previous) => ({
+          ...previous,
+          [task.id]: 'No se pudo generar el enlace compartible del subítem.',
+        }))
+      }
+    }
+
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      setTaskShareCopiedByTaskId((previous) => ({
+        ...previous,
+        [task.id]: true,
+      }))
+      window.setTimeout(() => {
+        setTaskShareCopiedByTaskId((previous) => ({
+          ...previous,
+          [task.id]: false,
+        }))
+      }, 1800)
+    } catch {
+      setTaskCommunityErrorByTaskId((previous) => ({
+        ...previous,
+        [task.id]: 'No se pudo copiar el enlace del subítem.',
+      }))
+      return
+    }
+
+    if (!isGuestExtraction) {
+      await mutateTaskCommunity(task.id, {
+        action: 'record_share',
+      })
+    }
   }
 
   const collapseActionsSection = () => {
@@ -1375,6 +1548,7 @@ export function ResultPanel({
   }
 
   const handleStartStructureEditing = () => {
+    if (!canEditStructure) return
     setPhaseDrafts(result.phases.map((phase) => ({ ...phase, items: [...phase.items] })))
     setStructureError(null)
     setIsStructureEditing(true)
@@ -1516,6 +1690,7 @@ export function ResultPanel({
   }
 
   const handleSaveStructure = async () => {
+    if (!canEditStructure) return
     const normalized = phaseDrafts
       .map((phase, index) => ({
         id: index + 1,
@@ -1553,6 +1728,7 @@ export function ResultPanel({
   }
 
   const handleStartMetaEdit = () => {
+    if (!canEditMeta) return
     setMetaTitleDraft(sourceDisplayTitle)
     setMetaObjectiveDraft(result.objective)
     setMetaThumbnailUrl(result.thumbnailUrl ?? null)
@@ -1569,6 +1745,7 @@ export function ResultPanel({
   }
 
   const handleMetaThumbSelect = async (file: File) => {
+    if (!canEditMeta) return
     setMetaThumbError(null)
     setIsUploadingMetaThumb(true)
     try {
@@ -1591,6 +1768,7 @@ export function ResultPanel({
   }
 
   const handleSaveMeta = async () => {
+    if (!canEditMeta) return
     setMetaSaving(true)
     const ok = await onSaveMeta({
       title: metaTitleDraft.trim() || 'Sin título',
@@ -1614,11 +1792,45 @@ export function ResultPanel({
 
   const handleAssignCurrentFolder = (folderId: string | null) => {
     const extractionId = result.id?.trim()
-    if (!extractionId || !onAssignFolder || isAssigningFolder) return
+    if (!canManageFolder || !extractionId || !onAssignFolder || isAssigningFolder) return
     setIsAssigningFolder(true)
     void Promise.resolve(onAssignFolder(extractionId, folderId)).finally(() => {
       setIsAssigningFolder(false)
     })
+  }
+
+  const handleAddMember = async () => {
+    if (!canManageMembers || !onAddMember || memberMutationLoading) return
+
+    const email = memberEmailDraft.trim().toLowerCase()
+    if (!email) {
+      setMemberError('Debes indicar un correo válido.')
+      return
+    }
+
+    setMemberError(null)
+    const ok = await onAddMember({ email, role: memberRoleDraft })
+    if (!ok) {
+      setMemberError('No se pudo agregar el miembro.')
+      return
+    }
+
+    setMemberEmailDraft('')
+  }
+
+  const handleRemoveMember = async (memberUserId: string) => {
+    if (!canManageMembers || !onRemoveMember || memberMutationLoading) return
+    const confirmed =
+      typeof window === 'undefined'
+        ? false
+        : window.confirm('¿Eliminar este miembro del círculo?')
+    if (!confirmed) return
+
+    setMemberError(null)
+    const ok = await onRemoveMember(memberUserId)
+    if (!ok) {
+      setMemberError('No se pudo eliminar el miembro.')
+    }
   }
 
   return (
@@ -1697,7 +1909,7 @@ export function ResultPanel({
               {sourceSectionLabel}
             </h2>
             <div className="flex items-center gap-2">
-              {result.id && onAssignFolder && (
+              {result.id && onAssignFolder && canManageFolder && (
                 <label className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
                   <Folder size={12} />
                   <select
@@ -1716,7 +1928,7 @@ export function ResultPanel({
                   </select>
                 </label>
               )}
-              {result.id && !isMetaEditing && (
+              {result.id && !isMetaEditing && canEditMeta && (
                 <button
                   type="button"
                   onClick={handleStartMetaEdit}
@@ -1836,7 +2048,7 @@ export function ResultPanel({
                         </span>
                       </p>
                     )}
-                    {result.id && (
+                    {result.id && canManageVisibility && (
                       <div className="inline-flex h-7 items-center overflow-hidden rounded-md border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
                         <button
                           type="button"
@@ -1853,6 +2065,32 @@ export function ResultPanel({
                         </button>
                         <button
                           type="button"
+                          onClick={() => onShareVisibilityChange('circle')}
+                          disabled={shareVisibilityLoading}
+                          className={`h-full px-2 text-[11px] font-semibold transition-colors ${
+                            shareVisibility === 'circle'
+                              ? 'bg-sky-600 text-white dark:bg-sky-500 dark:text-sky-950'
+                              : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                          }`}
+                          aria-label="Marcar contenido como círculo"
+                        >
+                          Círculo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onShareVisibilityChange('unlisted')}
+                          disabled={shareVisibilityLoading}
+                          className={`h-full px-2 text-[11px] font-semibold transition-colors ${
+                            shareVisibility === 'unlisted'
+                              ? 'bg-amber-500 text-white dark:bg-amber-400 dark:text-amber-950'
+                              : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                          }`}
+                          aria-label="Marcar contenido como solo con enlace"
+                        >
+                          Enlace
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => onShareVisibilityChange('public')}
                           disabled={shareVisibilityLoading}
                           className={`h-full px-2 text-[11px] font-semibold transition-colors ${
@@ -1866,6 +2104,11 @@ export function ResultPanel({
                         </button>
                       </div>
                     )}
+                    {result.id && !canManageVisibility && (
+                      <span className="inline-flex rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-700 dark:border-sky-700 dark:bg-sky-900/25 dark:text-sky-300">
+                        Visibilidad: {getShareVisibilityLabel(shareVisibility)}
+                      </span>
+                    )}
                     {result.id && (
                       <button
                         type="button"
@@ -1877,23 +2120,94 @@ export function ResultPanel({
                         {idCopied ? 'Copiado' : 'Copiar'}
                       </button>
                     )}
-                    {result.id && (
+                    {result.id && canManageVisibility && (
                       <button
                         type="button"
                         onClick={onCopyShareLink}
-                        disabled={shareLoading || shareVisibility !== 'public'}
+                        disabled={shareLoading || !isShareableVisibility}
                         className="inline-flex h-7 items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2 text-[11px] font-semibold text-violet-700 transition-colors hover:bg-violet-100 disabled:cursor-wait disabled:opacity-70 dark:border-violet-700 dark:bg-violet-900/25 dark:text-violet-300 dark:hover:bg-violet-900/40"
                         aria-label="Compartir extracción"
                       >
                         <Share2 size={12} />
                         {shareLoading
                           ? 'Compartiendo...'
-                          : shareVisibility !== 'public'
-                            ? 'Solo público'
+                          : !isShareableVisibility
+                            ? 'Público o enlace'
                             : shareCopied
                               ? 'Compartido'
                               : 'Compartir'}
                       </button>
+                    )}
+                  </div>
+                )}
+                {result.id && canManageMembers && shareVisibility === 'circle' && (
+                  <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50/60 p-3 dark:border-sky-800 dark:bg-sky-900/20">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-sky-700 dark:text-sky-300">
+                      Miembros del Círculo
+                    </p>
+                    <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                      <input
+                        type="email"
+                        value={memberEmailDraft}
+                        onChange={(event) => setMemberEmailDraft(event.target.value)}
+                        placeholder="correo@dominio.com"
+                        disabled={memberMutationLoading}
+                        className="h-8 min-w-0 flex-1 rounded-md border border-sky-200 bg-white px-2 text-xs text-slate-700 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none dark:border-sky-800 dark:bg-slate-900 dark:text-slate-200"
+                      />
+                      <select
+                        value={memberRoleDraft}
+                        onChange={(event) => setMemberRoleDraft(event.target.value === 'editor' ? 'editor' : 'viewer')}
+                        disabled={memberMutationLoading}
+                        className="h-8 rounded-md border border-sky-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none dark:border-sky-800 dark:bg-slate-900 dark:text-slate-200"
+                      >
+                        <option value="viewer">Viewer</option>
+                        <option value="editor">Editor</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => void handleAddMember()}
+                        disabled={memberMutationLoading || !memberEmailDraft.trim()}
+                        className="inline-flex h-8 items-center justify-center gap-1 rounded-md bg-sky-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+                      >
+                        <Plus size={12} />
+                        Agregar
+                      </button>
+                    </div>
+                    {memberError && (
+                      <p className="mt-2 text-xs font-medium text-rose-600 dark:text-rose-300">{memberError}</p>
+                    )}
+                    {membersLoading ? (
+                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Cargando miembros...</p>
+                    ) : members.length === 0 ? (
+                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        Aún no hay miembros en este círculo.
+                      </p>
+                    ) : (
+                      <ul className="mt-2 space-y-1.5">
+                        {members.map((member) => (
+                          <li
+                            key={member.userId}
+                            className="flex items-center justify-between gap-2 rounded-md border border-sky-100 bg-white px-2 py-1.5 text-xs dark:border-sky-900 dark:bg-slate-900"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold text-slate-700 dark:text-slate-200">
+                                {member.userName?.trim() || member.userEmail}
+                              </p>
+                              <p className="truncate text-slate-500 dark:text-slate-400">
+                                {member.userEmail} · {member.role}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void handleRemoveMember(member.userId)}
+                              disabled={memberMutationLoading}
+                              className="inline-flex h-7 items-center rounded-md border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300"
+                            >
+                              Quitar
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
                     )}
                   </div>
                 )}
@@ -1953,14 +2267,14 @@ export function ResultPanel({
 
                         <button
                           onClick={() => triggerAsyncAction(onCopyShareLink)}
-                          disabled={!result.id || shareLoading || shareVisibility !== 'public'}
+                          disabled={!canManageVisibility || !result.id || shareLoading || !isShareableVisibility}
                           className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-wait disabled:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
                         >
                           <Share2 size={15} />
                           {shareLoading
                             ? 'Generando...'
-                            : shareVisibility !== 'public'
-                              ? 'Público requerido'
+                            : !isShareableVisibility
+                              ? 'Público o enlace'
                               : shareCopied
                                 ? 'Copiado'
                                 : 'Compartir'}
@@ -2248,7 +2562,7 @@ export function ResultPanel({
                 Define y organiza la estructura accionable del contenido.
               </p>
             </div>
-            {result.id && !isStructureEditing && (
+            {result.id && !isStructureEditing && canEditStructure && (
               <button
                 type="button"
                 onClick={handleStartStructureEditing}
@@ -2483,11 +2797,10 @@ export function ResultPanel({
                               Subítems
                             </p>
                           </div>
-                          <ul className="space-y-2 md:ml-2 md:space-y-3 md:border-l-2 md:border-dashed md:border-slate-300 md:pl-4 md:dark:border-slate-700">
+                          <ul className="space-y-3 md:ml-2 md:space-y-4 md:border-l-2 md:border-dashed md:border-slate-300 md:pl-4 md:dark:border-slate-700">
                             {phase.items.map((item, idx) => {
                               const subItemNumber = `${phase.id}.${idx + 1}`
                               const task = tasksByPhaseItem.get(`${phase.id}:${idx}`) ?? null
-                              const isTaskExpanded = task ? activeTaskId === task.id : false
                               const isTaskMutating = task ? taskMutationLoadingId === task.id : false
                               const taskAttachments = task ? (taskAttachmentsByTaskId[task.id] ?? []) : []
                               const taskAttachmentError = task
@@ -2509,9 +2822,18 @@ export function ResultPanel({
                                     extractionId: task.extractionId,
                                     likesCount: 0,
                                     likedByMe: false,
+                                    sharesCount: 0,
+                                    sharedByMe: false,
+                                    followersCount: 0,
+                                    followingByMe: false,
+                                    viewsCount: 0,
+                                    viewedByMe: false,
                                   })
                                 : null
                               const taskCommentDraft = task ? (taskCommentDraftByTaskId[task.id] ?? '') : ''
+                              const isTaskShareCopied = task
+                                ? (taskShareCopiedByTaskId[task.id] ?? false)
+                                : false
                               const taskCommunityError = task
                                 ? (taskCommunityErrorByTaskId[task.id] ?? null)
                                 : null
@@ -2521,16 +2843,18 @@ export function ResultPanel({
                               const isTaskCommunityMutating = task
                                 ? taskCommunityMutationId === task.id
                                 : false
-                                              const openSection = task
+                              const openSection = task
                                 ? (taskOpenSectionByTaskId[task.id] ?? null)
                                 : null
                               const isTaskActivityExpanded = openSection === 'actividad'
                               const isTaskGestionExpanded = openSection === 'gestion'
-                              const isTaskEvidenceExpanded = openSection === 'evidencias'
                               // Community shows only for the selected task, and only if not hidden by user
                               const isTaskSelected = task ? task.id === selectedTaskId : false
                               const isTaskCommunityExpanded =
-                                isTaskSelected && (taskCommunityOpenByTaskId[task?.id ?? ''] ?? true)
+                                isTaskSelected && (taskCommunityOpenByTaskId[task?.id ?? ''] ?? false)
+                              // Evidence shows only for the selected task, and only if not hidden by user
+                              const isTaskEvidenceExpanded =
+                                isTaskSelected && (taskEvidenceOpenByTaskId[task?.id ?? ''] ?? false)
                               // Auto-fetch community the first time the selected task's community becomes visible
                               if (isTaskCommunityExpanded && task && !(task.id in taskCommentsByTaskId) && !autoFetchedCommunityRef.current.has(task.id)) {
                                 autoFetchedCommunityRef.current.add(task.id)
@@ -2546,13 +2870,26 @@ export function ResultPanel({
                               return (
                                 <li
                                   key={`${phase.id}-${idx}`}
-                                  className="relative rounded-xl border border-slate-200 bg-white/80 dark:border-slate-700 dark:bg-slate-900/70"
+                                  id={task ? `task-${task.id}` : undefined}
+                                  className={`relative flex flex-col overflow-hidden rounded-xl border bg-white/90 shadow-sm ring-1 transition-all duration-200 dark:bg-slate-900/70 ${
+                                    isTaskSelected
+                                      ? 'border-indigo-300 ring-indigo-200 shadow-md dark:border-indigo-600 dark:ring-indigo-900/50'
+                                      : 'border-slate-200/90 ring-slate-200/70 hover:border-slate-300 hover:shadow-md dark:border-slate-700 dark:ring-slate-700/70 dark:hover:border-slate-600'
+                                  }`}
                                 >
                                   <span
                                     aria-hidden="true"
                                     className="hidden md:block absolute -left-[1.1rem] top-5 h-2.5 w-2.5 rounded-full border-2 border-indigo-400 bg-white dark:border-indigo-500 dark:bg-slate-900"
                                   />
-                                  <div className="p-3">
+                                  <span
+                                    aria-hidden="true"
+                                    className={`absolute inset-y-0 left-0 w-1 ${
+                                      isTaskSelected
+                                        ? 'bg-indigo-400 dark:bg-indigo-500'
+                                        : 'bg-slate-200/80 dark:bg-slate-700/80'
+                                    }`}
+                                  />
+                                  <div className="order-1 p-3">
                                     {/* Content column — full width */}
                                     <div className="min-w-0">
                                       {/* Top bar: checkbox + index + stats | activity/evidence + status + three-dots */}
@@ -2563,7 +2900,7 @@ export function ResultPanel({
                                             type="button"
                                             role="checkbox"
                                             aria-checked={task?.checked ?? false}
-                                            disabled={!task || isTaskMutating}
+                                            disabled={!task || !canEditTaskContent || isTaskMutating}
                                             onClick={(event) => {
                                               event.stopPropagation()
                                               if (!task) return
@@ -2588,19 +2925,23 @@ export function ResultPanel({
                                           <div className="flex items-center gap-2">
                                             <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Me gusta">
                                               <ThumbsUp size={10} />
-                                              {taskLikeSummaryByTaskId[task?.id ?? '']?.likesCount ?? 0}
+                                              {taskLikeSummary?.likesCount ?? 0}
                                             </span>
                                             <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Compartidos">
                                               <Share2 size={10} />
-                                              0
+                                              {taskLikeSummary?.sharesCount ?? 0}
                                             </span>
                                             <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Seguidores">
                                               <Bell size={10} />
-                                              0
+                                              {taskLikeSummary?.followersCount ?? 0}
                                             </span>
                                             <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Visualizaciones">
                                               <Eye size={10} />
-                                              0
+                                              {taskLikeSummary?.viewsCount ?? 0}
+                                            </span>
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Comentarios">
+                                              <MessageSquare size={10} />
+                                              {taskComments.length}
                                             </span>
                                           </div>
                                         </div>
@@ -2643,7 +2984,7 @@ export function ResultPanel({
                                             </>
                                           )}
                                           {task && (
-                                            <div className="relative hidden md:block">
+                                            <div className="relative hidden md:block" data-task-menu-root="true">
                                               <button
                                                 type="button"
                                                 onClick={() => setTaskMenuOpenId((prev) => (prev === task.id ? null : task.id))}
@@ -2690,10 +3031,11 @@ export function ResultPanel({
                                                     type="button"
                                                     onClick={() => {
                                                       setTaskMenuOpenId(null)
-                                                      setActiveTaskId((prev) => (prev === task.id ? null : task.id))
-                                                      setTaskOpenSectionByTaskId((prev) => ({
+                                                      setSelectedTaskId(task.id)
+                                                      setActiveTaskId(task.id)
+                                                      setTaskEvidenceOpenByTaskId((prev) => ({
                                                         ...prev,
-                                                        [task.id]: 'evidencias',
+                                                        [task.id]: true,
                                                       }))
                                                     }}
                                                     className="flex w-full items-center gap-2 px-3 py-2 text-[11px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
@@ -2717,9 +3059,19 @@ export function ResultPanel({
                                             setMobileSheetTaskId(task.id)
                                             setMobileSheetTab('comunidad')
                                           } else {
-                                            setSelectedTaskId((prev) =>
-                                              prev === task.id ? null : task.id
-                                            )
+                                            const nextSelectedTaskId = isTaskSelected ? null : task.id
+                                            setSelectedTaskId(nextSelectedTaskId)
+                                            setActiveTaskId(nextSelectedTaskId)
+                                            if (nextSelectedTaskId) {
+                                              setTaskCommunityOpenByTaskId((prev) => ({
+                                                ...prev,
+                                                [nextSelectedTaskId]: false,
+                                              }))
+                                              setTaskEvidenceOpenByTaskId((prev) => ({
+                                                ...prev,
+                                                [nextSelectedTaskId]: false,
+                                              }))
+                                            }
                                           }
                                         }}
                                         className={`w-full text-left rounded-lg px-1 py-0.5 transition-colors ${
@@ -2740,7 +3092,7 @@ export function ResultPanel({
                                   {/* Actividad inline collapsible (desktop only) */}
                                   <div
                                     aria-hidden={!isTaskActivityExpanded || !task}
-                                    className={`hidden md:grid transition-[grid-template-rows,opacity] duration-500 ease-out ${
+                                    className={`order-2 hidden md:grid transition-[grid-template-rows,opacity] duration-500 ease-out ${
                                       isTaskActivityExpanded && task
                                         ? 'grid-rows-[1fr] opacity-100'
                                         : 'grid-rows-[0fr] opacity-0'
@@ -2755,47 +3107,65 @@ export function ResultPanel({
                                         }`}
                                       >
                                         {task && (
-                                          task.events.length === 0 ? (
-                                            <p className="text-xs text-slate-500 dark:text-slate-400">
-                                              No hay eventos registrados todavía.
-                                            </p>
-                                          ) : (
-                                            <ul className="space-y-2">
-                                              {task.events.map((event) => (
-                                                <li
-                                                  key={event.id}
-                                                  className="rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900"
-                                                >
-                                                  <div className="flex items-start gap-2">
-                                                    {event.eventType === 'blocker' ? (
-                                                      <AlertTriangle size={13} className="mt-0.5 text-rose-500 dark:text-rose-300" />
-                                                    ) : event.eventType === 'pending_action' ? (
-                                                      <Clock size={13} className="mt-0.5 text-amber-500 dark:text-amber-400" />
-                                                    ) : event.eventType === 'resolved' ? (
-                                                      <CheckCircle2 size={13} className="mt-0.5 text-emerald-500 dark:text-emerald-400" />
-                                                    ) : (
-                                                      <Pencil size={13} className="mt-0.5 text-slate-400 dark:text-slate-500" />
-                                                    )}
-                                                    <div className="min-w-0 flex-1">
-                                                      <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                                                        {getTaskEventTypeLabel(event.eventType)}
-                                                      </p>
-                                                      <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
-                                                        {event.content}
-                                                      </p>
-                                                      <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
-                                                        <span className="font-medium text-slate-500 dark:text-slate-400">
-                                                          {event.userName?.trim() || event.userEmail?.trim() || 'Usuario'}
-                                                        </span>
-                                                        {' · '}
-                                                        {formatTaskEventDate(event.createdAt)}
-                                                      </p>
+                                          <>
+                                            <div className="mb-2 flex justify-end">
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  setTaskOpenSectionByTaskId((prev) => ({
+                                                    ...prev,
+                                                    [task.id]: null,
+                                                  }))
+                                                }
+                                                className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+                                                aria-label="Cerrar actividad"
+                                                title="Cerrar actividad"
+                                              >
+                                                <X size={12} />
+                                              </button>
+                                            </div>
+                                            {task.events.length === 0 ? (
+                                              <p className="text-xs text-slate-500 dark:text-slate-400">
+                                                No hay eventos registrados todavía.
+                                              </p>
+                                            ) : (
+                                              <ul className="space-y-2">
+                                                {task.events.map((event) => (
+                                                  <li
+                                                    key={event.id}
+                                                    className="rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900"
+                                                  >
+                                                    <div className="flex items-start gap-2">
+                                                      {event.eventType === 'blocker' ? (
+                                                        <AlertTriangle size={13} className="mt-0.5 text-rose-500 dark:text-rose-300" />
+                                                      ) : event.eventType === 'pending_action' ? (
+                                                        <Clock size={13} className="mt-0.5 text-amber-500 dark:text-amber-400" />
+                                                      ) : event.eventType === 'resolved' ? (
+                                                        <CheckCircle2 size={13} className="mt-0.5 text-emerald-500 dark:text-emerald-400" />
+                                                      ) : (
+                                                        <Pencil size={13} className="mt-0.5 text-slate-400 dark:text-slate-500" />
+                                                      )}
+                                                      <div className="min-w-0 flex-1">
+                                                        <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                                                          {getTaskEventTypeLabel(event.eventType)}
+                                                        </p>
+                                                        <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
+                                                          {event.content}
+                                                        </p>
+                                                        <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                                                          <span className="font-medium text-slate-500 dark:text-slate-400">
+                                                            {event.userName?.trim() || event.userEmail?.trim() || 'Usuario'}
+                                                          </span>
+                                                          {' · '}
+                                                          {formatTaskEventDate(event.createdAt)}
+                                                        </p>
+                                                      </div>
                                                     </div>
-                                                  </div>
-                                                </li>
-                                              ))}
-                                            </ul>
-                                          )
+                                                  </li>
+                                                ))}
+                                              </ul>
+                                            )}
+                                          </>
                                         )}
                                       </div>
                                     </div>
@@ -2804,7 +3174,7 @@ export function ResultPanel({
                                   {/* Gestión inline collapsible (desktop only) */}
                                   <div
                                     aria-hidden={!isTaskGestionExpanded || !task}
-                                    className={`hidden md:grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
+                                    className={`order-3 hidden md:grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
                                       isTaskGestionExpanded && task
                                         ? 'grid-rows-[1fr] opacity-100'
                                         : 'grid-rows-[0fr] opacity-0'
@@ -2814,6 +3184,22 @@ export function ResultPanel({
                                       <div className="border-t border-slate-200 px-3 py-3 dark:border-slate-700">
                                         {task && (
                                           <>
+                                            <div className="mb-2 flex justify-end">
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  setTaskOpenSectionByTaskId((prev) => ({
+                                                    ...prev,
+                                                    [task.id]: null,
+                                                  }))
+                                                }
+                                                className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+                                                aria-label="Cerrar gestión"
+                                                title="Cerrar gestión"
+                                              >
+                                                <X size={12} />
+                                              </button>
+                                            </div>
                                             <button
                                               type="button"
                                               onClick={() =>
@@ -2854,7 +3240,7 @@ export function ResultPanel({
                                                         key={option.value}
                                                         type="button"
                                                         onClick={() => void handleTaskStatusChange(task, option.value)}
-                                                        disabled={isTaskMutating || isActive}
+                                                        disabled={!canEditTaskContent || isTaskMutating || isActive}
                                                         className={`flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[11px] font-semibold transition-all disabled:cursor-not-allowed ${
                                                           isActive
                                                             ? option.chipClassName + ' shadow-sm'
@@ -2886,14 +3272,14 @@ export function ResultPanel({
                                                   }
                                                 }}
                                                 placeholder="Escribe una observación, acción o bloqueo..."
-                                                disabled={isTaskMutating}
+                                                disabled={!canEditTaskContent || isTaskMutating}
                                                 className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
                                               />
                                               <div className="mt-2 flex flex-wrap gap-1.5">
-                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'note')} disabled={isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"><Pencil size={11} />Observación</button>
-                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'pending_action')} disabled={isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30"><Clock size={11} />Acción pendiente</button>
-                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'blocker')} disabled={isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300 dark:hover:bg-rose-900/30"><AlertTriangle size={11} />Impedimento</button>
-                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'resolved')} disabled={isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"><CheckCircle2 size={11} />Resuelto</button>
+                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'note')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"><Pencil size={11} />Observación</button>
+                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'pending_action')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30"><Clock size={11} />Acción pendiente</button>
+                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'blocker')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300 dark:hover:bg-rose-900/30"><AlertTriangle size={11} />Impedimento</button>
+                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'resolved')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"><CheckCircle2 size={11} />Resuelto</button>
                                               </div>
                                             </div>
                                           </>
@@ -2904,26 +3290,106 @@ export function ResultPanel({
 
                                   {/* Comunidad — solo visible cuando el ítem está seleccionado (desktop only) */}
                                   {isTaskSelected && task && (
-                                    <div className="hidden md:block border-t border-slate-100 dark:border-slate-800">
+                                    <div className="order-5 hidden md:block border-t border-slate-100 dark:border-slate-800">
                                       {/* Header siempre visible: toggle comunidad */}
                                       <div className="flex flex-wrap items-center justify-between gap-2 px-3 pt-2 pb-1">
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setTaskCommunityOpenByTaskId((prev) => ({
-                                              ...prev,
-                                              [task.id]: !(prev[task.id] ?? true),
-                                            }))
-                                          }}
-                                          className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-700 dark:text-slate-300 dark:hover:text-slate-100 transition-colors"
-                                        >
-                                          <MessageSquare size={12} />
-                                          Comunidad
-                                          {isTaskCommunityExpanded
-                                            ? <ChevronUp size={10} className="opacity-60" />
-                                            : <ChevronDown size={10} className="opacity-60" />
-                                          }
-                                        </button>
+                                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setTaskCommunityOpenByTaskId((prev) => ({
+                                                ...prev,
+                                                [task.id]: !(prev[task.id] ?? true),
+                                              }))
+                                            }}
+                                            className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-700 dark:text-slate-300 dark:hover:text-slate-100 transition-colors"
+                                          >
+                                            <MessageSquare size={12} />
+                                            Comunidad
+                                            {isTaskCommunityExpanded ? (
+                                              <ChevronUp size={10} className="opacity-60" />
+                                            ) : (
+                                              <ChevronDown size={10} className="opacity-60" />
+                                            )}
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setTaskCommunityOpenByTaskId((prev) => ({
+                                                ...prev,
+                                                [task.id]: true,
+                                              }))
+                                            }}
+                                            className="inline-flex h-7 items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
+                                          >
+                                            <MessageSquare size={11} />
+                                            Comentar
+                                          </button>
+                                          {taskLikeSummary && (
+                                            <>
+                                              <button
+                                                type="button"
+                                                onClick={() => void handleToggleTaskLike(task)}
+                                                disabled={isTaskCommunityMutating}
+                                                className={`inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                                                  taskLikeSummary.likedByMe
+                                                    ? 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50'
+                                                    : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
+                                                }`}
+                                              >
+                                                <ThumbsUp size={11} />
+                                                Me gusta
+                                                <span className="rounded bg-slate-200/60 px-1 py-0.5 text-[10px] dark:bg-slate-700/80">
+                                                  {taskLikeSummary.likesCount}
+                                                </span>
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => void handleShareTask(task)}
+                                                disabled={isTaskCommunityMutating}
+                                                className={`inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                                                  isTaskShareCopied
+                                                    ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 dark:hover:bg-emerald-900/40'
+                                                    : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
+                                                }`}
+                                              >
+                                                <Share2 size={11} />
+                                                {isTaskShareCopied ? 'Copiado' : 'Compartir'}
+                                                <span className="rounded bg-slate-200/60 px-1 py-0.5 text-[10px] dark:bg-slate-700/80">
+                                                  {taskLikeSummary.sharesCount ?? 0}
+                                                </span>
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => void handleToggleTaskFollow(task)}
+                                                disabled={isTaskCommunityMutating || isGuestExtraction}
+                                                className={`inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                                                  taskLikeSummary.followingByMe
+                                                    ? 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50'
+                                                    : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
+                                                }`}
+                                              >
+                                                <Bell size={11} />
+                                                {taskLikeSummary.followingByMe ? 'Siguiendo' : 'Seguir'}
+                                                <span className="rounded bg-slate-200/60 px-1 py-0.5 text-[10px] dark:bg-slate-700/80">
+                                                  {taskLikeSummary.followersCount ?? 0}
+                                                </span>
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => void fetchTaskCommunity(task.id)}
+                                                disabled={isTaskCommunityLoading || isTaskCommunityMutating}
+                                                className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800"
+                                              >
+                                                <Eye size={11} />
+                                                Vistas
+                                                <span className="rounded bg-slate-200/60 px-1 py-0.5 text-[10px] dark:bg-slate-700/80">
+                                                  {taskLikeSummary.viewsCount ?? 0}
+                                                </span>
+                                              </button>
+                                            </>
+                                          )}
+                                        </div>
                                         {(isTaskCommunityLoading || isTaskCommunityMutating) && (
                                           <p className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400">
                                             <Loader2 size={12} className="animate-spin" />
@@ -2947,59 +3413,6 @@ export function ResultPanel({
                                               <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
                                                 {taskCommunityError}
                                               </p>
-                                            )}
-
-                                            {taskLikeSummary && (
-                                              <div className="mt-2 flex flex-wrap items-center gap-2">
-                                                {/* Me gusta */}
-                                                <button
-                                                  type="button"
-                                                  onClick={() => void handleToggleTaskLike(task)}
-                                                  disabled={isTaskCommunityMutating}
-                                                  className={`inline-flex h-8 items-center gap-1 rounded-md border px-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                                                    taskLikeSummary.likedByMe
-                                                      ? 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50'
-                                                      : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
-                                                  }`}
-                                                >
-                                                  <ThumbsUp size={12} />
-                                                  {taskLikeSummary.likedByMe ? 'Te gusta' : 'Me gusta'}
-                                                  <span className="rounded bg-slate-200/60 px-1 py-0.5 text-[10px] dark:bg-slate-700/80">
-                                                    {taskLikeSummary.likesCount}
-                                                  </span>
-                                                </button>
-
-                                                {/* Compartir — sin funcionalidad aún */}
-                                                <button
-                                                  type="button"
-                                                  disabled
-                                                  title="Próximamente"
-                                                  className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-500 opacity-60 cursor-not-allowed dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400"
-                                                >
-                                                  <Share2 size={12} />
-                                                  Compartir
-                                                </button>
-
-                                                {/* Seguir — sin funcionalidad aún */}
-                                                <button
-                                                  type="button"
-                                                  disabled
-                                                  title="Próximamente"
-                                                  className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-500 opacity-60 cursor-not-allowed dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400"
-                                                >
-                                                  <Bell size={12} />
-                                                  Seguir
-                                                </button>
-
-                                                {/* Visualizaciones — sin funcionalidad aún */}
-                                                <span
-                                                  title="Próximamente"
-                                                  className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-400 opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-500"
-                                                >
-                                                  <Eye size={12} />
-                                                  0
-                                                </span>
-                                              </div>
                                             )}
 
                                             <div className="mt-2 flex gap-2">
@@ -3079,9 +3492,9 @@ export function ResultPanel({
 
                                   {/* Evidencias inline collapsible (desktop only) */}
                                   <div
-                                    aria-hidden={!isTaskExpanded || !task}
-                                    className={`hidden md:grid transition-[grid-template-rows,opacity] duration-700 ease-out ${
-                                      isTaskExpanded && task
+                                    aria-hidden={!isTaskSelected || !task}
+                                    className={`order-4 hidden md:grid transition-[grid-template-rows,opacity] duration-700 ease-out ${
+                                      isTaskSelected && task
                                         ? 'grid-rows-[1fr] opacity-100'
                                         : 'grid-rows-[0fr] opacity-0'
                                     }`}
@@ -3089,7 +3502,7 @@ export function ResultPanel({
                                     <div className="overflow-hidden">
                                       <div
                                         className={`border-t border-slate-200 bg-slate-100/60 p-3 transition-transform duration-700 ease-out dark:border-slate-700 dark:bg-slate-900/80 ${
-                                          isTaskExpanded && task
+                                          isTaskSelected && task
                                             ? 'translate-y-0'
                                             : '-translate-y-2 pointer-events-none'
                                         }`}
@@ -3100,9 +3513,9 @@ export function ResultPanel({
                                               <button
                                                 type="button"
                                                 onClick={() =>
-                                                  setTaskOpenSectionByTaskId((prev) => ({
+                                                  setTaskEvidenceOpenByTaskId((prev) => ({
                                                     ...prev,
-                                                    [task.id]: prev[task.id] === 'evidencias' ? null : 'evidencias',
+                                                    [task.id]: !(prev[task.id] ?? true),
                                                   }))
                                                 }
                                                 className="flex w-full items-center justify-between px-3 py-2.5"
@@ -3153,6 +3566,7 @@ export function ResultPanel({
                                                     [task.id]: !isTaskAddEvidenceExpanded,
                                                   }))
                                                 }
+                                                disabled={!canEditTaskContent}
                                                 className="flex items-center gap-1.5 rounded-lg border border-dashed border-indigo-200 bg-indigo-50/60 px-3 py-2 transition-colors hover:border-indigo-300 hover:bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-900/10 dark:hover:border-indigo-700 dark:hover:bg-indigo-900/20"
                                               >
                                                 <Plus size={12} className="text-indigo-600 dark:text-indigo-400" />
@@ -3192,7 +3606,7 @@ export function ResultPanel({
                                                     }))
                                                   }
                                                   placeholder="Escribe tu nota aquí..."
-                                                  disabled={isTaskAttachmentMutating}
+                                                  disabled={!canEditTaskContent || isTaskAttachmentMutating}
                                                   style={{ minHeight: '4.5rem' }}
                                                   onInput={(event) => {
                                                     const el = event.currentTarget
@@ -3206,6 +3620,7 @@ export function ResultPanel({
                                                     type="button"
                                                     onClick={() => void handleAddTaskNote(task)}
                                                     disabled={
+                                                      !canEditTaskContent ||
                                                       isTaskAttachmentMutating ||
                                                       !(noteDraftByTaskId[task.id] ?? '').trim()
                                                     }
@@ -3232,7 +3647,7 @@ export function ResultPanel({
                                                   type="file"
                                                   accept=".pdf,application/pdf,image/*,audio/*"
                                                   className="hidden"
-                                                  disabled={isTaskAttachmentMutating}
+                                                  disabled={!canEditTaskContent || isTaskAttachmentMutating}
                                                   onChange={(event) => {
                                                     const file = event.target.files?.[0] ?? null
                                                     void handleTaskFileSelected(task, file)
@@ -3242,7 +3657,7 @@ export function ResultPanel({
                                                 <button
                                                   type="button"
                                                   onClick={() => handleOpenTaskFilePicker(task.id)}
-                                                  disabled={isTaskAttachmentMutating}
+                                                  disabled={!canEditTaskContent || isTaskAttachmentMutating}
                                                   className="flex items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2.5 text-[11px] font-semibold text-slate-500 transition-colors hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800/40 dark:text-slate-400 dark:hover:border-indigo-600 dark:hover:bg-indigo-900/20 dark:hover:text-indigo-300"
                                                 >
                                                   <Upload size={13} />
@@ -3267,13 +3682,14 @@ export function ResultPanel({
                                                       handleTaskYoutubeDraftChange(task.id, event.target.value)
                                                     }
                                                     placeholder="Pega la URL del video..."
-                                                    disabled={isTaskAttachmentMutating}
+                                                    disabled={!canEditTaskContent || isTaskAttachmentMutating}
                                                     className="h-8 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:bg-slate-800"
                                                   />
                                                   <button
                                                     type="button"
                                                     onClick={() => void handleAddTaskYoutubeLink(task)}
                                                     disabled={
+                                                      !canEditTaskContent ||
                                                       isTaskAttachmentMutating ||
                                                       taskYoutubeDraft.trim().length === 0
                                                     }
@@ -3472,7 +3888,7 @@ export function ResultPanel({
                                                                     setOpenAttachmentMenuId(null)
                                                                     void handleDeleteTaskAttachment(task, attachment)
                                                                   }}
-                                                                  disabled={isTaskAttachmentMutating}
+                                                                  disabled={!canEditTaskContent || isTaskAttachmentMutating}
                                                                   className="flex w-full items-center gap-2.5 px-3 py-2.5 text-[12px] font-medium text-rose-600 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-rose-400 dark:hover:bg-rose-900/20"
                                                                 >
                                                                   <Trash2 size={13} className="flex-shrink-0" />
@@ -3545,8 +3961,15 @@ export function ResultPanel({
           extractionId: sheetTask.extractionId,
           likesCount: 0,
           likedByMe: false,
+          sharesCount: 0,
+          sharedByMe: false,
+          followersCount: 0,
+          followingByMe: false,
+          viewsCount: 0,
+          viewedByMe: false,
         }
         const sheetCommentDraft = taskCommentDraftByTaskId[sheetTask.id] ?? ''
+        const sheetIsShareCopied = taskShareCopiedByTaskId[sheetTask.id] ?? false
         const sheetCommunityError = taskCommunityErrorByTaskId[sheetTask.id] ?? null
         const sheetIsCommunityLoading = taskCommunityLoadingId === sheetTask.id
         const sheetIsCommunityMutating = taskCommunityMutationId === sheetTask.id
@@ -3618,7 +4041,7 @@ export function ResultPanel({
                         type="button"
                         role="checkbox"
                         aria-checked={sheetTask.checked}
-                        disabled={sheetIsTaskMutating}
+                        disabled={!canEditTaskContent || sheetIsTaskMutating}
                         onClick={() => void handleTaskToggle(sheetTask, !sheetTask.checked)}
                         className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-[6px] border-2 shadow-sm transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
                           sheetTask.checked
@@ -3666,7 +4089,7 @@ export function ResultPanel({
                                 key={option.value}
                                 type="button"
                                 onClick={() => void handleTaskStatusChange(sheetTask, option.value)}
-                                disabled={sheetIsTaskMutating || isActive}
+                                disabled={!canEditTaskContent || sheetIsTaskMutating || isActive}
                                 className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-xs font-semibold transition-all disabled:cursor-not-allowed ${
                                   isActive
                                     ? option.chipClassName + ' shadow-sm'
@@ -3700,14 +4123,14 @@ export function ResultPanel({
                           }
                         }}
                         placeholder="Escribe una observación, acción o bloqueo..."
-                        disabled={sheetIsTaskMutating}
+                        disabled={!canEditTaskContent || sheetIsTaskMutating}
                         className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500"
                       />
                       <div className="mt-3 grid grid-cols-2 gap-2">
-                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'note')} disabled={sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"><Pencil size={12} />Observación</button>
-                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'pending_action')} disabled={sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"><Clock size={12} />Pendiente</button>
-                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'blocker')} disabled={sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300"><AlertTriangle size={12} />Impedimento</button>
-                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'resolved')} disabled={sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300"><CheckCircle2 size={12} />Resuelto</button>
+                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'note')} disabled={!canEditTaskContent || sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"><Pencil size={12} />Observación</button>
+                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'pending_action')} disabled={!canEditTaskContent || sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"><Clock size={12} />Pendiente</button>
+                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'blocker')} disabled={!canEditTaskContent || sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300"><AlertTriangle size={12} />Impedimento</button>
+                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'resolved')} disabled={!canEditTaskContent || sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300"><CheckCircle2 size={12} />Resuelto</button>
                       </div>
                     </div>
                   </div>
@@ -3779,7 +4202,8 @@ export function ResultPanel({
                             [sheetTask.id]: !sheetAddEvidenceExpanded,
                           }))
                         }
-                        className="flex items-center gap-1.5 rounded-lg border border-dashed border-indigo-200 bg-indigo-50/60 px-3 py-2 transition-colors hover:border-indigo-300 hover:bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-900/10"
+                        disabled={!canEditTaskContent}
+                        className="flex items-center gap-1.5 rounded-lg border border-dashed border-indigo-200 bg-indigo-50/60 px-3 py-2 transition-colors hover:border-indigo-300 hover:bg-indigo-50 disabled:opacity-60 dark:border-indigo-800 dark:bg-indigo-900/10"
                       >
                         <Plus size={13} className="text-indigo-600 dark:text-indigo-400" />
                         <span className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">
@@ -3802,7 +4226,7 @@ export function ResultPanel({
                               setNoteDraftByTaskId((prev) => ({ ...prev, [sheetTask.id]: event.target.value }))
                             }
                             placeholder="Escribe tu nota aquí..."
-                            disabled={sheetIsAttachmentMutating}
+                            disabled={!canEditTaskContent || sheetIsAttachmentMutating}
                             style={{ minHeight: '5rem' }}
                             className="w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200"
                           />
@@ -3810,7 +4234,7 @@ export function ResultPanel({
                             <button
                               type="button"
                               onClick={() => void handleAddTaskNote(sheetTask)}
-                              disabled={sheetIsAttachmentMutating || !sheetNoteContent.trim()}
+                              disabled={!canEditTaskContent || sheetIsAttachmentMutating || !sheetNoteContent.trim()}
                               className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               <Save size={12} />Guardar nota
@@ -3830,7 +4254,7 @@ export function ResultPanel({
                             type="file"
                             accept=".pdf,application/pdf,image/*,audio/*"
                             className="hidden"
-                            disabled={sheetIsAttachmentMutating}
+                            disabled={!canEditTaskContent || sheetIsAttachmentMutating}
                             onChange={(event) => {
                               const file = event.target.files?.[0] ?? null
                               void handleTaskFileSelected(sheetTask, file)
@@ -3839,7 +4263,7 @@ export function ResultPanel({
                           <button
                             type="button"
                             onClick={() => handleOpenTaskFilePicker(sheetTask.id)}
-                            disabled={sheetIsAttachmentMutating}
+                            disabled={!canEditTaskContent || sheetIsAttachmentMutating}
                             className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-xs font-semibold text-slate-500 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600 disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800/40 dark:text-slate-400"
                           >
                             <Upload size={14} />PDF · imagen · audio
@@ -3859,13 +4283,13 @@ export function ResultPanel({
                               value={sheetTaskYoutubeDraft}
                               onChange={(event) => handleTaskYoutubeDraftChange(sheetTask.id, event.target.value)}
                               placeholder="Pega la URL del video..."
-                              disabled={sheetIsAttachmentMutating}
+                              disabled={!canEditTaskContent || sheetIsAttachmentMutating}
                               className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200"
                             />
                             <button
                               type="button"
                               onClick={() => void handleAddTaskYoutubeLink(sheetTask)}
-                              disabled={sheetIsAttachmentMutating || sheetTaskYoutubeDraft.trim().length === 0}
+                              disabled={!canEditTaskContent || sheetIsAttachmentMutating || sheetTaskYoutubeDraft.trim().length === 0}
                               className="inline-flex h-9 flex-shrink-0 items-center gap-1.5 rounded-lg bg-rose-600 px-3 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-40"
                             >
                               <Plus size={12} />Agregar
@@ -3955,7 +4379,7 @@ export function ResultPanel({
                       </p>
                     )}
 
-                    {/* Like / Compartir / Seguir */}
+                    {/* Like / Compartir / Seguir / Visualizaciones */}
                     <div className="mb-4 flex flex-wrap items-center gap-2">
                       <button
                         type="button"
@@ -3973,11 +4397,46 @@ export function ResultPanel({
                           {sheetTaskLikeSummary.likesCount}
                         </span>
                       </button>
-                      <button type="button" disabled title="Próximamente" className="inline-flex h-9 cursor-not-allowed items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-500 opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400">
-                        <Share2 size={14} />Compartir
+                      <button
+                        type="button"
+                        onClick={() => void handleShareTask(sheetTask)}
+                        disabled={sheetIsCommunityMutating}
+                        className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                          sheetIsShareCopied
+                            ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                            : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200'
+                        }`}
+                      >
+                        <Share2 size={14} />
+                        {sheetIsShareCopied ? 'Copiado' : 'Compartir'}
+                        <span className="rounded bg-slate-200/60 px-1.5 py-0.5 text-xs dark:bg-slate-700/80">
+                          {sheetTaskLikeSummary.sharesCount ?? 0}
+                        </span>
                       </button>
-                      <button type="button" disabled title="Próximamente" className="inline-flex h-9 cursor-not-allowed items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-500 opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400">
-                        <Bell size={14} />Seguir
+                      <button
+                        type="button"
+                        onClick={() => void handleToggleTaskFollow(sheetTask)}
+                        disabled={sheetIsCommunityMutating || isGuestExtraction}
+                        className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                          sheetTaskLikeSummary.followingByMe
+                            ? 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
+                            : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200'
+                        }`}
+                      >
+                        <Bell size={14} />
+                        {sheetTaskLikeSummary.followingByMe ? 'Siguiendo' : 'Seguir'}
+                        <span className="rounded bg-slate-200/60 px-1.5 py-0.5 text-xs dark:bg-slate-700/80">
+                          {sheetTaskLikeSummary.followersCount ?? 0}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void fetchTaskCommunity(sheetTask.id)}
+                        disabled={sheetIsCommunityLoading || sheetIsCommunityMutating}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800"
+                      >
+                        <Eye size={14} />
+                        {sheetTaskLikeSummary.viewsCount ?? 0}
                       </button>
                     </div>
 
