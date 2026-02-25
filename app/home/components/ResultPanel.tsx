@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Bell,
   Eye,
+  EyeOff,
   Brain,
   Check,
   CheckCircle2,
@@ -66,6 +67,7 @@ import {
 
 interface ResultPanelProps {
   result: ExtractResult
+  viewerUserId?: string | null
   url: string
   extractionMode: ExtractionMode
   activePhase: number | null
@@ -215,6 +217,48 @@ function formatTaskEventDate(isoDate: string) {
   }).format(parsed)
 }
 
+interface TaskCommentNode extends InteractiveTaskComment {
+  replies: TaskCommentNode[]
+}
+
+function buildTaskCommentTree(comments: InteractiveTaskComment[]) {
+  const sorted = [...comments].sort((a, b) => {
+    const timeA = new Date(a.createdAt).getTime()
+    const timeB = new Date(b.createdAt).getTime()
+    if (Number.isNaN(timeA) || Number.isNaN(timeB) || timeA === timeB) {
+      return a.id.localeCompare(b.id)
+    }
+    return timeA - timeB
+  })
+
+  const nodeById = new Map<string, TaskCommentNode>()
+  for (const comment of sorted) {
+    nodeById.set(comment.id, { ...comment, replies: [] })
+  }
+
+  const roots: TaskCommentNode[] = []
+  for (const comment of sorted) {
+    const node = nodeById.get(comment.id)
+    if (!node) continue
+
+    const parentId = comment.parentCommentId?.trim() || null
+    if (!parentId || parentId === comment.id) {
+      roots.push(node)
+      continue
+    }
+
+    const parent = nodeById.get(parentId)
+    if (!parent) {
+      roots.push(node)
+      continue
+    }
+
+    parent.replies.push(node)
+  }
+
+  return roots
+}
+
 function formatAttachmentSize(sizeBytes: number | null) {
   if (typeof sizeBytes !== 'number' || !Number.isFinite(sizeBytes) || sizeBytes <= 0) return null
   const kb = 1024
@@ -264,6 +308,7 @@ function pdfOpenUrl(url: string): string {
 
 export function ResultPanel({
   result,
+  viewerUserId = null,
   url,
   extractionMode,
   activePhase,
@@ -399,6 +444,7 @@ export function ResultPanel({
   const [tasksError, setTasksError] = useState<string | null>(null)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
   const [taskMenuOpenId, setTaskMenuOpenId] = useState<string | null>(null)
+  const [taskCommentMenuOpenId, setTaskCommentMenuOpenId] = useState<string | null>(null)
   const [taskMutationLoadingId, setTaskMutationLoadingId] = useState<string | null>(null)
   const [eventDraftContent, setEventDraftContent] = useState('')
   const [idCopied, setIdCopied] = useState(false)
@@ -444,6 +490,10 @@ export function ResultPanel({
     Record<string, string | null>
   >({})
   const [taskCommentDraftByTaskId, setTaskCommentDraftByTaskId] = useState<Record<string, string>>({})
+  const [taskReplyDraftByTaskId, setTaskReplyDraftByTaskId] = useState<Record<string, string>>({})
+  const [taskReplyParentByTaskId, setTaskReplyParentByTaskId] = useState<
+    Record<string, string | null>
+  >({})
   const [taskShareCopiedByTaskId, setTaskShareCopiedByTaskId] = useState<Record<string, boolean>>({})
   const [taskOpenSectionByTaskId, setTaskOpenSectionByTaskId] = useState<
     Record<string, 'gestion' | 'actividad' | null>
@@ -680,6 +730,9 @@ export function ResultPanel({
     setTaskCommunityMutationId(null)
     setTaskCommunityErrorByTaskId({})
     setTaskCommentDraftByTaskId({})
+    setTaskReplyDraftByTaskId({})
+    setTaskReplyParentByTaskId({})
+    setTaskCommentMenuOpenId(null)
     setTaskOpenSectionByTaskId({})
     setSelectedTaskId(null)
     setTaskCommunityOpenByTaskId({})
@@ -941,6 +994,46 @@ export function ResultPanel({
   }, [mobileSheetTaskId, mobileSheetTab])
 
   useEffect(() => {
+    const extractionId = result.id?.trim()
+    const realtimeTaskId = mobileSheetTaskId ?? selectedTaskId
+    if (!extractionId || !realtimeTaskId) return
+    if (typeof window === 'undefined' || typeof EventSource === 'undefined') return
+
+    const streamUrl = `/api/extractions/${encodeURIComponent(extractionId)}/tasks/${encodeURIComponent(
+      realtimeTaskId
+    )}/community/stream`
+    const stream = new EventSource(streamUrl)
+
+    const refreshCommunity = () => {
+      void fetchTaskCommunity(realtimeTaskId)
+    }
+
+    const handleReady = () => {
+      refreshCommunity()
+    }
+
+    const handleRefresh = (event: MessageEvent<string>) => {
+      try {
+        const data = JSON.parse(event.data) as { taskId?: unknown }
+        const eventTaskId = typeof data?.taskId === 'string' ? data.taskId : realtimeTaskId
+        if (eventTaskId !== realtimeTaskId) return
+      } catch {
+        // Ignore malformed payloads and still refresh conservatively
+      }
+      refreshCommunity()
+    }
+
+    stream.addEventListener('community_ready', handleReady as EventListener)
+    stream.addEventListener('community_refresh', handleRefresh as EventListener)
+
+    return () => {
+      stream.removeEventListener('community_ready', handleReady as EventListener)
+      stream.removeEventListener('community_refresh', handleRefresh as EventListener)
+      stream.close()
+    }
+  }, [mobileSheetTaskId, result.id, selectedTaskId])
+
+  useEffect(() => {
     if (!taskMenuOpenId) return
 
     const handleOutsideTaskMenuClick = (event: MouseEvent | TouchEvent) => {
@@ -957,6 +1050,24 @@ export function ResultPanel({
       document.removeEventListener('touchstart', handleOutsideTaskMenuClick)
     }
   }, [taskMenuOpenId])
+
+  useEffect(() => {
+    if (!taskCommentMenuOpenId) return
+
+    const handleOutsideCommentMenuClick = (event: MouseEvent | TouchEvent) => {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      if (target.closest('[data-task-comment-menu-root="true"]')) return
+      setTaskCommentMenuOpenId(null)
+    }
+
+    document.addEventListener('mousedown', handleOutsideCommentMenuClick)
+    document.addEventListener('touchstart', handleOutsideCommentMenuClick)
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideCommentMenuClick)
+      document.removeEventListener('touchstart', handleOutsideCommentMenuClick)
+    }
+  }, [taskCommentMenuOpenId])
 
   const refreshTaskCollection = async (payload: Record<string, unknown>) => {
     const extractionId = result.id?.trim()
@@ -1272,6 +1383,40 @@ export function ResultPanel({
     }))
   }
 
+  const handleTaskReplyDraftChange = (taskId: string, value: string) => {
+    setTaskReplyDraftByTaskId((previous) => ({
+      ...previous,
+      [taskId]: value,
+    }))
+  }
+
+  const handleStartTaskReply = (taskId: string, commentId: string) => {
+    setTaskCommunityOpenByTaskId((previous) => ({
+      ...previous,
+      [taskId]: true,
+    }))
+    setTaskCommentMenuOpenId(null)
+    setTaskReplyParentByTaskId((previous) => ({
+      ...previous,
+      [taskId]: commentId,
+    }))
+    setTaskReplyDraftByTaskId((previous) => ({
+      ...previous,
+      [taskId]: '',
+    }))
+  }
+
+  const handleCancelTaskReply = (taskId: string) => {
+    setTaskReplyParentByTaskId((previous) => ({
+      ...previous,
+      [taskId]: null,
+    }))
+    setTaskReplyDraftByTaskId((previous) => ({
+      ...previous,
+      [taskId]: '',
+    }))
+  }
+
   const mutateTaskCommunity = async (taskId: string, payload: Record<string, unknown>) => {
     const extractionId = result.id?.trim()
     if (!extractionId) return false
@@ -1362,15 +1507,83 @@ export function ResultPanel({
     }
   }
 
+  const handleAddTaskReply = async (task: InteractiveTask, parentCommentId: string) => {
+    const content = (taskReplyDraftByTaskId[task.id] ?? '').trim()
+    if (!content) return
+
+    const parentExists = (taskCommentsByTaskId[task.id] ?? []).some((comment) => comment.id === parentCommentId)
+    if (!parentExists) {
+      handleCancelTaskReply(task.id)
+      return
+    }
+
+    const ok = await mutateTaskCommunity(task.id, {
+      action: 'add_comment',
+      content,
+      parentCommentId,
+    })
+    if (ok) {
+      setTaskReplyDraftByTaskId((previous) => ({
+        ...previous,
+        [task.id]: '',
+      }))
+      setTaskReplyParentByTaskId((previous) => ({
+        ...previous,
+        [task.id]: null,
+      }))
+    }
+  }
+
   const handleDeleteTaskComment = async (task: InteractiveTask, commentId: string) => {
     const confirmed =
       typeof window === 'undefined' ? false : window.confirm('¿Eliminar este comentario?')
     if (!confirmed) return
 
-    await mutateTaskCommunity(task.id, {
+    setTaskCommentMenuOpenId(null)
+    const ok = await mutateTaskCommunity(task.id, {
       action: 'delete_comment',
       commentId,
     })
+    if (ok && taskReplyParentByTaskId[task.id] === commentId) {
+      setTaskReplyParentByTaskId((previous) => ({
+        ...previous,
+        [task.id]: null,
+      }))
+      setTaskReplyDraftByTaskId((previous) => ({
+        ...previous,
+        [task.id]: '',
+      }))
+    }
+  }
+
+  const handleToggleTaskCommentHidden = async (
+    task: InteractiveTask,
+    commentId: string,
+    currentlyHidden: boolean
+  ) => {
+    const nextHidden = !currentlyHidden
+    const confirmed =
+      typeof window === 'undefined'
+        ? false
+        : window.confirm(nextHidden ? '¿Ocultar este comentario?' : '¿Mostrar este comentario?')
+    if (!confirmed) return
+
+    setTaskCommentMenuOpenId(null)
+    const ok = await mutateTaskCommunity(task.id, {
+      action: 'toggle_hide_comment',
+      commentId,
+      hidden: nextHidden,
+    })
+    if (ok && taskReplyParentByTaskId[task.id] === commentId) {
+      setTaskReplyParentByTaskId((previous) => ({
+        ...previous,
+        [task.id]: null,
+      }))
+      setTaskReplyDraftByTaskId((previous) => ({
+        ...previous,
+        [task.id]: '',
+      }))
+    }
   }
 
   const handleToggleTaskLike = async (task: InteractiveTask) => {
@@ -1831,6 +2044,194 @@ export function ResultPanel({
     if (!ok) {
       setMemberError('No se pudo eliminar el miembro.')
     }
+  }
+
+  const renderTaskCommentThread = (input: {
+    task: InteractiveTask
+    comments: InteractiveTaskComment[]
+    isCommunityMutating: boolean
+    replyParentCommentId: string | null
+    replyDraft: string
+    compact: boolean
+  }) => {
+    const roots = buildTaskCommentTree(input.comments)
+
+    const renderNodes = (nodes: TaskCommentNode[], depth: number): JSX.Element => (
+      <ul className={depth === 0 ? (input.compact ? 'space-y-3' : 'mt-3 space-y-2') : 'mt-2 space-y-2'}>
+        {nodes.map((comment) => {
+          const isReplyTarget = input.replyParentCommentId === comment.id
+          const commentMenuKey = `${input.task.id}:${comment.id}`
+          const isCommentMenuOpen = taskCommentMenuOpenId === commentMenuKey
+          const canHideComment = isOwnerAccess && !isGuestExtraction
+          const canDeleteComment =
+            isGuestExtraction || (viewerUserId !== null && viewerUserId === comment.userId)
+          const canOpenCommentMenu = canDeleteComment || canHideComment
+          const isHiddenComment = comment.isHidden === true
+          const displayContent =
+            !isOwnerAccess && isHiddenComment
+              ? 'Comentario oculto por el propietario.'
+              : comment.content
+          return (
+            <li key={comment.id} style={depth > 0 ? { marginLeft: `${Math.min(depth, 5) * 14}px` } : undefined}>
+              <div
+                className={`rounded-lg border bg-white p-2 dark:bg-slate-900 ${
+                  isHiddenComment
+                    ? 'border-amber-300/80 bg-amber-50/70 dark:border-amber-800/70 dark:bg-amber-950/20'
+                    : depth > 0
+                    ? 'border-indigo-200/80 dark:border-indigo-900/60'
+                    : 'border-slate-200 dark:border-slate-700'
+                }`}
+              >
+                <div className="flex items-start gap-2">
+                  <MessageSquare
+                    size={input.compact ? 14 : 13}
+                    className={`mt-0.5 flex-shrink-0 ${
+                      isHiddenComment
+                        ? 'text-amber-500 dark:text-amber-400'
+                        : 'text-slate-400 dark:text-slate-500'
+                    }`}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                            {comment.userName?.trim() || comment.userEmail?.trim() || 'Usuario'}
+                          </p>
+                          {isOwnerAccess && (
+                            <span
+                              className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-semibold ${
+                                isHiddenComment
+                                  ? 'border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+                                  : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300'
+                              }`}
+                            >
+                              {isHiddenComment ? 'Oculto' : 'Visible'}
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">{displayContent}</p>
+                        <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                          {formatTaskEventDate(comment.createdAt)}
+                        </p>
+                      </div>
+                      {canOpenCommentMenu && (
+                        <div className="relative flex-shrink-0" data-task-comment-menu-root="true">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setTaskCommentMenuOpenId((previous) =>
+                                previous === commentMenuKey ? null : commentMenuKey
+                              )
+                            }
+                            disabled={input.isCommunityMutating}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+                            aria-label="Opciones del comentario"
+                          >
+                            <MoreHorizontal size={13} />
+                          </button>
+                          {isCommentMenuOpen && (
+                            <div className="absolute right-0 top-full z-20 mt-1 min-w-[132px] rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+                              {canDeleteComment && (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDeleteTaskComment(input.task, comment.id)}
+                                  disabled={input.isCommunityMutating}
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-[11px] font-medium text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-rose-300 dark:hover:bg-rose-900/30"
+                                >
+                                  <Trash2 size={11} />
+                                  Borrar
+                                </button>
+                              )}
+                              {canHideComment && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void handleToggleTaskCommentHidden(
+                                      input.task,
+                                      comment.id,
+                                      comment.isHidden
+                                    )
+                                  }
+                                  disabled={input.isCommunityMutating}
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-[11px] font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                                >
+                                  {comment.isHidden ? <Eye size={11} /> : <EyeOff size={11} />}
+                                  {comment.isHidden ? 'Mostrar' : 'Ocultar'}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleStartTaskReply(input.task.id, comment.id)}
+                        disabled={input.isCommunityMutating}
+                        className={`inline-flex h-6 items-center rounded-md border px-2 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                          isReplyTarget
+                            ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
+                            : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        {isReplyTarget ? 'Respondiendo' : 'Responder'}
+                      </button>
+                    </div>
+
+                    {isReplyTarget && (
+                      <div className="mt-2 rounded-md border border-indigo-200 bg-indigo-50/70 p-2 dark:border-indigo-800 dark:bg-indigo-900/20">
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <input
+                            type="text"
+                            value={input.replyDraft}
+                            autoFocus
+                            onChange={(event) =>
+                              handleTaskReplyDraftChange(input.task.id, event.target.value)
+                            }
+                            placeholder="Escribe tu respuesta..."
+                            disabled={input.isCommunityMutating}
+                            className={`min-w-0 flex-1 rounded-lg border border-indigo-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-slate-950 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60 ${
+                              input.compact ? 'h-10' : 'h-9'
+                            }`}
+                          />
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void handleAddTaskReply(input.task, comment.id)}
+                              disabled={input.isCommunityMutating || input.replyDraft.trim().length === 0}
+                              className={`inline-flex items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40 ${
+                                input.compact ? 'h-10' : 'h-9'
+                              }`}
+                            >
+                              Responder
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCancelTaskReply(input.task.id)}
+                              disabled={input.isCommunityMutating}
+                              className={`inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 ${
+                                input.compact ? 'h-10' : 'h-9'
+                              }`}
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {comment.replies.length > 0 && renderNodes(comment.replies, depth + 1)}
+            </li>
+          )
+        })}
+      </ul>
+    )
+
+    return renderNodes(roots, 0)
   }
 
   return (
@@ -2831,6 +3232,10 @@ export function ResultPanel({
                                   })
                                 : null
                               const taskCommentDraft = task ? (taskCommentDraftByTaskId[task.id] ?? '') : ''
+                              const taskReplyDraft = task ? (taskReplyDraftByTaskId[task.id] ?? '') : ''
+                              const taskReplyParentCommentId = task
+                                ? (taskReplyParentByTaskId[task.id] ?? null)
+                                : null
                               const isTaskShareCopied = task
                                 ? (taskShareCopiedByTaskId[task.id] ?? false)
                                 : false
@@ -3319,6 +3724,7 @@ export function ResultPanel({
                                                 ...prev,
                                                 [task.id]: true,
                                               }))
+                                              handleCancelTaskReply(task.id)
                                             }}
                                             className="inline-flex h-7 items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
                                           >
@@ -3445,44 +3851,14 @@ export function ResultPanel({
                                                 Aún no hay comentarios en este subítem.
                                               </p>
                                             ) : (
-                                              <ul className="mt-3 space-y-2">
-                                                {taskComments.map((comment) => (
-                                                  <li
-                                                    key={comment.id}
-                                                    className="rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900"
-                                                  >
-                                                    <div className="flex items-start gap-2">
-                                                      <MessageSquare
-                                                        size={13}
-                                                        className="mt-0.5 text-slate-400 dark:text-slate-500"
-                                                      />
-                                                      <div className="min-w-0 flex-1">
-                                                        <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                                                          {comment.userName?.trim() ||
-                                                            comment.userEmail?.trim() ||
-                                                            'Usuario'}
-                                                        </p>
-                                                        <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
-                                                          {comment.content}
-                                                        </p>
-                                                        <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
-                                                          {formatTaskEventDate(comment.createdAt)}
-                                                        </p>
-                                                      </div>
-                                                      <button
-                                                        type="button"
-                                                        onClick={() =>
-                                                          void handleDeleteTaskComment(task, comment.id)
-                                                        }
-                                                        disabled={isTaskCommunityMutating}
-                                                        className="inline-flex h-7 items-center rounded-md border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40"
-                                                      >
-                                                        Borrar
-                                                      </button>
-                                                    </div>
-                                                  </li>
-                                                ))}
-                                              </ul>
+                                              renderTaskCommentThread({
+                                                task,
+                                                comments: taskComments,
+                                                isCommunityMutating: isTaskCommunityMutating,
+                                                replyParentCommentId: taskReplyParentCommentId,
+                                                replyDraft: taskReplyDraft,
+                                                compact: false,
+                                              })
                                             )}
                                           </div>
                                         </div>
@@ -3969,6 +4345,8 @@ export function ResultPanel({
           viewedByMe: false,
         }
         const sheetCommentDraft = taskCommentDraftByTaskId[sheetTask.id] ?? ''
+        const sheetReplyDraft = taskReplyDraftByTaskId[sheetTask.id] ?? ''
+        const sheetReplyParentCommentId = taskReplyParentByTaskId[sheetTask.id] ?? null
         const sheetIsShareCopied = taskShareCopiedByTaskId[sheetTask.id] ?? false
         const sheetCommunityError = taskCommunityErrorByTaskId[sheetTask.id] ?? null
         const sheetIsCommunityLoading = taskCommunityLoadingId === sheetTask.id
@@ -4467,30 +4845,14 @@ export function ResultPanel({
                         Aún no hay comentarios en este subítem.
                       </p>
                     ) : (
-                      <ul className="space-y-3">
-                        {sheetTaskComments.map((comment) => (
-                          <li key={comment.id} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-                            <div className="flex items-start gap-2">
-                              <MessageSquare size={14} className="mt-0.5 flex-shrink-0 text-slate-400 dark:text-slate-500" />
-                              <div className="min-w-0 flex-1">
-                                <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                                  {comment.userName?.trim() || comment.userEmail?.trim() || 'Usuario'}
-                                </p>
-                                <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">{comment.content}</p>
-                                <p className="mt-1 text-[11px] text-slate-400">{formatTaskEventDate(comment.createdAt)}</p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => void handleDeleteTaskComment(sheetTask, comment.id)}
-                                disabled={sheetIsCommunityMutating}
-                                className="inline-flex h-7 items-center rounded-md border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300"
-                              >
-                                Borrar
-                              </button>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
+                      renderTaskCommentThread({
+                        task: sheetTask,
+                        comments: sheetTaskComments,
+                        isCommunityMutating: sheetIsCommunityMutating,
+                        replyParentCommentId: sheetReplyParentCommentId,
+                        replyDraft: sheetReplyDraft,
+                        compact: true,
+                      })
                     )}
                   </div>
                 )}

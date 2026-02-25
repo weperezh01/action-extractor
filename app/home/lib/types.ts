@@ -125,6 +125,8 @@ export interface InteractiveTaskComment {
   userId: string
   userName: string | null
   userEmail: string | null
+  parentCommentId: string | null
+  isHidden: boolean
   content: string
   createdAt: string
   updatedAt: string

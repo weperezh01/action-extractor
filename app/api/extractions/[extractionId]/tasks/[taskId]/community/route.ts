@@ -9,6 +9,7 @@ import {
   listExtractionTaskCommentsForUser,
   recordExtractionTaskShareForUser,
   recordExtractionTaskViewForUser,
+  setExtractionTaskCommentHiddenByOwner,
   toggleExtractionTaskFollowForUser,
   toggleExtractionTaskLikeForUser,
 } from '@/lib/db'
@@ -21,6 +22,10 @@ import {
   toggleGuestTaskLike,
   type GuestTaskComment,
 } from '@/lib/guest-tasks'
+import {
+  publishTaskCommunityRefreshEvent,
+  publishTaskCommunityViewRefreshEvent,
+} from '@/lib/task-community-realtime'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -39,6 +44,8 @@ function toGuestClientComment(comment: GuestTaskComment, extractionId: string) {
     userId: comment.guestId,
     userName: null,
     userEmail: null,
+    parentCommentId: comment.parentCommentId,
+    isHidden: false,
     content: comment.content,
     createdAt: comment.createdAt,
     updatedAt: comment.updatedAt,
@@ -73,8 +80,11 @@ async function buildGuestCommunityPayload(input: {
 }
 
 function toClientComment(
-  comment: Awaited<ReturnType<typeof listExtractionTaskCommentsForUser>>[number]
+  comment: Awaited<ReturnType<typeof listExtractionTaskCommentsForUser>>[number],
+  input: { viewerIsOwner: boolean }
 ) {
+  const isHidden = comment.is_hidden === true
+  const maskedContent = 'Comentario oculto por el propietario.'
   return {
     id: comment.id,
     taskId: comment.task_id,
@@ -82,20 +92,27 @@ function toClientComment(
     userId: comment.user_id,
     userName: comment.user_name,
     userEmail: comment.user_email,
-    content: comment.content,
+    parentCommentId: comment.parent_comment_id,
+    isHidden,
+    content: isHidden && !input.viewerIsOwner ? maskedContent : comment.content,
     createdAt: comment.created_at,
     updatedAt: comment.updated_at,
   }
 }
 
-async function buildCommunityPayload(input: { taskId: string; extractionId: string; userId: string }) {
+async function buildCommunityPayload(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+  viewerIsOwner: boolean
+}) {
   const [comments, summary] = await Promise.all([
     listExtractionTaskCommentsForUser(input),
     getExtractionTaskLikeSummaryForUser(input),
   ])
 
   return {
-    comments: comments.map(toClientComment),
+    comments: comments.map((comment) => toClientComment(comment, { viewerIsOwner: input.viewerIsOwner })),
     likeSummary: {
       taskId: summary.task_id,
       extractionId: summary.extraction_id,
@@ -142,6 +159,7 @@ async function resolveCommunityAccess(input: {
 
   return {
     ok: true as const,
+    role: access.role,
   }
 }
 
@@ -192,8 +210,18 @@ export async function GET(
     if (!viewed) {
       return NextResponse.json({ error: 'No se encontró el subítem solicitado.' }, { status: 404 })
     }
+    if (viewed.recorded) {
+      publishTaskCommunityViewRefreshEvent({ extractionId, taskId })
+    }
 
-    return NextResponse.json(await buildCommunityPayload({ taskId, extractionId, userId: user.id }))
+    return NextResponse.json(
+      await buildCommunityPayload({
+        taskId,
+        extractionId,
+        userId: user.id,
+        viewerIsOwner: access.role === 'owner',
+      })
+    )
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'No se pudo cargar la comunidad.'
     console.error('[ActionExtractor] task community GET error:', message)
@@ -244,12 +272,27 @@ export async function POST(
           typeof (body as { content?: unknown }).content === 'string'
             ? (body as { content: string }).content.trim()
             : ''
+        const parentCommentId =
+          typeof (body as { parentCommentId?: unknown }).parentCommentId === 'string'
+            ? (body as { parentCommentId: string }).parentCommentId.trim()
+            : ''
         if (!content) return NextResponse.json({ error: 'content es requerido.' }, { status: 400 })
         if (content.length > 1500) {
           return NextResponse.json({ error: 'content no puede superar 1500 caracteres.' }, { status: 400 })
         }
-        const created = await addGuestTaskComment({ guestId, taskId, content })
+        const created = await addGuestTaskComment({
+          guestId,
+          taskId,
+          content,
+          parentCommentId: parentCommentId || null,
+        })
         if (!created) return NextResponse.json({ error: 'No se pudo guardar el comentario.' }, { status: 404 })
+        publishTaskCommunityRefreshEvent({
+          extractionId,
+          taskId,
+          action: 'add_comment',
+          at: new Date().toISOString(),
+        })
         return guestCommunity()
       }
 
@@ -263,16 +306,33 @@ export async function POST(
         if (!deleted) {
           return NextResponse.json({ error: 'No se encontró el comentario solicitado.' }, { status: 404 })
         }
+        publishTaskCommunityRefreshEvent({
+          extractionId,
+          taskId,
+          action: 'delete_comment',
+          at: new Date().toISOString(),
+        })
         return guestCommunity()
       }
 
       if (action === 'toggle_like') {
         const ok = await toggleGuestTaskLike({ guestId, taskId })
         if (!ok) return NextResponse.json({ error: 'No se pudo actualizar el like.' }, { status: 404 })
+        publishTaskCommunityRefreshEvent({
+          extractionId,
+          taskId,
+          action: 'toggle_like',
+          at: new Date().toISOString(),
+        })
         return guestCommunity()
       }
 
-      if (action === 'toggle_follow' || action === 'record_share') {
+      if (
+        action === 'toggle_follow' ||
+        action === 'record_share' ||
+        action === 'hide_comment' ||
+        action === 'toggle_hide_comment'
+      ) {
         return NextResponse.json(
           { error: 'Esta acción requiere una cuenta registrada.' },
           { status: 400 }
@@ -302,6 +362,10 @@ export async function POST(
         typeof (body as { content?: unknown }).content === 'string'
           ? (body as { content: string }).content.trim()
           : ''
+      const parentCommentId =
+        typeof (body as { parentCommentId?: unknown }).parentCommentId === 'string'
+          ? (body as { parentCommentId: string }).parentCommentId.trim()
+          : ''
       if (!content) {
         return NextResponse.json({ error: 'content es requerido.' }, { status: 400 })
       }
@@ -314,12 +378,26 @@ export async function POST(
         extractionId,
         userId: user.id,
         content,
+        parentCommentId: parentCommentId || null,
       })
       if (!created) {
         return NextResponse.json({ error: 'No se pudo guardar el comentario.' }, { status: 404 })
       }
 
-      return NextResponse.json(await buildCommunityPayload({ taskId, extractionId, userId: user.id }))
+      publishTaskCommunityRefreshEvent({
+        extractionId,
+        taskId,
+        action: 'add_comment',
+        at: new Date().toISOString(),
+      })
+      return NextResponse.json(
+        await buildCommunityPayload({
+          taskId,
+          extractionId,
+          userId: user.id,
+          viewerIsOwner: access.role === 'owner',
+        })
+      )
     }
 
     if (action === 'delete_comment') {
@@ -341,7 +419,68 @@ export async function POST(
         return NextResponse.json({ error: 'No se encontró el comentario solicitado.' }, { status: 404 })
       }
 
-      return NextResponse.json(await buildCommunityPayload({ taskId, extractionId, userId: user.id }))
+      publishTaskCommunityRefreshEvent({
+        extractionId,
+        taskId,
+        action: 'delete_comment',
+        at: new Date().toISOString(),
+      })
+      return NextResponse.json(
+        await buildCommunityPayload({
+          taskId,
+          extractionId,
+          userId: user.id,
+          viewerIsOwner: access.role === 'owner',
+        })
+      )
+    }
+
+    if (action === 'hide_comment' || action === 'toggle_hide_comment') {
+      if (access.role !== 'owner') {
+        return NextResponse.json(
+          { error: 'Solo el dueño del playbook puede ocultar comentarios.' },
+          { status: 403 }
+        )
+      }
+
+      const commentId =
+        typeof (body as { commentId?: unknown }).commentId === 'string'
+          ? (body as { commentId: string }).commentId.trim()
+          : ''
+      if (!commentId) {
+        return NextResponse.json({ error: 'commentId es requerido.' }, { status: 400 })
+      }
+
+      const hidden =
+        typeof (body as { hidden?: unknown }).hidden === 'boolean'
+          ? (body as { hidden: boolean }).hidden
+          : true
+
+      const updated = await setExtractionTaskCommentHiddenByOwner({
+        commentId,
+        taskId,
+        extractionId,
+        ownerUserId: user.id,
+        hidden,
+      })
+      if (!updated) {
+        return NextResponse.json({ error: 'No se encontró el comentario solicitado.' }, { status: 404 })
+      }
+
+      publishTaskCommunityRefreshEvent({
+        extractionId,
+        taskId,
+        action: hidden ? 'hide_comment' : 'unhide_comment',
+        at: new Date().toISOString(),
+      })
+      return NextResponse.json(
+        await buildCommunityPayload({
+          taskId,
+          extractionId,
+          userId: user.id,
+          viewerIsOwner: access.role === 'owner',
+        })
+      )
     }
 
     if (action === 'toggle_like') {
@@ -354,7 +493,20 @@ export async function POST(
         return NextResponse.json({ error: 'No se pudo actualizar el like.' }, { status: 404 })
       }
 
-      return NextResponse.json(await buildCommunityPayload({ taskId, extractionId, userId: user.id }))
+      publishTaskCommunityRefreshEvent({
+        extractionId,
+        taskId,
+        action: 'toggle_like',
+        at: new Date().toISOString(),
+      })
+      return NextResponse.json(
+        await buildCommunityPayload({
+          taskId,
+          extractionId,
+          userId: user.id,
+          viewerIsOwner: access.role === 'owner',
+        })
+      )
     }
 
     if (action === 'toggle_follow') {
@@ -367,7 +519,20 @@ export async function POST(
         return NextResponse.json({ error: 'No se pudo actualizar el seguimiento.' }, { status: 404 })
       }
 
-      return NextResponse.json(await buildCommunityPayload({ taskId, extractionId, userId: user.id }))
+      publishTaskCommunityRefreshEvent({
+        extractionId,
+        taskId,
+        action: 'toggle_follow',
+        at: new Date().toISOString(),
+      })
+      return NextResponse.json(
+        await buildCommunityPayload({
+          taskId,
+          extractionId,
+          userId: user.id,
+          viewerIsOwner: access.role === 'owner',
+        })
+      )
     }
 
     if (action === 'record_share') {
@@ -380,7 +545,20 @@ export async function POST(
         return NextResponse.json({ error: 'No se pudo registrar el compartido.' }, { status: 404 })
       }
 
-      return NextResponse.json(await buildCommunityPayload({ taskId, extractionId, userId: user.id }))
+      publishTaskCommunityRefreshEvent({
+        extractionId,
+        taskId,
+        action: 'record_share',
+        at: new Date().toISOString(),
+      })
+      return NextResponse.json(
+        await buildCommunityPayload({
+          taskId,
+          extractionId,
+          userId: user.id,
+          viewerIsOwner: access.role === 'owner',
+        })
+      )
     }
 
     return NextResponse.json({ error: 'Acción no soportada.' }, { status: 400 })

@@ -36,6 +36,7 @@ export interface GuestTaskComment {
   id: string
   taskId: string
   guestId: string
+  parentCommentId: string | null
   content: string
   createdAt: string
   updatedAt: string
@@ -464,11 +465,12 @@ export async function listGuestTaskComments(input: {
     id: string
     task_id: string
     guest_id: string
+    parent_comment_id: string | null
     content: string
     created_at: Date | string
     updated_at: Date | string
   }>(
-    `SELECT id, task_id, guest_id, content, created_at, updated_at
+    `SELECT id, task_id, guest_id, parent_comment_id, content, created_at, updated_at
      FROM guest_task_comments
      WHERE task_id = $1 AND guest_id = $2
      ORDER BY created_at ASC`,
@@ -479,6 +481,7 @@ export async function listGuestTaskComments(input: {
     id: r.id,
     taskId: r.task_id,
     guestId: r.guest_id,
+    parentCommentId: r.parent_comment_id ?? null,
     content: r.content,
     createdAt: toIso(r.created_at),
     updatedAt: toIso(r.updated_at),
@@ -489,8 +492,10 @@ export async function addGuestTaskComment(input: {
   guestId: string
   taskId: string
   content: string
+  parentCommentId?: string | null
 }): Promise<GuestTaskComment | null> {
   await ensureDbReady()
+  const parentCommentId = typeof input.parentCommentId === 'string' ? input.parentCommentId.trim() : null
 
   const { rows: checkRows } = await pool.query<{ id: string }>(
     `SELECT id FROM guest_tasks WHERE id = $1 AND guest_id = $2`,
@@ -502,14 +507,37 @@ export async function addGuestTaskComment(input: {
     id: string
     task_id: string
     guest_id: string
+    parent_comment_id: string | null
     content: string
     created_at: Date | string
     updated_at: Date | string
   }>(
-    `INSERT INTO guest_task_comments (id, task_id, guest_id, content)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id, task_id, guest_id, content, created_at, updated_at`,
-    [randomUUID(), input.taskId, input.guestId, input.content]
+    `
+      WITH parent_comment AS (
+        SELECT c.id
+        FROM guest_task_comments c
+        WHERE
+          c.id = $5
+          AND c.task_id = $2
+          AND c.guest_id = $3
+        LIMIT 1
+      ),
+      inserted AS (
+        INSERT INTO guest_task_comments (id, task_id, guest_id, parent_comment_id, content)
+        SELECT
+          $1,
+          $2,
+          $3,
+          parent_comment.id,
+          $4
+        FROM (SELECT 1) _
+        LEFT JOIN parent_comment ON TRUE
+        WHERE $5::text IS NULL OR parent_comment.id IS NOT NULL
+        RETURNING id, task_id, guest_id, parent_comment_id, content, created_at, updated_at
+      )
+      SELECT * FROM inserted
+    `,
+    [randomUUID(), input.taskId, input.guestId, input.content, parentCommentId]
   )
 
   if (!rows[0]) return null
@@ -518,6 +546,7 @@ export async function addGuestTaskComment(input: {
     id: r.id,
     taskId: r.task_id,
     guestId: r.guest_id,
+    parentCommentId: r.parent_comment_id ?? null,
     content: r.content,
     createdAt: toIso(r.created_at),
     updatedAt: toIso(r.updated_at),
@@ -532,7 +561,27 @@ export async function deleteGuestTaskComment(input: {
   await ensureDbReady()
 
   const { rowCount } = await pool.query(
-    `DELETE FROM guest_task_comments WHERE id = $1 AND task_id = $2 AND guest_id = $3`,
+    `
+      WITH target AS (
+        SELECT id, parent_comment_id
+        FROM guest_task_comments
+        WHERE id = $1 AND task_id = $2 AND guest_id = $3
+        LIMIT 1
+      ),
+      reparented AS (
+        UPDATE guest_task_comments child
+        SET parent_comment_id = target.parent_comment_id
+        FROM target
+        WHERE
+          child.parent_comment_id = target.id
+          AND child.task_id = $2
+          AND child.guest_id = $3
+        RETURNING child.id
+      )
+      DELETE FROM guest_task_comments c
+      USING target
+      WHERE c.id = target.id
+    `,
     [input.commentId, input.taskId, input.guestId]
   )
   return (rowCount ?? 0) > 0

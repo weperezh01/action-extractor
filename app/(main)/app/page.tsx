@@ -2107,6 +2107,7 @@ function ActionExtractor() {
                 {result ? (
                   <ResultPanel
                     result={result}
+                    viewerUserId={user?.id ?? null}
                     url={url}
                     extractionMode={extractionMode}
                     isProcessing={isProcessing}
@@ -2313,6 +2314,7 @@ function ActionExtractor() {
                       <ExtractionFeedCard
                         key={item.id}
                         item={item}
+                        viewerUserId={user?.id ?? null}
                         isProcessing={false}
                         notionConfigured={notionConfigured}
                         notionConnected={notionConnected}

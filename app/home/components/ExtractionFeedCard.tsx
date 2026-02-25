@@ -13,6 +13,7 @@ import type { ExtractResult, HistoryItem, Phase, ShareVisibility } from '@/app/h
 
 interface ExtractionFeedCardProps {
   item: HistoryItem
+  viewerUserId?: string | null
   isProcessing: boolean
 
   notionConfigured: boolean
@@ -76,6 +77,7 @@ function normalizePersistedPhases(payload: unknown, fallback: Phase[]): Phase[] 
 
 export function ExtractionFeedCard({
   item,
+  viewerUserId = null,
   isProcessing,
   notionConfigured,
   notionConnected,
@@ -457,6 +459,7 @@ export function ExtractionFeedCard({
     <div className="border-b border-slate-100 pb-10 pt-6 dark:border-slate-800/60 last:border-b-0">
       <ResultPanel
         result={localResult}
+        viewerUserId={viewerUserId}
         url={localResult.url ?? ''}
         extractionMode={extractionMode}
         isProcessing={isProcessing}

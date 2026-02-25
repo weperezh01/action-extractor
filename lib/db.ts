@@ -243,6 +243,8 @@ export interface DbExtractionTaskComment {
   task_id: string
   extraction_id: string
   user_id: string
+  parent_comment_id: string | null
+  is_hidden: boolean
   content: string
   created_at: string
   updated_at: string
@@ -549,6 +551,8 @@ interface DbExtractionTaskCommentRow {
   task_id: string
   extraction_id: string
   user_id: string
+  parent_comment_id: string | null
+  is_hidden: boolean
   content: string
   created_at: Date | string
   updated_at: Date | string
@@ -878,6 +882,8 @@ const INIT_SQL = `
     task_id TEXT NOT NULL REFERENCES extraction_tasks(id) ON DELETE CASCADE,
     extraction_id TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    parent_comment_id TEXT REFERENCES extraction_task_comments(id) ON DELETE SET NULL,
+    is_hidden BOOLEAN NOT NULL DEFAULT FALSE,
     content TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -957,6 +963,8 @@ const INIT_SQL = `
   ALTER TABLE extraction_task_attachments ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   ALTER TABLE extraction_task_attachments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   ALTER TABLE extraction_task_comments ADD COLUMN IF NOT EXISTS extraction_id TEXT REFERENCES extractions(id) ON DELETE CASCADE;
+  ALTER TABLE extraction_task_comments ADD COLUMN IF NOT EXISTS parent_comment_id TEXT REFERENCES extraction_task_comments(id) ON DELETE SET NULL;
+  ALTER TABLE extraction_task_comments ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT FALSE;
   ALTER TABLE extraction_task_comments ADD COLUMN IF NOT EXISTS content TEXT NOT NULL DEFAULT '';
   ALTER TABLE extraction_task_comments ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   ALTER TABLE extraction_task_comments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
@@ -1019,6 +1027,7 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_extraction_task_attachments_created_at ON extraction_task_attachments(created_at);
   CREATE INDEX IF NOT EXISTS idx_extraction_task_comments_task_id ON extraction_task_comments(task_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_task_comments_extraction_id ON extraction_task_comments(extraction_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_task_comments_parent_comment_id ON extraction_task_comments(parent_comment_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_task_comments_created_at ON extraction_task_comments(created_at);
   CREATE INDEX IF NOT EXISTS idx_extraction_task_likes_task_id ON extraction_task_likes(task_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_task_likes_extraction_id ON extraction_task_likes(extraction_id);
@@ -1151,6 +1160,7 @@ const INIT_SQL = `
     id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL REFERENCES guest_tasks(id) ON DELETE CASCADE,
     guest_id TEXT NOT NULL,
+    parent_comment_id TEXT REFERENCES guest_task_comments(id) ON DELETE SET NULL,
     content TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -1164,10 +1174,13 @@ const INIT_SQL = `
     UNIQUE (task_id, guest_id)
   );
 
+  ALTER TABLE guest_task_comments ADD COLUMN IF NOT EXISTS parent_comment_id TEXT REFERENCES guest_task_comments(id) ON DELETE SET NULL;
+
   CREATE INDEX IF NOT EXISTS idx_guest_tasks_guest_id ON guest_tasks(guest_id);
   CREATE INDEX IF NOT EXISTS idx_guest_task_events_task_id ON guest_task_events(task_id);
   CREATE INDEX IF NOT EXISTS idx_guest_task_attachments_task_id ON guest_task_attachments(task_id);
   CREATE INDEX IF NOT EXISTS idx_guest_task_comments_task_id ON guest_task_comments(task_id);
+  CREATE INDEX IF NOT EXISTS idx_guest_task_comments_parent_comment_id ON guest_task_comments(parent_comment_id);
   CREATE INDEX IF NOT EXISTS idx_guest_task_likes_task_id ON guest_task_likes(task_id);
 
   CREATE TABLE IF NOT EXISTS community_posts (
@@ -1280,7 +1293,7 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_community_post_views_user_id ON community_post_views(user_id);
 `
 
-const DB_INIT_SIGNATURE = '2026-02-24-community-stage3-v3'
+const DB_INIT_SIGNATURE = '2026-02-25-community-stage3-v5'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -1618,6 +1631,8 @@ function mapExtractionTaskCommentRow(row: DbExtractionTaskCommentRow): DbExtract
     task_id: row.task_id,
     extraction_id: row.extraction_id,
     user_id: row.user_id,
+    parent_comment_id: row.parent_comment_id ?? null,
+    is_hidden: row.is_hidden === true,
     content: row.content,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
@@ -3422,6 +3437,8 @@ export async function listExtractionTaskCommentsForUser(input: {
         c.task_id,
         c.extraction_id,
         c.user_id,
+        c.parent_comment_id,
+        c.is_hidden,
         c.content,
         c.created_at,
         c.updated_at,
@@ -3447,8 +3464,10 @@ export async function createExtractionTaskCommentForUser(input: {
   extractionId: string
   userId: string
   content: string
+  parentCommentId?: string | null
 }) {
   await ensureDbReady()
+  const parentCommentId = typeof input.parentCommentId === 'string' ? input.parentCommentId.trim() : null
   const { rows } = await pool.query<DbExtractionTaskCommentRow>(
     `
       WITH target_task AS (
@@ -3457,12 +3476,22 @@ export async function createExtractionTaskCommentForUser(input: {
         WHERE id = $1 AND extraction_id = $2
         LIMIT 1
       ),
+      parent_comment AS (
+        SELECT c.id
+        FROM extraction_task_comments c
+        WHERE
+          c.id = $6
+          AND c.task_id = $1
+          AND c.extraction_id = $2
+        LIMIT 1
+      ),
       inserted AS (
         INSERT INTO extraction_task_comments (
           id,
           task_id,
           extraction_id,
           user_id,
+          parent_comment_id,
           content
         )
         SELECT
@@ -3470,13 +3499,18 @@ export async function createExtractionTaskCommentForUser(input: {
           target_task.id,
           $2,
           $3,
+          parent_comment.id,
           $5
         FROM target_task
+        LEFT JOIN parent_comment ON TRUE
+        WHERE $6::text IS NULL OR parent_comment.id IS NOT NULL
         RETURNING
           id,
           task_id,
           extraction_id,
           user_id,
+          parent_comment_id,
+          is_hidden,
           content,
           created_at,
           updated_at
@@ -3486,6 +3520,8 @@ export async function createExtractionTaskCommentForUser(input: {
         i.task_id,
         i.extraction_id,
         i.user_id,
+        i.parent_comment_id,
+        i.is_hidden,
         i.content,
         i.created_at,
         i.updated_at,
@@ -3494,7 +3530,7 @@ export async function createExtractionTaskCommentForUser(input: {
       FROM inserted i
       INNER JOIN users u ON u.id = i.user_id
     `,
-    [input.taskId, input.extractionId, input.userId, randomUUID(), input.content]
+    [input.taskId, input.extractionId, input.userId, randomUUID(), input.content, parentCommentId]
   )
 
   return rows[0] ? mapExtractionTaskCommentRow(rows[0]) : null
@@ -3509,31 +3545,122 @@ export async function deleteExtractionTaskCommentByIdForUser(input: {
   await ensureDbReady()
   const { rows } = await pool.query<DbExtractionTaskCommentRow>(
     `
-      DELETE FROM extraction_task_comments c
-      USING extraction_tasks t, extractions e
-      WHERE
-        c.id = $1
-        AND c.task_id = $2
-        AND c.extraction_id = $3
-        AND t.id = c.task_id
-        AND t.extraction_id = $3
-        AND e.id = t.extraction_id
-        AND (
-          c.user_id = $4
-          OR e.user_id = $4
-        )
-      RETURNING
-        c.id,
-        c.task_id,
-        c.extraction_id,
-        c.user_id,
-        c.content,
-        c.created_at,
-        c.updated_at,
+      WITH target AS (
+        SELECT
+          c.id,
+          c.parent_comment_id
+        FROM extraction_task_comments c
+        INNER JOIN extraction_tasks t ON t.id = c.task_id
+        WHERE
+          c.id = $1
+          AND c.task_id = $2
+          AND c.extraction_id = $3
+          AND t.extraction_id = $3
+          AND c.user_id = $4
+        LIMIT 1
+      ),
+      reparented AS (
+        UPDATE extraction_task_comments child
+        SET parent_comment_id = target.parent_comment_id
+        FROM target
+        WHERE
+          child.parent_comment_id = target.id
+          AND child.task_id = $2
+          AND child.extraction_id = $3
+        RETURNING child.id
+      ),
+      deleted AS (
+        DELETE FROM extraction_task_comments c
+        USING target
+        WHERE c.id = target.id
+        RETURNING
+          c.id,
+          c.task_id,
+          c.extraction_id,
+          c.user_id,
+          c.parent_comment_id,
+          c.is_hidden,
+          c.content,
+          c.created_at,
+          c.updated_at
+      )
+      SELECT
+        d.id,
+        d.task_id,
+        d.extraction_id,
+        d.user_id,
+        d.parent_comment_id,
+        d.is_hidden,
+        d.content,
+        d.created_at,
+        d.updated_at,
         $5::text AS user_name,
         $6::text AS user_email
+      FROM deleted d
     `,
     [input.commentId, input.taskId, input.extractionId, input.userId, null, null]
+  )
+
+  return rows[0] ? mapExtractionTaskCommentRow(rows[0]) : null
+}
+
+export async function setExtractionTaskCommentHiddenByOwner(input: {
+  commentId: string
+  taskId: string
+  extractionId: string
+  ownerUserId: string
+  hidden: boolean
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskCommentRow>(
+    `
+      WITH target AS (
+        SELECT c.id
+        FROM extraction_task_comments c
+        INNER JOIN extraction_tasks t ON t.id = c.task_id
+        INNER JOIN extractions e ON e.id = t.extraction_id
+        WHERE
+          c.id = $1
+          AND c.task_id = $2
+          AND c.extraction_id = $3
+          AND t.extraction_id = $3
+          AND e.user_id = $4
+        LIMIT 1
+      ),
+      updated AS (
+        UPDATE extraction_task_comments c
+        SET
+          is_hidden = $5,
+          updated_at = NOW()
+        FROM target
+        WHERE c.id = target.id
+        RETURNING
+          c.id,
+          c.task_id,
+          c.extraction_id,
+          c.user_id,
+          c.parent_comment_id,
+          c.is_hidden,
+          c.content,
+          c.created_at,
+          c.updated_at
+      )
+      SELECT
+        u2.id,
+        u2.task_id,
+        u2.extraction_id,
+        u2.user_id,
+        u2.parent_comment_id,
+        u2.is_hidden,
+        u2.content,
+        u2.created_at,
+        u2.updated_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM updated u2
+      INNER JOIN users u ON u.id = u2.user_id
+    `,
+    [input.commentId, input.taskId, input.extractionId, input.ownerUserId, input.hidden]
   )
 
   return rows[0] ? mapExtractionTaskCommentRow(rows[0]) : null
@@ -3831,7 +3958,7 @@ export async function recordExtractionTaskViewForUser(input: {
     return null
   }
 
-  await pool.query(
+  const { rows: insertedRows } = await pool.query<{ id: string }>(
     `
       INSERT INTO extraction_task_views (
         id,
@@ -3842,11 +3969,16 @@ export async function recordExtractionTaskViewForUser(input: {
       VALUES ($1, $2, $3, $4)
       ON CONFLICT (task_id, user_id)
       DO NOTHING
+      RETURNING id
     `,
     [randomUUID(), input.taskId, input.extractionId, input.userId]
   )
 
-  return getExtractionTaskLikeSummaryForUser(input)
+  const summary = await getExtractionTaskLikeSummaryForUser(input)
+  return {
+    ...summary,
+    recorded: insertedRows.length > 0,
+  } satisfies DbExtractionTaskLikeSummary & { recorded: boolean }
 }
 
 export async function createOrGetShareToken(input: { extractionId: string; userId: string }) {
