@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
+import { flattenPlaybookPhases, normalizePlaybookPhases } from '@/lib/playbook-tree'
 
 export interface DbUser {
   id: string
@@ -199,6 +200,10 @@ export interface DbExtractionTask {
   phase_title: string
   item_index: number
   item_text: string
+  node_id: string
+  parent_node_id: string | null
+  depth: number
+  position_path: string
   checked: boolean
   status: ExtractionTaskStatus
   due_at: string | null
@@ -507,6 +512,10 @@ interface DbExtractionTaskRow {
   phase_title: string
   item_index: number | string
   item_text: string
+  node_id: string | null
+  parent_node_id: string | null
+  depth: number | string | null
+  position_path: string | null
   checked: boolean
   status: ExtractionTaskStatus
   due_at: Date | string | null
@@ -841,6 +850,10 @@ const INIT_SQL = `
     phase_title TEXT NOT NULL,
     item_index INTEGER NOT NULL,
     item_text TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    parent_node_id TEXT,
+    depth INTEGER NOT NULL DEFAULT 1,
+    position_path TEXT NOT NULL,
     checked BOOLEAN NOT NULL DEFAULT FALSE,
     status TEXT NOT NULL DEFAULT 'pending',
     due_at TIMESTAMPTZ,
@@ -950,6 +963,25 @@ const INIT_SQL = `
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS node_id TEXT;
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS parent_node_id TEXT;
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS depth INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS position_path TEXT;
+
+  UPDATE extraction_tasks
+  SET node_id = CONCAT('p', phase_id, '-i', item_index)
+  WHERE node_id IS NULL OR BTRIM(node_id) = '';
+
+  UPDATE extraction_tasks
+  SET position_path = CONCAT(phase_id::text, '.', (item_index + 1)::text)
+  WHERE position_path IS NULL OR BTRIM(position_path) = '';
+
+  UPDATE extraction_tasks
+  SET depth = 1
+  WHERE depth IS NULL OR depth < 1;
+
+  ALTER TABLE extraction_tasks ALTER COLUMN node_id SET NOT NULL;
+  ALTER TABLE extraction_tasks ALTER COLUMN position_path SET NOT NULL;
   ALTER TABLE extraction_task_events ADD COLUMN IF NOT EXISTS metadata_json TEXT NOT NULL DEFAULT '{}';
   ALTER TABLE extraction_task_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   ALTER TABLE extraction_task_attachments ADD COLUMN IF NOT EXISTS attachment_type TEXT NOT NULL DEFAULT 'pdf';
@@ -1019,6 +1051,8 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_extraction_tasks_extraction_id ON extraction_tasks(extraction_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_tasks_user_id ON extraction_tasks(user_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_tasks_status ON extraction_tasks(status);
+  CREATE INDEX IF NOT EXISTS idx_extraction_tasks_position_path ON extraction_tasks(extraction_id, phase_id, position_path);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_extraction_tasks_extraction_node_unique ON extraction_tasks(extraction_id, node_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_task_events_task_id ON extraction_task_events(task_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_task_events_created_at ON extraction_task_events(created_at);
   CREATE INDEX IF NOT EXISTS idx_extraction_task_attachments_task_id ON extraction_task_attachments(task_id);
@@ -1293,7 +1327,7 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_community_post_views_user_id ON community_post_views(user_id);
 `
 
-const DB_INIT_SIGNATURE = '2026-02-25-community-stage3-v5'
+const DB_INIT_SIGNATURE = '2026-02-25-playbook-tree-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -1561,6 +1595,16 @@ function mapExtractionTaskRow(row: DbExtractionTaskRow): DbExtractionTask {
     typeof row.phase_id === 'number' ? row.phase_id : Number.parseInt(String(row.phase_id), 10)
   const parsedItemIndex =
     typeof row.item_index === 'number' ? row.item_index : Number.parseInt(String(row.item_index), 10)
+  const parsedDepth =
+    typeof row.depth === 'number' ? row.depth : Number.parseInt(String(row.depth ?? ''), 10)
+  const nodeId =
+    typeof row.node_id === 'string' && row.node_id.trim()
+      ? row.node_id.trim()
+      : `p${Number.isFinite(parsedPhaseId) ? parsedPhaseId : 0}-i${Number.isFinite(parsedItemIndex) ? parsedItemIndex : 0}`
+  const positionPath =
+    typeof row.position_path === 'string' && row.position_path.trim()
+      ? row.position_path.trim()
+      : `${Number.isFinite(parsedPhaseId) ? parsedPhaseId : 0}.${(Number.isFinite(parsedItemIndex) ? parsedItemIndex : 0) + 1}`
 
   return {
     id: row.id,
@@ -1570,6 +1614,10 @@ function mapExtractionTaskRow(row: DbExtractionTaskRow): DbExtractionTask {
     phase_title: row.phase_title,
     item_index: Number.isFinite(parsedItemIndex) ? parsedItemIndex : 0,
     item_text: row.item_text,
+    node_id: nodeId,
+    parent_node_id: row.parent_node_id ?? null,
+    depth: Number.isFinite(parsedDepth) ? Math.max(1, parsedDepth) : 1,
+    position_path: positionPath,
     checked: row.checked === true,
     status: row.status,
     due_at: row.due_at ? toIso(row.due_at) : null,
@@ -2024,6 +2072,7 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
         ranked.created_at,
         ranked.source_type,
         ranked.source_label,
+        ranked.folder_id,
         ranked.order_number
       FROM (
         SELECT
@@ -2042,6 +2091,7 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
           created_at,
           source_type,
           source_label,
+          folder_id,
           ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC)::int AS order_number
         FROM extractions
         WHERE user_id = $1
@@ -2756,30 +2806,21 @@ export async function clearChatMessagesForUser(userId: string) {
 export async function syncExtractionTasksForUser(input: {
   userId: string
   extractionId: string
-  phases: Array<{ id: number; title: string; items: string[] }>
+  phases: unknown
 }) {
   await ensureDbReady()
 
-  const normalizedRows = input.phases.flatMap((phase) => {
-    const phaseId = Number.parseInt(String(phase.id), 10)
-    if (!Number.isFinite(phaseId)) return []
-
-    return phase.items
-      .map((item, index) => {
-        const itemText = `${item ?? ''}`.trim()
-        if (!itemText) return null
-
-        return {
-          phaseId,
-          phaseTitle: `${phase.title ?? ''}`.trim() || `Fase ${phaseId}`,
-          itemIndex: index,
-          itemText,
-        }
-      })
-      .filter((row): row is { phaseId: number; phaseTitle: string; itemIndex: number; itemText: string } =>
-        Boolean(row)
-      )
-  })
+  const normalizedPhases = normalizePlaybookPhases(input.phases)
+  const normalizedRows = flattenPlaybookPhases(normalizedPhases).map((row) => ({
+    phaseId: row.phaseId,
+    phaseTitle: row.phaseTitle,
+    itemIndex: row.itemIndex,
+    itemText: row.itemText,
+    nodeId: row.nodeId,
+    parentNodeId: row.parentNodeId,
+    depth: row.depth,
+    positionPath: row.positionPath,
+  }))
 
   const client = await pool.connect()
   try {
@@ -2810,6 +2851,10 @@ export async function syncExtractionTasksForUser(input: {
           phase_title,
           item_index,
           item_text,
+          node_id,
+          parent_node_id,
+          depth,
+          position_path,
           checked,
           status,
           due_at,
@@ -2818,7 +2863,7 @@ export async function syncExtractionTasksForUser(input: {
           updated_at
         FROM extraction_tasks
         WHERE extraction_id = $1
-        ORDER BY phase_id ASC, item_index ASC, created_at ASC
+        ORDER BY phase_id ASC, string_to_array(position_path, '.')::int[] ASC, item_index ASC, created_at ASC
       `,
       [input.extractionId]
     )
@@ -2840,6 +2885,7 @@ export async function syncExtractionTasksForUser(input: {
       const normalizedPhaseTitle = normalizeText(row.phaseTitle)
 
       let matchedTask =
+        takeMatchingTask((task) => task.node_id === row.nodeId) ??
         takeMatchingTask(
           (task) =>
             task.phase_id === row.phaseId &&
@@ -2897,10 +2943,19 @@ export async function syncExtractionTasksForUser(input: {
           SET
             phase_id = $1,
             item_index = $2,
+            node_id = $3,
+            position_path = $4,
             updated_at = NOW()
-          WHERE id = $3 AND extraction_id = $4
+          WHERE id = $5 AND extraction_id = $6
         `,
-        [temporaryBase - index, temporaryBase - index, row.taskId, input.extractionId]
+        [
+          temporaryBase - index,
+          temporaryBase - index,
+          `tmp_${index}_${row.taskId}`,
+          `0.${Math.abs(temporaryBase - index)}`,
+          row.taskId,
+          input.extractionId,
+        ]
       )
     }
 
@@ -2914,14 +2969,22 @@ export async function syncExtractionTasksForUser(input: {
               phase_title = $2,
               item_index = $3,
               item_text = $4,
+              node_id = $5,
+              parent_node_id = $6,
+              depth = $7,
+              position_path = $8,
               updated_at = NOW()
-            WHERE id = $5 AND extraction_id = $6
+            WHERE id = $9 AND extraction_id = $10
           `,
           [
             row.phaseId,
             row.phaseTitle,
             row.itemIndex,
             row.itemText,
+            row.nodeId,
+            row.parentNodeId,
+            row.depth,
+            row.positionPath,
             row.taskId,
             input.extractionId,
           ]
@@ -2937,10 +3000,14 @@ export async function syncExtractionTasksForUser(input: {
               phase_title,
               item_index,
               item_text,
+              node_id,
+              parent_node_id,
+              depth,
+              position_path,
               checked,
               status
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, 'pending')
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, FALSE, 'pending')
           `,
           [
             row.taskId,
@@ -2950,6 +3017,10 @@ export async function syncExtractionTasksForUser(input: {
             row.phaseTitle,
             row.itemIndex,
             row.itemText,
+            row.nodeId,
+            row.parentNodeId,
+            row.depth,
+            row.positionPath,
           ]
         )
       }
@@ -2981,6 +3052,10 @@ export async function listExtractionTasksWithEventsForUser(input: { extractionId
         phase_title,
         item_index,
         item_text,
+        node_id,
+        parent_node_id,
+        depth,
+        position_path,
         checked,
         status,
         due_at,
@@ -2989,7 +3064,7 @@ export async function listExtractionTasksWithEventsForUser(input: { extractionId
         updated_at
       FROM extraction_tasks
       WHERE extraction_id = $1
-      ORDER BY phase_id ASC, item_index ASC
+      ORDER BY phase_id ASC, string_to_array(position_path, '.')::int[] ASC, item_index ASC
     `,
     [input.extractionId]
   )
@@ -3047,6 +3122,10 @@ export async function listExtractionTasksWithEventsForSharedExtraction(extractio
         phase_title,
         item_index,
         item_text,
+        node_id,
+        parent_node_id,
+        depth,
+        position_path,
         checked,
         status,
         due_at,
@@ -3055,7 +3134,7 @@ export async function listExtractionTasksWithEventsForSharedExtraction(extractio
         updated_at
       FROM extraction_tasks
       WHERE extraction_id = $1
-      ORDER BY phase_id ASC, item_index ASC
+      ORDER BY phase_id ASC, string_to_array(position_path, '.')::int[] ASC, item_index ASC
     `,
     [extractionId]
   )
@@ -3115,6 +3194,10 @@ export async function findExtractionTaskByIdForUser(input: {
         phase_title,
         item_index,
         item_text,
+        node_id,
+        parent_node_id,
+        depth,
+        position_path,
         checked,
         status,
         due_at,
@@ -3158,6 +3241,10 @@ export async function updateExtractionTaskStateForUser(input: {
         phase_title,
         item_index,
         item_text,
+        node_id,
+        parent_node_id,
+        depth,
+        position_path,
         checked,
         status,
         due_at,
@@ -3293,7 +3380,7 @@ export async function listExtractionTaskAttachmentsForSharedExtraction(extractio
       WHERE
         a.extraction_id = $1
         AND t.extraction_id = $1
-      ORDER BY t.phase_id ASC, t.item_index ASC, a.created_at DESC
+      ORDER BY t.phase_id ASC, string_to_array(t.position_path, '.')::int[] ASC, t.item_index ASC, a.created_at DESC
     `,
     [extractionId]
   )

@@ -42,7 +42,13 @@ export async function POST(req: NextRequest) {
     const mode = normalizeExtractionMode(rawMode)
     const thumbnailUrl = rawThumbnailUrl || null
 
-    const emptyPhases = [{ id: 1, title: 'Fase 1', items: [''] }]
+    const emptyPhases = [
+      {
+        id: 1,
+        title: 'Fase 1',
+        items: [{ id: 'p1-n1', text: 'Nuevo ítem', children: [] }],
+      },
+    ]
     const emptyMetadata = {
       readingTime: '—',
       difficulty: '—',

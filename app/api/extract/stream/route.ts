@@ -36,6 +36,7 @@ import {
 import { resolveVideoPreview } from '@/lib/video-preview'
 import { detectSourceType } from '@/lib/source-detector'
 import { extractWebContent, truncateForAi } from '@/lib/content-extractor'
+import { flattenItemsAsText, normalizePlaybookPhases } from '@/lib/playbook-tree'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -62,17 +63,11 @@ function buildTranscriptFallbackFromCachedExtraction(cachedVideo: {
   phases_json: string
   pro_tip: string
 }) {
-  const phases = safeParse<Array<{ title?: unknown; items?: unknown }>>(cachedVideo.phases_json, [])
+  const phases = normalizePlaybookPhases(safeParse<unknown>(cachedVideo.phases_json, []))
   const phaseLines = phases
     .map((phase, index) => {
       const title = typeof phase.title === 'string' && phase.title.trim() ? phase.title.trim() : `Fase ${index + 1}`
-      const items = Array.isArray(phase.items)
-        ? phase.items
-            .filter(
-              (item): item is string => typeof item === 'string' && item.trim().length > 0
-            )
-            .slice(0, 5)
-        : []
+      const items = flattenItemsAsText(phase.items).slice(0, 5)
       if (items.length === 0) {
         return `- ${title}`
       }

@@ -38,6 +38,7 @@ export function formatHistoryDate(isoDate: string) {
   return new Intl.DateTimeFormat('es-ES', {
     dateStyle: 'medium',
     timeStyle: 'short',
+    hour12: true,
   }).format(parsed)
 }
 

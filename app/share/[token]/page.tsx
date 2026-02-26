@@ -10,6 +10,7 @@ import {
 } from '@/lib/db'
 import type { InteractiveTask, InteractiveTaskAttachment } from '@/app/home/lib/types'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
+import { flattenItemsAsText, normalizePlaybookPhases, type PlaybookNode } from '@/lib/playbook-tree'
 import { buildYoutubeThumbnailUrl } from '@/lib/video-preview'
 import { SharedTaskTimeline } from './SharedTaskTimeline'
 import { ShareSignupCTA } from './ShareSignupCTA'
@@ -118,7 +119,7 @@ export async function generateMetadata({
 interface Phase {
   id: number
   title: string
-  items: string[]
+  items: PlaybookNode[]
 }
 
 interface ExtractionMetadata {
@@ -143,6 +144,7 @@ function formatHistoryDate(isoDate: string) {
   return new Intl.DateTimeFormat('es-ES', {
     dateStyle: 'medium',
     timeStyle: 'short',
+    hour12: true,
   }).format(parsed)
 }
 
@@ -156,6 +158,10 @@ function mapSharedTasksToInteractiveTasks(
     phaseTitle: task.phase_title,
     itemIndex: task.item_index,
     itemText: task.item_text,
+    nodeId: task.node_id,
+    parentNodeId: task.parent_node_id,
+    depth: task.depth,
+    positionPath: task.position_path,
     checked: task.checked,
     status: task.status,
     dueAt: task.due_at,
@@ -212,7 +218,7 @@ export default async function SharePage({
     notFound()
   }
 
-  const phases = safeParse<Phase[]>(extraction.phases_json, [])
+  const phases = normalizePlaybookPhases(safeParse<unknown>(extraction.phases_json, []))
   const tasks = await getSharedTasks(extraction.id)
   const attachments = await getSharedAttachments(extraction.id)
   const interactiveTasks = mapSharedTasksToInteractiveTasks(tasks)
@@ -372,7 +378,7 @@ export default async function SharePage({
                     </h2>
                   </header>
                   <ul className="space-y-2 p-4">
-                    {phase.items.map((item, index) => (
+                    {flattenItemsAsText(phase.items).map((item, index) => (
                       <li key={index} className="text-sm leading-relaxed text-slate-700 dark:text-slate-300">
                         - {item}
                       </li>

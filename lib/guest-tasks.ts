@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { pool, ensureDbReady } from '@/lib/db'
+import { flattenPlaybookPhases, normalizePlaybookPhases } from '@/lib/playbook-tree'
 import type {
   ExtractionTaskStatus,
   ExtractionTaskEventType,
@@ -70,14 +71,22 @@ function toIso(value: Date | string): string {
 
 export async function syncGuestTasks(input: {
   guestId: string
-  phases: Array<{ id: number; title: string; items: string[] }>
+  phases: unknown
 }): Promise<void> {
   await ensureDbReady()
-  const { guestId, phases } = input
+  const { guestId } = input
+  const phases = normalizePlaybookPhases(input.phases)
+  const rows = flattenPlaybookPhases(phases)
+  const rowsByPhase = new Map<number, typeof rows>()
+  for (const row of rows) {
+    const bucket = rowsByPhase.get(row.phaseId) ?? []
+    bucket.push(row)
+    rowsByPhase.set(row.phaseId, bucket)
+  }
 
   for (const phase of phases) {
-    for (let idx = 0; idx < phase.items.length; idx++) {
-      const itemText = phase.items[idx]
+    const phaseRows = rowsByPhase.get(phase.id) ?? []
+    for (const row of phaseRows) {
       await pool.query(
         `INSERT INTO guest_tasks (id, guest_id, phase_id, phase_title, item_index, item_text)
          VALUES ($1, $2, $3, $4, $5, $6)
@@ -86,7 +95,7 @@ export async function syncGuestTasks(input: {
            phase_title = EXCLUDED.phase_title,
            item_text = EXCLUDED.item_text,
            updated_at = NOW()`,
-        [randomUUID(), guestId, phase.id, phase.title, idx, itemText]
+        [randomUUID(), guestId, row.phaseId, row.phaseTitle, row.itemIndex, row.itemText]
       )
     }
   }

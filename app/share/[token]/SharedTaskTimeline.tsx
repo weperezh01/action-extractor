@@ -24,6 +24,7 @@ function formatTaskDateUtc(isoDate: string) {
   return new Intl.DateTimeFormat('es-ES', {
     dateStyle: 'medium',
     timeStyle: 'short',
+    hour12: true,
     // Keep SSR/CSR output deterministic to avoid hydration mismatches.
     timeZone: 'UTC',
   }).format(parsed)
@@ -36,6 +37,7 @@ function formatTaskDateLocal(isoDate: string) {
   return new Intl.DateTimeFormat('es-ES', {
     dateStyle: 'medium',
     timeStyle: 'short',
+    hour12: true,
   }).format(parsed)
 }
 
@@ -401,6 +403,7 @@ export function SharedTaskTimeline({
             likesCount: 0,
             likedByMe: false,
           }
+          const taskPositionLabel = task.positionPath?.trim() || `${task.phaseId}.${task.itemIndex + 1}`
           const taskCommentDraft = taskCommentDraftByTaskId[task.id] ?? ''
           const taskCommunityError = taskCommunityErrorByTaskId[task.id] ?? null
           const isTaskCommunityLoading = taskCommunityLoadingId === task.id
@@ -420,7 +423,7 @@ export function SharedTaskTimeline({
               >
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                    {task.phaseId}.{task.itemIndex + 1} {task.itemText}
+                    {taskPositionLabel} {task.itemText}
                   </p>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{task.phaseTitle}</p>
                 </div>

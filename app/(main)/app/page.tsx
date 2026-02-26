@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { useSearchParams } from 'next/navigation'
@@ -23,6 +23,7 @@ import {
   normalizeExtractionMode,
 } from '@/lib/extraction-modes'
 import { buildExtractionMarkdown } from '@/lib/export-content'
+import { flattenItemsAsText, normalizePlaybookPhases } from '@/lib/playbook-tree'
 import {
   DEFAULT_EXTRACTION_OUTPUT_LANGUAGE,
   type ExtractionOutputLanguage,
@@ -37,7 +38,7 @@ import { KnowledgeChat } from '@/app/home/components/KnowledgeChat'
 import { ResultPanel } from '@/app/home/components/ResultPanel'
 import { PlaybookSideTabs } from '@/app/home/components/PlaybookSideTabs'
 import { WorkspaceControlsDock } from '@/app/home/components/WorkspaceControlsDock'
-import { FolderDock } from '@/app/home/components/FolderDock'
+import { FolderDock, type FolderPlaybookItem, type OpenDeskPlaybookItem } from '@/app/home/components/FolderDock'
 import { useFolders } from '@/app/home/hooks/useFolders'
 import { useAuth } from '@/app/home/hooks/useAuth'
 import { useHistory } from '@/app/home/hooks/useHistory'
@@ -104,29 +105,7 @@ function slowScrollToElement(element: HTMLElement, durationMs = 1400) {
 }
 
 function normalizePersistedPhases(payload: unknown, fallback: Phase[]): Phase[] {
-  if (!Array.isArray(payload)) return fallback
-
-  const normalized = payload
-    .map((phase, index) => {
-      if (!phase || typeof phase !== 'object') return null
-
-      const rawTitle = (phase as { title?: unknown }).title
-      const rawItems = (phase as { items?: unknown }).items
-      const title = typeof rawTitle === 'string' ? rawTitle.trim() : ''
-      const items = Array.isArray(rawItems)
-        ? rawItems.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
-        : []
-
-      if (!title || items.length === 0) return null
-
-      return {
-        id: index + 1,
-        title,
-        items,
-      }
-    })
-    .filter((phase): phase is Phase => Boolean(phase))
-
+  const normalized = normalizePlaybookPhases(payload)
   return normalized.length > 0 ? normalized : fallback
 }
 
@@ -177,6 +156,28 @@ function parseStreamPreview(raw: string): {
   return { objective, phases }
 }
 
+const CURRENT_PLAYBOOK_PHASE_KEY = '__current__'
+
+function resolvePlaybookPhaseKey(playbookId: string | null | undefined) {
+  const normalizedId = typeof playbookId === 'string' ? playbookId.trim() : ''
+  return normalizedId || CURRENT_PLAYBOOK_PHASE_KEY
+}
+
+function resolvePlaybookDisplayTitle(item: {
+  videoTitle?: string | null
+  sourceLabel?: string | null
+  objective?: string | null
+  url?: string | null
+}) {
+  return (
+    item.videoTitle?.trim() ||
+    item.sourceLabel?.trim() ||
+    item.objective?.trim() ||
+    item.url?.trim() ||
+    'Sin título'
+  )
+}
+
 
 function ActionExtractor() {
   const searchParams = useSearchParams()
@@ -191,7 +192,9 @@ function ActionExtractor() {
   const [result, setResult] = useState<ExtractResult | null>(null)
   const [isResultBookClosed, setIsResultBookClosed] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [activePhase, setActivePhase] = useState<number | null>(null)
+  const [activePhasesByPlaybookId, setActivePhasesByPlaybookId] = useState<Record<string, number | null>>({})
+  const [stackedResultIds, setStackedResultIds] = useState<string[]>([])
+  const [pendingStackedScrollPlaybookId, setPendingStackedScrollPlaybookId] = useState<string | null>(null)
   const [uploadedFile, setUploadedFile] = useState<UploadedFileState | null>(null)
   const [isUploading, setIsUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -217,6 +220,7 @@ function ActionExtractor() {
   const [isManualFormOpen, setIsManualFormOpen] = useState(false)
   const [activeFolderIds, setActiveFolderIds] = useState<string[]>([])
   const { folders, loadFolders, resetFolders, createFolder, deleteFolder } = useFolders()
+  const [isFolderDockOpen, setIsFolderDockOpen] = useState(false)
   const [historyView, setHistoryView] = useState<'list' | 'feed'>('list')
   const [theme, setTheme] = useState<Theme>('light')
   const [reauthRequired, setReauthRequired] = useState(false)
@@ -270,7 +274,12 @@ function ActionExtractor() {
         setSharedWithMe([])
         return
       }
-      const items = Array.isArray(data?.items) ? (data.items as SharedExtractionItem[]) : []
+      const items = Array.isArray(data?.items)
+        ? (data.items as SharedExtractionItem[]).map((item) => ({
+            ...item,
+            phases: normalizePlaybookPhases(item.phases),
+          }))
+        : []
       setSharedWithMe(items)
     } catch {
       setSharedWithMe([])
@@ -311,7 +320,9 @@ function ActionExtractor() {
     setIsResultBookClosed(false)
     setError(null)
     setNotice(null)
-    setActivePhase(null)
+    setActivePhasesByPlaybookId({})
+    setStackedResultIds([])
+    setPendingStackedScrollPlaybookId(null)
     setShareCopied(false)
     setShareVisibilityLoading(false)
     setHistoryShareCopiedItemId(null)
@@ -478,6 +489,26 @@ function ActionExtractor() {
   }, [folders])
 
   useEffect(() => {
+    setStackedResultIds((previous) => {
+      if (previous.length === 0) return previous
+      const validHistoryIds = new Set(history.map((item) => item.id))
+      const next = previous.filter((id) => validHistoryIds.has(id))
+      return next.length === previous.length ? previous : next
+    })
+
+    setActivePhasesByPlaybookId((previous) => {
+      const validHistoryIds = new Set(history.map((item) => item.id))
+      const nextEntries = Object.entries(previous).filter(([playbookId]) => {
+        if (playbookId === CURRENT_PLAYBOOK_PHASE_KEY) return true
+        return validHistoryIds.has(playbookId)
+      })
+
+      if (nextEntries.length === Object.keys(previous).length) return previous
+      return Object.fromEntries(nextEntries)
+    })
+  }, [history])
+
+  useEffect(() => {
     const extractionId = result?.id?.trim()
     if (!extractionId || resultAccessRole !== 'owner') {
       setCircleMembers([])
@@ -498,6 +529,20 @@ function ActionExtractor() {
       setShouldScrollToResult(false)
     })
   }, [isProcessing, result, shouldScrollToResult])
+
+  useEffect(() => {
+    if (!pendingStackedScrollPlaybookId) return
+
+    const stackedPlaybookElement = document.getElementById(
+      `stacked-playbook-${pendingStackedScrollPlaybookId}`
+    )
+    if (!stackedPlaybookElement) return
+
+    window.requestAnimationFrame(() => {
+      slowScrollToElement(stackedPlaybookElement, 1500)
+      setPendingStackedScrollPlaybookId(null)
+    })
+  }, [pendingStackedScrollPlaybookId, stackedResultIds])
 
   const handleScrollToHistory = useCallback(() => {
     const anchor = historyAnchorRef.current
@@ -826,6 +871,9 @@ function ActionExtractor() {
     setError(null)
     setNotice(null)
     setResult(null)
+    setStackedResultIds([])
+    setActivePhasesByPlaybookId({})
+    setPendingStackedScrollPlaybookId(null)
     setIsResultBookClosed(false)
     setShareCopied(false)
     setStreamStatus(`Iniciando extracción (${getExtractionModeLabel(extractionModeToUse)})...`)
@@ -885,6 +933,7 @@ function ActionExtractor() {
           const fromCache = (payload as { cached?: unknown }).cached === true
           setResult({
             ...(payload as ExtractResult),
+            phases: normalizePlaybookPhases((payload as { phases?: unknown }).phases),
             mode: resolvedMode,
             shareVisibility: resolvedShareVisibility,
             accessRole: 'owner',
@@ -894,7 +943,9 @@ function ActionExtractor() {
           setIsResultBookClosed(false)
           setExtractionMode(resolvedMode)
           setShareCopied(false)
-          setActivePhase(null)
+          setActivePhasesByPlaybookId({})
+          setStackedResultIds([])
+          setPendingStackedScrollPlaybookId(null)
           setError(null)
           setStreamStatus(fromCache ? 'Resultado recuperado desde caché.' : 'Extracción completada.')
           setNotice(
@@ -999,9 +1050,16 @@ function ActionExtractor() {
     }
   }
 
-  const togglePhase = (id: number) => {
-    setActivePhase(activePhase === id ? null : id)
-  }
+  const togglePhaseForPlaybook = useCallback((playbookId: string | null | undefined, phaseId: number) => {
+    const phaseKey = resolvePlaybookPhaseKey(playbookId)
+    setActivePhasesByPlaybookId((previous) => {
+      const currentPhase = previous[phaseKey] ?? null
+      return {
+        ...previous,
+        [phaseKey]: currentPhase === phaseId ? null : phaseId,
+      }
+    })
+  }, [])
 
   const handleCopyMarkdown = async (source?: ExtractResult | HistoryItem) => {
     const markdownSource = source ?? result
@@ -1433,7 +1491,14 @@ function ActionExtractor() {
             phases: persistedPhases,
           }
         })
-        setActivePhase(null)
+        setActivePhasesByPlaybookId((previous) => {
+          const phaseKey = resolvePlaybookPhaseKey(extractionId)
+          if (!(phaseKey in previous)) return previous
+          return {
+            ...previous,
+            [phaseKey]: null,
+          }
+        })
         setNotice('Contenido actualizado correctamente.')
         void loadHistory()
         return true
@@ -1517,6 +1582,7 @@ function ActionExtractor() {
       const generatedAt = new Intl.DateTimeFormat('es-ES', {
         dateStyle: 'medium',
         timeStyle: 'short',
+        hour12: true,
       }).format(new Date())
       pdf.text(`Generado: ${generatedAt}`, marginX, y)
       y += 6
@@ -1553,7 +1619,7 @@ function ActionExtractor() {
           spacingAfter: 1.5,
         })
 
-        phase.items.forEach((item) => {
+        flattenItemsAsText(phase.items).forEach((item) => {
           addWrappedText(`- ${item}`, {
             fontSize: 10.5,
             x: marginX + 2,
@@ -1577,12 +1643,9 @@ function ActionExtractor() {
     }
   }
 
-  const openHistoryItem = (item: HistoryItem) => {
+  const mapHistoryItemToResult = useCallback((item: HistoryItem): ExtractResult => {
     const mode = normalizeExtractionMode(item.mode)
-    setUrl(item.url ?? '')
-    setUploadedFile(null)
-    setExtractionMode(mode)
-    setResult({
+    return {
       id: item.id,
       orderNumber: item.orderNumber,
       shareVisibility: normalizeShareVisibility(item.shareVisibility),
@@ -1594,20 +1657,55 @@ function ActionExtractor() {
       thumbnailUrl: item.thumbnailUrl ?? null,
       mode,
       objective: item.objective,
-      phases: item.phases,
+      phases: normalizePlaybookPhases(item.phases),
       proTip: item.proTip,
       metadata: item.metadata,
       sourceType: item.sourceType,
       sourceLabel: item.sourceLabel ?? null,
       accessRole: 'owner',
-    })
+    }
+  }, [])
+
+  const mapSharedItemToResult = useCallback((item: SharedExtractionItem): ExtractResult => {
+    const mode = normalizeExtractionMode(item.mode)
+    return {
+      id: item.id,
+      orderNumber: item.orderNumber,
+      shareVisibility: normalizeShareVisibility(item.shareVisibility),
+      createdAt: item.createdAt,
+      folderId: item.folderId ?? null,
+      url: item.url ?? null,
+      videoId: item.videoId ?? null,
+      videoTitle: item.videoTitle ?? null,
+      thumbnailUrl: item.thumbnailUrl ?? null,
+      mode,
+      objective: item.objective,
+      phases: normalizePlaybookPhases(item.phases),
+      proTip: item.proTip,
+      metadata: item.metadata,
+      sourceType: item.sourceType,
+      sourceLabel: item.sourceLabel ?? null,
+      accessRole: item.accessRole,
+      ownerName: item.ownerName,
+      ownerEmail: item.ownerEmail,
+    }
+  }, [])
+
+  const openHistoryItem = (item: HistoryItem) => {
+    const mode = normalizeExtractionMode(item.mode)
+    setUrl(item.url ?? '')
+    setUploadedFile(null)
+    setExtractionMode(mode)
+    setResult(mapHistoryItemToResult(item))
+    setStackedResultIds([])
+    setPendingStackedScrollPlaybookId(null)
     setResultAccessRole('owner')
     setCircleMembers([])
     if (item.id) {
       void loadCircleMembers(item.id)
     }
     setIsResultBookClosed(false)
-    setActivePhase(null)
+    setActivePhasesByPlaybookId({})
     setError(null)
     setShareCopied(false)
     setShareVisibilityLoading(false)
@@ -1621,31 +1719,13 @@ function ActionExtractor() {
     setUrl(item.url ?? '')
     setUploadedFile(null)
     setExtractionMode(mode)
-    setResult({
-      id: item.id,
-      orderNumber: item.orderNumber,
-      shareVisibility: normalizeShareVisibility(item.shareVisibility),
-      createdAt: item.createdAt,
-      folderId: item.folderId ?? null,
-      url: item.url ?? null,
-      videoId: item.videoId ?? null,
-      videoTitle: item.videoTitle ?? null,
-      thumbnailUrl: item.thumbnailUrl ?? null,
-      mode,
-      objective: item.objective,
-      phases: item.phases,
-      proTip: item.proTip,
-      metadata: item.metadata,
-      sourceType: item.sourceType,
-      sourceLabel: item.sourceLabel ?? null,
-      accessRole: item.accessRole,
-      ownerName: item.ownerName,
-      ownerEmail: item.ownerEmail,
-    })
+    setResult(mapSharedItemToResult(item))
+    setStackedResultIds([])
+    setPendingStackedScrollPlaybookId(null)
     setResultAccessRole(item.accessRole)
     setCircleMembers([])
     setIsResultBookClosed(false)
-    setActivePhase(null)
+    setActivePhasesByPlaybookId({})
     setError(null)
     setShareCopied(false)
     setShareVisibilityLoading(false)
@@ -1653,6 +1733,77 @@ function ActionExtractor() {
     setStreamPreview('')
     setShouldScrollToResult(true)
   }
+
+  const scrollToDeskPlaybook = useCallback(
+    (playbookId: string) => {
+      const id = playbookId.trim()
+      if (!id) return
+
+      const currentMainId = result?.id?.trim() || (result ? CURRENT_PLAYBOOK_PHASE_KEY : '')
+      if (id === currentMainId) {
+        const anchor = resultAnchorRef.current
+        if (!anchor) return
+        window.requestAnimationFrame(() => {
+          slowScrollToElement(anchor, 1200)
+        })
+        return
+      }
+
+      const target = document.getElementById(`stacked-playbook-${id}`)
+      if (!target) return
+      window.requestAnimationFrame(() => {
+        slowScrollToElement(target, 1200)
+      })
+    },
+    [result]
+  )
+
+  const closeDeskPlaybook = useCallback(
+    (playbookId: string) => {
+      const id = playbookId.trim()
+      if (!id) return
+
+      const currentMainId = result?.id?.trim() || (result ? CURRENT_PLAYBOOK_PHASE_KEY : '')
+      const stackedCandidates = stackedResultIds
+        .map((stackedId) => history.find((item) => item.id === stackedId) ?? null)
+        .filter((item): item is HistoryItem => Boolean(item))
+
+      if (id === currentMainId) {
+        if (stackedCandidates.length > 0) {
+          const [nextMain, ...remainingStack] = stackedCandidates
+          const nextMode = normalizeExtractionMode(nextMain.mode)
+          setUrl(nextMain.url ?? '')
+          setUploadedFile(null)
+          setExtractionMode(nextMode)
+          setResult(mapHistoryItemToResult(nextMain))
+          setResultAccessRole('owner')
+          setCircleMembers([])
+          if (nextMain.id) {
+            void loadCircleMembers(nextMain.id)
+          }
+          setIsResultBookClosed(false)
+          setStackedResultIds(remainingStack.map((item) => item.id))
+          setShouldScrollToResult(true)
+        } else {
+          setResult(null)
+          setCircleMembers([])
+          setResultAccessRole('owner')
+          setIsResultBookClosed(false)
+        }
+      } else {
+        setStackedResultIds((previous) => previous.filter((stackedId) => stackedId !== id))
+      }
+
+      setPendingStackedScrollPlaybookId((previous) => (previous === id ? null : previous))
+      setActivePhasesByPlaybookId((previous) => {
+        if (!(id in previous)) return previous
+        const next = { ...previous }
+        delete next[id]
+        return next
+      })
+    },
+    [history, loadCircleMembers, mapHistoryItemToResult, result, stackedResultIds]
+  )
 
   const detachCurrentResultFromHistory = useCallback((extractionId?: string) => {
     if (!extractionId) return
@@ -1666,6 +1817,14 @@ function ActionExtractor() {
         shareVisibility: undefined,
         createdAt: undefined,
       }
+    })
+    setStackedResultIds((previous) => previous.filter((id) => id !== extractionId))
+    setPendingStackedScrollPlaybookId((previous) => (previous === extractionId ? null : previous))
+    setActivePhasesByPlaybookId((previous) => {
+      if (!(extractionId in previous)) return previous
+      const next = { ...previous }
+      delete next[extractionId]
+      return next
     })
     setShareCopied(false)
   }, [])
@@ -1735,6 +1894,9 @@ function ActionExtractor() {
       }
     })
     setShareCopied(false)
+    setStackedResultIds([])
+    setActivePhasesByPlaybookId({})
+    setPendingStackedScrollPlaybookId(null)
     setHistoryShareCopiedItemId(null)
     setHistoryShareLoadingItemId(null)
 
@@ -1753,6 +1915,52 @@ function ActionExtractor() {
   const filteredHistoryForActiveFolders = activeFolderIds.length > 0
     ? filteredHistory.filter((item) => item.folderId != null && activeFolderIds.includes(item.folderId))
     : filteredHistory
+  const folderPlaybooks = useMemo<FolderPlaybookItem[]>(
+    () =>
+      history.map((item) => ({
+        id: item.id,
+        folderId: item.folderId ?? null,
+        title: resolvePlaybookDisplayTitle(item),
+        subtitle: item.url ?? item.sourceLabel ?? null,
+        createdAt: item.createdAt,
+      })),
+    [history]
+  )
+  const stackedHistoryPlaybooks = useMemo(
+    () =>
+      stackedResultIds
+        .map((id) => history.find((item) => item.id === id) ?? null)
+        .filter((item): item is HistoryItem => Boolean(item)),
+    [history, stackedResultIds]
+  )
+  const hasMultipleDeskPlaybooksOpen = Boolean(result) && stackedHistoryPlaybooks.length > 0
+  const openDeskPlaybooks = useMemo<OpenDeskPlaybookItem[]>(
+    () => {
+      if (!result) return []
+
+      const mainPlaybookId = result.id?.trim() || CURRENT_PLAYBOOK_PHASE_KEY
+      return [
+        {
+          id: mainPlaybookId,
+          title: resolvePlaybookDisplayTitle(result),
+          isMain: true,
+        },
+        ...stackedHistoryPlaybooks.map((item) => ({
+          id: item.id,
+          title: resolvePlaybookDisplayTitle(item),
+          isMain: false,
+        })),
+      ]
+    },
+    [result, stackedHistoryPlaybooks]
+  )
+  const getFolderLabelById = useCallback(
+    (folderId: string | null | undefined) => {
+      if (!folderId) return 'Playbooks sueltos'
+      return folders.find((folder) => folder.id === folderId)?.name ?? 'Playbooks sueltos'
+    },
+    [folders]
+  )
 
   return (
     <div className="min-h-screen bg-white text-zinc-900 dark:bg-black dark:text-zinc-100">
@@ -1935,6 +2143,9 @@ function ActionExtractor() {
                     onClearFile={handleClearFile}
                   onManualResult={(manualResult) => {
                     setResult(manualResult)
+                    setStackedResultIds([])
+                    setActivePhasesByPlaybookId({})
+                    setPendingStackedScrollPlaybookId(null)
                     setResultAccessRole('owner')
                     setCircleMembers([])
                     setIsResultBookClosed(false)
@@ -2074,103 +2285,269 @@ function ActionExtractor() {
               </div>
             </section>
 
-            {/* ── Folder dock ── */}
-            <FolderDock
-              folders={folders}
-              activeFolderIds={activeFolderIds}
-              folderCounts={Object.fromEntries(
-                folders.map((f) => [f.id, history.filter((h) => h.folderId === f.id).length])
-              )}
-              onFolderToggle={(id) => {
-                setActiveFolderIds((prev) =>
-                  prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]
-                )
-              }}
-              onCreateFolder={(name, color, parentId) => {
-                const f = createFolder(name, color, parentId)
-                setActiveFolderIds((prev) => [...prev, f.id])
-              }}
-              onDeleteFolder={(id) => {
-                const deletedIds = new Set<string>()
-                const collect = (folderId: string) => {
-                  deletedIds.add(folderId)
-                  folders.filter((f) => f.parentId === folderId).forEach((c) => collect(c.id))
-                }
-                collect(id)
-                setActiveFolderIds((prev) => prev.filter((f) => !deletedIds.has(f)))
-                deleteFolder(id)
-              }}
-            />
+            {history.length > 0 && !historyLoading && (
+              <div className="mb-4 flex items-center justify-end gap-1 min-[1728px]:mx-auto min-[1728px]:w-[93%]">
+                <button
+                  type="button"
+                  onClick={() => setHistoryView('list')}
+                  title="Vista en pestañas"
+                  className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                    historyView === 'list'
+                      ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
+                      : 'border-slate-200 bg-transparent text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800/50'
+                  }`}
+                >
+                  <LayoutList size={13} />
+                  Pestañas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHistoryView('feed')}
+                  title="Vista en hojas"
+                  className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                    historyView === 'feed'
+                      ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
+                      : 'border-slate-200 bg-transparent text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800/50'
+                  }`}
+                >
+                  <Newspaper size={13} />
+                  Hojas
+                </button>
+              </div>
+            )}
 
-            <div className="relative">
-              <div ref={resultAnchorRef} className="scroll-mt-24">
-                {result ? (
-                  <ResultPanel
-                    result={result}
-                    viewerUserId={user?.id ?? null}
-                    url={url}
-                    extractionMode={extractionMode}
-                    isProcessing={isProcessing}
-                    activePhase={activePhase}
-                    onTogglePhase={togglePhase}
-                    isExportingPdf={isExportingPdf}
-                    shareLoading={shareLoading}
-                    shareCopied={shareCopied}
-                    shareVisibility={normalizeShareVisibility(result.shareVisibility)}
-                    shareVisibilityLoading={shareVisibilityLoading}
-                    notionConfigured={notionConfigured}
-                    notionConnected={notionConnected}
-                    notionWorkspaceName={notionWorkspaceName}
-                    notionLoading={notionLoading}
-                    notionExportLoading={notionExportLoading}
-                    trelloConfigured={trelloConfigured}
-                    trelloConnected={trelloConnected}
-                    trelloUsername={trelloUsername}
-                    trelloLoading={trelloLoading}
-                    trelloExportLoading={trelloExportLoading}
-                    todoistConfigured={todoistConfigured}
-                    todoistConnected={todoistConnected}
-                    todoistUserLabel={todoistUserLabel}
-                    todoistLoading={todoistLoading}
-                    todoistExportLoading={todoistExportLoading}
-                    googleDocsConfigured={googleDocsConfigured}
-                    googleDocsConnected={googleDocsConnected}
-                    googleDocsUserEmail={googleDocsUserEmail}
-                    googleDocsLoading={googleDocsLoading}
-                    googleDocsExportLoading={googleDocsExportLoading}
-                    onDownloadPdf={handleDownloadPdf}
-                    onCopyShareLink={handleCopyShareLink}
-                    onCopyMarkdown={() => handleCopyMarkdown()}
-                    onShareVisibilityChange={handleUpdateShareVisibility}
-                    onSavePhases={handleSaveResultPhases}
-                    onSaveMeta={handleSaveResultMeta}
-                    isBookClosed={isResultBookClosed}
-                    bookFolderLabel={currentResultFolderLabel}
-                    onClose={() => setIsResultBookClosed(true)}
+            <div className="relative min-[1728px]:mx-auto min-[1728px]:w-[93%]">
+              <div
+                className="playbook-folder-drawer"
+                id="folder-dock-drawer"
+                data-open={isFolderDockOpen ? 'true' : 'false'}
+              >
+                <button
+                  type="button"
+                  className="playbook-folder-drawer-tab"
+                  onClick={() => setIsFolderDockOpen((prev) => !prev)}
+                  aria-expanded={isFolderDockOpen}
+                  aria-controls="folder-dock-drawer-panel"
+                >
+                  <span aria-hidden="true" className="playbook-folder-drawer-tab-handle" />
+                  <span className="playbook-folder-drawer-tab-label">Carpetas</span>
+                </button>
+
+                <div
+                  className="playbook-folder-drawer-panel"
+                  id="folder-dock-drawer-panel"
+                >
+                  <FolderDock
                     folders={folders}
-                    onAssignFolder={handleAssignFolder}
-                    accessRole={resultAccessRole}
-                    members={circleMembers}
-                    membersLoading={circleMembersLoading}
-                    memberMutationLoading={circleMemberMutationLoading}
-                    onAddMember={handleAddCircleMember}
-                    onRemoveMember={handleRemoveCircleMember}
-                    onExportToNotion={() => handleExportToNotion(result.id)}
-                    onConnectNotion={handleConnectNotion}
-                    onExportToTrello={() => handleExportToTrello(result.id)}
-                    onConnectTrello={handleConnectTrello}
-                    onExportToTodoist={() => handleExportToTodoist(result.id)}
-                    onConnectTodoist={handleConnectTodoist}
-                    onExportToGoogleDocs={() => handleExportToGoogleDocs(result.id)}
-                    onConnectGoogleDocs={handleConnectGoogleDocs}
-                    onReExtractMode={(mode) => {
-                      handleScrollToExtractor()
-                      void handleExtract({
-                        url: (result.url ?? url).trim(),
-                        mode,
-                      })
+                    activeFolderIds={activeFolderIds}
+                    folderCounts={Object.fromEntries(
+                      folders.map((f) => [f.id, history.filter((h) => h.folderId === f.id).length])
+                    )}
+                    playbooks={folderPlaybooks}
+                    activePlaybookId={result?.id ?? null}
+                    openDeskPlaybooks={openDeskPlaybooks}
+                    onFolderToggle={(id) => {
+                      setActiveFolderIds((prev) =>
+                        prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]
+                      )
                     }}
+                    onCreateFolder={(name, color, parentId) => {
+                      const f = createFolder(name, color, parentId)
+                      setActiveFolderIds((prev) => [...prev, f.id])
+                    }}
+                    onDeleteFolder={(id) => {
+                      const deletedIds = new Set<string>()
+                      const collect = (folderId: string) => {
+                        deletedIds.add(folderId)
+                        folders.filter((f) => f.parentId === folderId).forEach((c) => collect(c.id))
+                      }
+                      collect(id)
+                      setActiveFolderIds((prev) => prev.filter((f) => !deletedIds.has(f)))
+                      deleteFolder(id)
+                    }}
+                    onSelectPlaybook={(playbookId) => {
+                      const playbook = history.find((item) => item.id === playbookId)
+                      if (!playbook) return
+                      const playbookIdNormalized = playbook.id.trim()
+                      const currentResultId = result?.id?.trim() ?? ''
+
+                      if (!result) {
+                        openHistoryItem(playbook)
+                        return
+                      }
+
+                      if (!playbookIdNormalized || playbookIdNormalized === currentResultId) {
+                        return
+                      }
+
+                      if (stackedResultIds.includes(playbookIdNormalized)) {
+                        setPendingStackedScrollPlaybookId(playbookIdNormalized)
+                        return
+                      }
+
+                      setStackedResultIds((previous) =>
+                        previous.includes(playbookIdNormalized)
+                          ? previous
+                          : [...previous, playbookIdNormalized]
+                      )
+                      setPendingStackedScrollPlaybookId(playbookIdNormalized)
+                    }}
+                    onFocusOpenDeskPlaybook={scrollToDeskPlaybook}
+                    onCloseOpenDeskPlaybook={closeDeskPlaybook}
                   />
+                </div>
+              </div>
+
+              <div ref={resultAnchorRef} className="relative z-20 scroll-mt-24">
+                {result ? (
+                  <div className="space-y-10">
+                    <ResultPanel
+                      result={result}
+                      viewerUserId={user?.id ?? null}
+                      url={url}
+                      extractionMode={extractionMode}
+                      isProcessing={isProcessing}
+                      activePhase={activePhasesByPlaybookId[resolvePlaybookPhaseKey(result.id)] ?? null}
+                      onTogglePhase={(phaseId) => togglePhaseForPlaybook(result.id, phaseId)}
+                      isExportingPdf={isExportingPdf}
+                      shareLoading={shareLoading}
+                      shareCopied={shareCopied}
+                      shareVisibility={normalizeShareVisibility(result.shareVisibility)}
+                      shareVisibilityLoading={shareVisibilityLoading}
+                      notionConfigured={notionConfigured}
+                      notionConnected={notionConnected}
+                      notionWorkspaceName={notionWorkspaceName}
+                      notionLoading={notionLoading}
+                      notionExportLoading={notionExportLoading}
+                      trelloConfigured={trelloConfigured}
+                      trelloConnected={trelloConnected}
+                      trelloUsername={trelloUsername}
+                      trelloLoading={trelloLoading}
+                      trelloExportLoading={trelloExportLoading}
+                      todoistConfigured={todoistConfigured}
+                      todoistConnected={todoistConnected}
+                      todoistUserLabel={todoistUserLabel}
+                      todoistLoading={todoistLoading}
+                      todoistExportLoading={todoistExportLoading}
+                      googleDocsConfigured={googleDocsConfigured}
+                      googleDocsConnected={googleDocsConnected}
+                      googleDocsUserEmail={googleDocsUserEmail}
+                      googleDocsLoading={googleDocsLoading}
+                      googleDocsExportLoading={googleDocsExportLoading}
+                      onDownloadPdf={handleDownloadPdf}
+                      onCopyShareLink={handleCopyShareLink}
+                      onCopyMarkdown={() => handleCopyMarkdown()}
+                      onShareVisibilityChange={handleUpdateShareVisibility}
+                      onSavePhases={handleSaveResultPhases}
+                      onSaveMeta={handleSaveResultMeta}
+                      isBookClosed={isResultBookClosed}
+                      bookFolderLabel={currentResultFolderLabel}
+                      onClose={() => setIsResultBookClosed(true)}
+                      folders={folders}
+                      onAssignFolder={handleAssignFolder}
+                      accessRole={resultAccessRole}
+                      members={circleMembers}
+                      membersLoading={circleMembersLoading}
+                      memberMutationLoading={circleMemberMutationLoading}
+                      onAddMember={handleAddCircleMember}
+                      onRemoveMember={handleRemoveCircleMember}
+                      onExportToNotion={() => handleExportToNotion(result.id)}
+                      onConnectNotion={handleConnectNotion}
+                      onExportToTrello={() => handleExportToTrello(result.id)}
+                      onConnectTrello={handleConnectTrello}
+                      onExportToTodoist={() => handleExportToTodoist(result.id)}
+                      onConnectTodoist={handleConnectTodoist}
+                      onExportToGoogleDocs={() => handleExportToGoogleDocs(result.id)}
+                      onConnectGoogleDocs={handleConnectGoogleDocs}
+                      onReExtractMode={(mode) => {
+                        handleScrollToExtractor()
+                        void handleExtract({
+                          url: (result.url ?? url).trim(),
+                          mode,
+                        })
+                      }}
+                    />
+
+                    {stackedHistoryPlaybooks.map((item) => {
+                      const stackedResult = mapHistoryItemToResult(item)
+                      return (
+                        <div key={`stacked-playbook-${item.id}`} id={`stacked-playbook-${item.id}`}>
+                          <ResultPanel
+                            result={stackedResult}
+                            viewerUserId={user?.id ?? null}
+                            url={stackedResult.url ?? ''}
+                            extractionMode={normalizeExtractionMode(stackedResult.mode)}
+                            isProcessing={false}
+                            activePhase={
+                              activePhasesByPlaybookId[resolvePlaybookPhaseKey(stackedResult.id)] ?? null
+                            }
+                            onTogglePhase={(phaseId) =>
+                              togglePhaseForPlaybook(stackedResult.id, phaseId)
+                            }
+                            isExportingPdf={isExportingPdf}
+                            shareLoading={historyShareLoadingItemId === item.id}
+                            shareCopied={historyShareCopiedItemId === item.id}
+                            shareVisibility={normalizeShareVisibility(stackedResult.shareVisibility)}
+                            shareVisibilityLoading={false}
+                            notionConfigured={notionConfigured}
+                            notionConnected={notionConnected}
+                            notionWorkspaceName={notionWorkspaceName}
+                            notionLoading={notionLoading}
+                            notionExportLoading={notionExportLoading}
+                            trelloConfigured={trelloConfigured}
+                            trelloConnected={trelloConnected}
+                            trelloUsername={trelloUsername}
+                            trelloLoading={trelloLoading}
+                            trelloExportLoading={trelloExportLoading}
+                            todoistConfigured={todoistConfigured}
+                            todoistConnected={todoistConnected}
+                            todoistUserLabel={todoistUserLabel}
+                            todoistLoading={todoistLoading}
+                            todoistExportLoading={todoistExportLoading}
+                            googleDocsConfigured={googleDocsConfigured}
+                            googleDocsConnected={googleDocsConnected}
+                            googleDocsUserEmail={googleDocsUserEmail}
+                            googleDocsLoading={googleDocsLoading}
+                            googleDocsExportLoading={googleDocsExportLoading}
+                            onDownloadPdf={() => handleDownloadPdf(stackedResult)}
+                            onCopyShareLink={() => handleCopyShareLinkFromHistory(item)}
+                            onCopyMarkdown={() => handleCopyMarkdown(stackedResult)}
+                            onShareVisibilityChange={() => {
+                              setNotice('Abre este playbook como principal para cambiar su visibilidad.')
+                            }}
+                            onSavePhases={async () => false}
+                            onSaveMeta={async () => false}
+                            isBookClosed={false}
+                            bookFolderLabel={getFolderLabelById(stackedResult.folderId)}
+                            onClose={() => closeDeskPlaybook(item.id)}
+                            folders={folders}
+                            onAssignFolder={handleAssignFolder}
+                            accessRole="viewer"
+                            members={[]}
+                            membersLoading={false}
+                            memberMutationLoading={false}
+                            onAddMember={async () => false}
+                            onRemoveMember={async () => false}
+                            onExportToNotion={() => handleExportToNotion(item.id)}
+                            onConnectNotion={handleConnectNotion}
+                            onExportToTrello={() => handleExportToTrello(item.id)}
+                            onConnectTrello={handleConnectTrello}
+                            onExportToTodoist={() => handleExportToTodoist(item.id)}
+                            onConnectTodoist={handleConnectTodoist}
+                            onExportToGoogleDocs={() => handleExportToGoogleDocs(item.id)}
+                            onConnectGoogleDocs={handleConnectGoogleDocs}
+                            onReExtractMode={(mode) => {
+                              handleScrollToExtractor()
+                              void handleExtract({
+                                url: (stackedResult.url ?? '').trim(),
+                                mode,
+                              })
+                            }}
+                          />
+                        </div>
+                      )
+                    })}
+                  </div>
                 ) : !isProcessing ? (
                   <div className="animate-fade-slide">
                     <div
@@ -2186,8 +2563,8 @@ function ActionExtractor() {
                 ) : null}
               </div>
 
-              {historyView === 'list' && (
-                <div className="absolute left-full top-0 hidden w-[18rem] min-[1728px]:block">
+              {historyView === 'list' && !hasMultipleDeskPlaybooksOpen && (
+                <div className="absolute left-full top-0 bottom-6 hidden w-[18rem] min-[1728px]:block">
                   <PlaybookSideTabs
                     items={filteredHistoryForActiveFolders}
                     folders={folders}
@@ -2195,6 +2572,17 @@ function ActionExtractor() {
                     activeItemId={result?.id ?? null}
                     onSelectItem={openHistoryItem}
                     onRefresh={() => void loadHistory()}
+                  />
+                </div>
+              )}
+
+              {historyView === 'list' && (
+                <div className="absolute top-0 bottom-6 right-[calc(100%+0.75rem)] left-[calc(50%-50vw+1rem)] hidden min-[1728px]:block">
+                  <CommunityPanel
+                    currentExtractionId={result?.id ?? null}
+                    onError={setError}
+                    onNotice={setNotice}
+                    className="mt-0 h-full min-h-0 overflow-y-auto"
                   />
                 </div>
               )}
@@ -2257,41 +2645,10 @@ function ActionExtractor() {
               currentExtractionId={result?.id ?? null}
               onError={setError}
               onNotice={setNotice}
+              className={historyView === 'list' ? 'min-[1728px]:hidden' : undefined}
             />
 
             <div ref={historyAnchorRef} className="scroll-mt-24 pt-6 md:pt-10">
-              {/* View mode toggle */}
-              {history.length > 0 && !historyLoading && (
-                <div className="mb-4 flex items-center justify-end gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setHistoryView('list')}
-                    title="Vista de lista"
-                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-                      historyView === 'list'
-                        ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
-                        : 'border-slate-200 bg-transparent text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800/50'
-                    }`}
-                  >
-                    <LayoutList size={13} />
-                    Lista
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setHistoryView('feed')}
-                    title="Vista de feed"
-                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-                      historyView === 'feed'
-                        ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
-                        : 'border-slate-200 bg-transparent text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800/50'
-                    }`}
-                  >
-                    <Newspaper size={13} />
-                    Feed
-                  </button>
-                </div>
-              )}
-
               {historyView === 'feed' && history.length > 0 ? (
                 <div>
                   <div className="mb-6 flex items-center justify-between">

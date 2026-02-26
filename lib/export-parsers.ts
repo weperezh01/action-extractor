@@ -1,4 +1,5 @@
 import { ExportMetadata, ExportPhase } from '@/lib/export-content'
+import { normalizePlaybookPhases } from '@/lib/playbook-tree'
 
 function safeParse<T>(value: string, fallback: T): T {
   try {
@@ -9,36 +10,9 @@ function safeParse<T>(value: string, fallback: T): T {
 }
 
 export function parseExtractionPhases(phasesJson: string): ExportPhase[] {
-  const raw = safeParse<
-    Array<{ id?: unknown; title?: unknown; items?: unknown }>
-  >(phasesJson, [])
-
-  const parsed = raw
-    .map((phase, index) => {
-      const id =
-        typeof phase.id === 'number' && Number.isFinite(phase.id)
-          ? phase.id
-          : index + 1
-      const title =
-        typeof phase.title === 'string' && phase.title.trim()
-          ? phase.title.trim()
-          : `Bloque ${index + 1}`
-      const items = Array.isArray(phase.items)
-        ? phase.items.filter(
-            (item): item is string =>
-              typeof item === 'string' && item.trim().length > 0
-          )
-        : []
-
-      return {
-        id,
-        title,
-        items,
-      } satisfies ExportPhase
-    })
-    .filter((phase) => phase.items.length > 0)
-
-  return parsed
+  const raw = safeParse<unknown>(phasesJson, [])
+  const parsed = normalizePlaybookPhases(raw)
+  return parsed.filter((phase) => phase.items.length > 0)
 }
 
 export function parseExtractionMetadata(metadataJson: string): ExportMetadata {

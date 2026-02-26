@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
+import { flattenItemsAsText, normalizePlaybookPhases } from '@/lib/playbook-tree'
 import {
   createChatMessageForUser,
   findExtractionByIdForUser,
@@ -47,9 +48,7 @@ function normalizeQuestion(raw: unknown) {
 
 function safeParsePhases(value: string) {
   try {
-    const parsed = JSON.parse(value) as Array<{ title?: unknown; items?: unknown }>
-    if (!Array.isArray(parsed)) return []
-    return parsed
+    return normalizePlaybookPhases(JSON.parse(value) as unknown)
   } catch {
     return []
   }
@@ -68,15 +67,12 @@ function buildExtractionSummaryBlock(
   const phaseLines = phases
     .slice(0, MAX_PHASES_PER_EXTRACTION)
     .map((phase, phaseIndex) => {
-      const titleRaw = phase?.title
       const title =
-        typeof titleRaw === 'string' && titleRaw.trim().length > 0
-          ? titleRaw.trim()
+        typeof phase?.title === 'string' && phase.title.trim().length > 0
+          ? phase.title.trim()
           : `Fase ${phaseIndex + 1}`
 
-      const itemsRaw = Array.isArray(phase?.items) ? phase.items : []
-      const itemLines = itemsRaw
-        .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      const itemLines = flattenItemsAsText(Array.isArray(phase?.items) ? phase.items : [])
         .slice(0, MAX_ITEMS_PER_PHASE)
         .map((item) => `  - ${truncateText(item, 180)}`)
 
@@ -120,8 +116,9 @@ async function buildActiveExtractionTasksBlock(input: {
   const lines = ['SEGUIMIENTO_INTERACTIVO_DE_EXTRACCION_ACTIVA:']
   for (const task of tasks.slice(0, MAX_TASKS_FOR_ACTIVE)) {
     const checked = task.checked ? 'hecha' : 'pendiente'
+    const subitem = task.position_path?.trim() || `${task.phase_id}.${task.item_index + 1}`
     lines.push(
-      `- taskId=${task.id} subitem=${task.phase_id}.${task.item_index + 1} estado=${task.status} checklist=${checked} texto="${truncateText(task.item_text, 220)}"`
+      `- taskId=${task.id} subitem=${subitem} estado=${task.status} checklist=${checked} texto="${truncateText(task.item_text, 220)}"`
     )
     for (const event of task.events.slice(0, MAX_EVENTS_PER_TASK)) {
       lines.push(

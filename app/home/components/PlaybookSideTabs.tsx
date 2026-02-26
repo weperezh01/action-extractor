@@ -38,7 +38,7 @@ export function PlaybookSideTabs({
   onRefresh,
 }: PlaybookSideTabsProps) {
   return (
-    <aside className="playbook-side-tabs-shell sticky top-24 h-[calc(100dvh-7.5rem)]">
+    <aside className="playbook-side-tabs-shell flex h-full min-h-0 flex-col">
       <div className="mb-2 flex items-center justify-between px-1">
         <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
           Playbooks
@@ -53,7 +53,7 @@ export function PlaybookSideTabs({
         </button>
       </div>
 
-      <div className="playbook-side-tabs-scroll h-full overflow-y-auto pr-1">
+      <div className="playbook-side-tabs-scroll min-h-0 flex-1 overflow-y-auto pr-1">
         {items.length === 0 ? (
           <div className="mx-2 rounded-r-xl border border-l-0 border-slate-200 bg-white/90 px-3 py-4 text-xs text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
             No hay playbooks para mostrar.

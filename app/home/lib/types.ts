@@ -1,4 +1,5 @@
 import type { ExtractionMode } from '@/lib/extraction-modes'
+import type { PlaybookNode } from '@/lib/playbook-tree'
 
 export type ShareVisibility = 'private' | 'circle' | 'unlisted' | 'public'
 export type ExtractionAccessRole = 'owner' | 'editor' | 'viewer'
@@ -8,7 +9,7 @@ export type SourceType = 'youtube' | 'web_url' | 'pdf' | 'docx' | 'text' | 'manu
 export interface Phase {
   id: number
   title: string
-  items: string[]
+  items: PlaybookNode[]
 }
 
 export interface ExtractMetadata {
@@ -90,6 +91,10 @@ export interface InteractiveTask {
   phaseTitle: string
   itemIndex: number
   itemText: string
+  nodeId?: string
+  parentNodeId?: string | null
+  depth?: number
+  positionPath?: string
   checked: boolean
   status: InteractiveTaskStatus
   dueAt: string | null

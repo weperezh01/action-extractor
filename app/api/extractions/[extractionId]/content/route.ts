@@ -5,15 +5,10 @@ import {
   syncExtractionTasksForUser,
   updateExtractionPhasesForUser,
 } from '@/lib/db'
+import { normalizePlaybookPhases, type PlaybookPhase } from '@/lib/playbook-tree'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
-interface EditablePhase {
-  id: number
-  title: string
-  items: string[]
-}
 
 function parseExtractionId(raw: unknown) {
   return typeof raw === 'string' ? raw.trim() : ''
@@ -25,35 +20,6 @@ function safeParse<T>(value: string, fallback: T): T {
   } catch {
     return fallback
   }
-}
-
-function normalizeEditablePhases(payload: unknown): EditablePhase[] {
-  if (!Array.isArray(payload)) return []
-
-  const parsed = payload
-    .map((phase) => {
-      if (!phase || typeof phase !== 'object') return null
-
-      const rawTitle = (phase as { title?: unknown }).title
-      const rawItems = (phase as { items?: unknown }).items
-      const title = typeof rawTitle === 'string' ? rawTitle.trim() : ''
-      const items = Array.isArray(rawItems)
-        ? rawItems.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
-        : []
-
-      if (!title || items.length === 0) {
-        return null
-      }
-
-      return { title, items }
-    })
-    .filter((phase): phase is { title: string; items: string[] } => Boolean(phase))
-
-  return parsed.map((phase, index) => ({
-    id: index + 1,
-    title: phase.title,
-    items: phase.items,
-  }))
 }
 
 export async function PATCH(
@@ -92,7 +58,7 @@ export async function PATCH(
       return NextResponse.json({ error: 'Body JSON inválido.' }, { status: 400 })
     }
 
-    const phases = normalizeEditablePhases((body as { phases?: unknown })?.phases)
+    const phases = normalizePlaybookPhases((body as { phases?: unknown })?.phases)
     if (phases.length === 0) {
       return NextResponse.json(
         { error: 'Debes conservar al menos un ítem principal con subítems válidos.' },
@@ -117,7 +83,7 @@ export async function PATCH(
 
     return NextResponse.json({
       extractionId: updated.id,
-      phases: safeParse<EditablePhase[]>(updated.phases_json, phases),
+      phases: safeParse<PlaybookPhase[]>(updated.phases_json, phases),
     })
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'No se pudo actualizar el contenido.'

@@ -45,6 +45,18 @@ import {
   normalizeExtractionMode,
   type ExtractionMode,
 } from '@/lib/extraction-modes'
+import {
+  addChildNode,
+  addSiblingNode,
+  buildNewNode,
+  countNodes,
+  deleteNode,
+  findNode,
+  flattenItemsAsText,
+  flattenPhaseNodes,
+  normalizePlaybookPhases,
+  updateNodeText,
+} from '@/lib/playbook-tree'
 import type {
   ExtractionAccessRole,
   ExtractionMember,
@@ -214,7 +226,26 @@ function formatTaskEventDate(isoDate: string) {
   return new Intl.DateTimeFormat('es-ES', {
     dateStyle: 'short',
     timeStyle: 'short',
+    hour12: true,
   }).format(parsed)
+}
+
+function formatPlaybookCreatedAt(isoDate: string) {
+  const parsed = new Date(isoDate)
+  if (Number.isNaN(parsed.getTime())) return null
+
+  return {
+    date: new Intl.DateTimeFormat('es-ES', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    }).format(parsed),
+    time: new Intl.DateTimeFormat('es-ES', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).format(parsed),
+  }
 }
 
 interface TaskCommentNode extends InteractiveTaskComment {
@@ -399,6 +430,10 @@ export function ResultPanel({
     }
     return 'Análisis de texto'
   })()
+  const playbookCreatedAt = useMemo(
+    () => (result.createdAt ? formatPlaybookCreatedAt(result.createdAt) : null),
+    [result.createdAt]
+  )
   const coverFolderLabel =
     typeof bookFolderLabel === 'string' && bookFolderLabel.trim().length > 0
       ? bookFolderLabel.trim()
@@ -417,7 +452,7 @@ export function ResultPanel({
       sourceSectionLabel,
       sourceDisplayTitle,
       objective: result.objective ?? '',
-      phases: result.phases.map((phase) => ({ ...phase, items: [...phase.items] })),
+      phases: normalizePlaybookPhases(result.phases),
       savedTime: result.metadata.savedTime,
       difficulty: result.metadata.difficulty,
       modeLabel: getExtractionModeLabel(resolvedMode),
@@ -460,7 +495,7 @@ export function ResultPanel({
   const latestPageTurnSnapshotRef = useRef<PlaybookPageTurnSnapshot>(currentPageTurnSnapshot)
   const previousResultIdRef = useRef<string | null>(result.id?.trim() ?? null)
   const [isStructureEditing, setIsStructureEditing] = useState(false)
-  const [phaseDrafts, setPhaseDrafts] = useState<Phase[]>(result.phases)
+  const [phaseDrafts, setPhaseDrafts] = useState<Phase[]>(normalizePlaybookPhases(result.phases))
   const [structureSaving, setStructureSaving] = useState(false)
   const [structureError, setStructureError] = useState<string | null>(null)
   const [dragOverPhaseIndex, setDragOverPhaseIndex] = useState<number | null>(null)
@@ -493,6 +528,9 @@ export function ResultPanel({
   const [taskReplyDraftByTaskId, setTaskReplyDraftByTaskId] = useState<Record<string, string>>({})
   const [taskReplyParentByTaskId, setTaskReplyParentByTaskId] = useState<
     Record<string, string | null>
+  >({})
+  const [collapsedReplyThreadsByCommentKey, setCollapsedReplyThreadsByCommentKey] = useState<
+    Record<string, boolean>
   >({})
   const [taskShareCopiedByTaskId, setTaskShareCopiedByTaskId] = useState<Record<string, boolean>>({})
   const [taskOpenSectionByTaskId, setTaskOpenSectionByTaskId] = useState<
@@ -745,7 +783,7 @@ export function ResultPanel({
 
   useEffect(() => {
     if (isStructureEditing) return
-    setPhaseDrafts(result.phases.map((phase) => ({ ...phase, items: [...phase.items] })))
+    setPhaseDrafts(normalizePlaybookPhases(result.phases))
     setStructureError(null)
   }, [isStructureEditing, result.phases])
 
@@ -826,6 +864,16 @@ export function ResultPanel({
     const map = new Map<string, InteractiveTask>()
     for (const task of interactiveTasks) {
       map.set(`${task.phaseId}:${task.itemIndex}`, task)
+    }
+    return map
+  }, [interactiveTasks])
+
+  const tasksByNodeId = useMemo(() => {
+    const map = new Map<string, InteractiveTask>()
+    for (const task of interactiveTasks) {
+      const key = task.nodeId?.trim()
+      if (!key) continue
+      map.set(key, task)
     }
     return map
   }, [interactiveTasks])
@@ -1391,6 +1439,7 @@ export function ResultPanel({
   }
 
   const handleStartTaskReply = (taskId: string, commentId: string) => {
+    const replyThreadKey = `${taskId}:${commentId}`
     setTaskCommunityOpenByTaskId((previous) => ({
       ...previous,
       [taskId]: true,
@@ -1404,6 +1453,10 @@ export function ResultPanel({
       ...previous,
       [taskId]: '',
     }))
+    setCollapsedReplyThreadsByCommentKey((previous) => ({
+      ...previous,
+      [replyThreadKey]: false,
+    }))
   }
 
   const handleCancelTaskReply = (taskId: string) => {
@@ -1414,6 +1467,14 @@ export function ResultPanel({
     setTaskReplyDraftByTaskId((previous) => ({
       ...previous,
       [taskId]: '',
+    }))
+  }
+
+  const handleToggleTaskCommentReplies = (taskId: string, commentId: string) => {
+    const replyThreadKey = `${taskId}:${commentId}`
+    setCollapsedReplyThreadsByCommentKey((previous) => ({
+      ...previous,
+      [replyThreadKey]: !previous[replyThreadKey],
     }))
   }
 
@@ -1762,13 +1823,13 @@ export function ResultPanel({
 
   const handleStartStructureEditing = () => {
     if (!canEditStructure) return
-    setPhaseDrafts(result.phases.map((phase) => ({ ...phase, items: [...phase.items] })))
+    setPhaseDrafts(normalizePlaybookPhases(result.phases))
     setStructureError(null)
     setIsStructureEditing(true)
   }
 
   const handleCancelStructureEditing = () => {
-    setPhaseDrafts(result.phases.map((phase) => ({ ...phase, items: [...phase.items] })))
+    setPhaseDrafts(normalizePlaybookPhases(result.phases))
     setStructureError(null)
     setIsStructureEditing(false)
   }
@@ -1779,13 +1840,13 @@ export function ResultPanel({
     )
   }
 
-  const handleDraftSubItemChange = (phaseId: number, itemIndex: number, value: string) => {
+  const handleDraftSubItemChange = (phaseId: number, nodeId: string, value: string) => {
     setPhaseDrafts((previous) =>
       previous.map((phase) => {
         if (phase.id !== phaseId) return phase
         return {
           ...phase,
-          items: phase.items.map((item, idx) => (idx === itemIndex ? value : item)),
+          items: updateNodeText(phase.items, nodeId, value),
         }
       })
     )
@@ -1799,7 +1860,7 @@ export function ResultPanel({
         {
           id: nextId,
           title: `Ítem principal ${previous.length + 1}`,
-          items: ['Nuevo subítem'],
+          items: [buildNewNode('Nuevo ítem')],
         },
       ]
     })
@@ -1815,20 +1876,52 @@ export function ResultPanel({
         phase.id === phaseId
           ? {
               ...phase,
-              items: [...phase.items, 'Nuevo subítem'],
+              items: [...phase.items, buildNewNode('Nuevo ítem')],
             }
           : phase
       )
     )
   }
 
-  const handleDeleteDraftSubItem = (phaseId: number, itemIndex: number) => {
+  const handleAddDraftChildSubItem = (phaseId: number, parentNodeId: string) => {
     setPhaseDrafts((previous) =>
       previous.map((phase) => {
         if (phase.id !== phaseId) return phase
         return {
           ...phase,
-          items: phase.items.filter((_, idx) => idx !== itemIndex),
+          items: addChildNode(phase.items, parentNodeId, buildNewNode('Nuevo hijo')),
+        }
+      })
+    )
+  }
+
+  const handleAddDraftSiblingSubItem = (phaseId: number, siblingNodeId: string) => {
+    setPhaseDrafts((previous) =>
+      previous.map((phase) => {
+        if (phase.id !== phaseId) return phase
+        if (findNode(phase.items, siblingNodeId) == null) return phase
+        return {
+          ...phase,
+          items: addSiblingNode(phase.items, siblingNodeId, buildNewNode('Nuevo ítem')),
+        }
+      })
+    )
+  }
+
+  const handleDeleteDraftSubItem = (phaseId: number, nodeId: string) => {
+    setPhaseDrafts((previous) =>
+      previous.map((phase) => {
+        if (phase.id !== phaseId) return phase
+        const remaining = deleteNode(phase.items, nodeId)
+        if (remaining.length === 0) {
+          return {
+            ...phase,
+            items: [buildNewNode('Nuevo ítem')],
+          }
+        }
+        return {
+          ...phase,
+          items: remaining,
         }
       })
     )
@@ -1904,11 +1997,11 @@ export function ResultPanel({
 
   const handleSaveStructure = async () => {
     if (!canEditStructure) return
-    const normalized = phaseDrafts
+    const normalized = normalizePlaybookPhases(phaseDrafts)
       .map((phase, index) => ({
         id: index + 1,
         title: phase.title.trim(),
-        items: phase.items.map((item) => item.trim()).filter((item) => item.length > 0),
+        items: phase.items,
       }))
       .filter((phase) => phase.title.length > 0 || phase.items.length > 0)
 
@@ -1917,7 +2010,9 @@ export function ResultPanel({
       return
     }
 
-    const hasInvalidPhase = normalized.some((phase) => !phase.title || phase.items.length === 0)
+    const hasInvalidPhase = normalized.some(
+      (phase) => !phase.title || phase.items.length === 0 || countNodes(phase.items) === 0
+    )
     if (hasInvalidPhase) {
       setStructureError('Cada ítem principal debe tener título y al menos un subítem.')
       return
@@ -2062,6 +2157,13 @@ export function ResultPanel({
           const isReplyTarget = input.replyParentCommentId === comment.id
           const commentMenuKey = `${input.task.id}:${comment.id}`
           const isCommentMenuOpen = taskCommentMenuOpenId === commentMenuKey
+          const replyThreadKey = `${input.task.id}:${comment.id}`
+          const replyCount = comment.replies.length
+          const hasReplies = replyCount > 0
+          const isRepliesCollapsed =
+            hasReplies && collapsedReplyThreadsByCommentKey[replyThreadKey] === true
+          const repliesLabel = `${replyCount} ${replyCount === 1 ? 'respuesta' : 'respuestas'}`
+          const repliesContainerId = `task-comment-replies-${input.compact ? 'compact' : 'full'}-${input.task.id}-${comment.id}`
           const canHideComment = isOwnerAccess && !isGuestExtraction
           const canDeleteComment =
             isGuestExtraction || (viewerUserId !== null && viewerUserId === comment.userId)
@@ -2178,6 +2280,18 @@ export function ResultPanel({
                       >
                         {isReplyTarget ? 'Respondiendo' : 'Responder'}
                       </button>
+                      {hasReplies && (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleTaskCommentReplies(input.task.id, comment.id)}
+                          className="inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300 dark:hover:bg-slate-800"
+                          aria-expanded={!isRepliesCollapsed}
+                          aria-controls={repliesContainerId}
+                        >
+                          {isRepliesCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                          {isRepliesCollapsed ? `Ver ${repliesLabel}` : `Ocultar ${repliesLabel}`}
+                        </button>
+                      )}
                     </div>
 
                     {isReplyTarget && (
@@ -2224,7 +2338,11 @@ export function ResultPanel({
                   </div>
                 </div>
               </div>
-              {comment.replies.length > 0 && renderNodes(comment.replies, depth + 1)}
+              {hasReplies && !isRepliesCollapsed && (
+                <div id={repliesContainerId}>
+                  {renderNodes(comment.replies, depth + 1)}
+                </div>
+              )}
             </li>
           )
         })}
@@ -2273,6 +2391,15 @@ export function ResultPanel({
           }`}
           style={{ marginInline: '4.5%' }}
         >
+          {playbookCreatedAt && (
+            <div className="mb-1 flex justify-end">
+              <p className="paper-playbook-date-note" aria-label={`Creado el ${playbookCreatedAt.date} a las ${playbookCreatedAt.time}`}>
+                <span className="paper-playbook-date-note-label">Fecha:</span> {playbookCreatedAt.date}
+                <br />
+                <span className="paper-playbook-date-note-label">Hora:</span> {playbookCreatedAt.time}
+              </p>
+            </div>
+          )}
           <div className="mb-3 flex flex-wrap items-start justify-between gap-2.5">
             <div className="flex flex-wrap items-center justify-start gap-2.5">
               <div className="flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
@@ -2302,7 +2429,7 @@ export function ResultPanel({
           </p>
         </div>
         <div
-          className="p-6 border-b border-slate-100 bg-white dark:bg-slate-900 dark:border-slate-800"
+          className="p-6 border-b border-slate-100 bg-transparent dark:bg-transparent dark:border-slate-800"
           style={{ marginInline: '4.5%' }}
         >
           <div className="mb-3 flex items-center justify-between gap-2">
@@ -3029,56 +3156,57 @@ export function ResultPanel({
                         Subítems
                       </p>
                       <div className="ml-2 space-y-2 border-l border-dashed border-slate-300 pl-3 dark:border-slate-600">
-                        {phase.items.map((item, idx) => {
-                          const subItemNumber = `${phase.id}.${idx + 1}`
-                          const isSubDragOver =
-                            dragOverSubItem?.phaseId === phase.id && dragOverSubItem?.index === idx
-
+                        {flattenPhaseNodes(phase.id, phase.items).map((node) => {
+                          const canDelete = countNodes(phase.items) > 1
                           return (
                             <div
-                              key={`${phase.id}-draft-item-${idx}`}
-                              draggable={!structureSaving}
-                              onDragStart={(e) => handleSubItemDragStart(e, phase.id, idx)}
-                              onDragOver={(e) => handleSubItemDragOver(e, phase.id, idx)}
-                              onDrop={(e) => handleSubItemDrop(e, phase.id, idx)}
-                              onDragEnd={handleSubItemDragEnd}
-                              className={`flex items-center gap-2 rounded-lg transition-colors ${
-                                isSubDragOver
-                                  ? 'bg-indigo-50 outline outline-1 outline-indigo-300 dark:bg-indigo-900/20 dark:outline-indigo-600'
-                                  : ''
-                              }`}
+                              key={`${phase.id}-draft-item-${node.nodeId}`}
+                              className="rounded-lg border border-slate-200/80 bg-white p-2 dark:border-slate-700 dark:bg-slate-900"
+                              style={{ marginLeft: `${Math.max(0, node.depth - 1) * 14}px` }}
                             >
-                              <span
-                                className="flex-shrink-0 cursor-grab touch-none text-slate-300 active:cursor-grabbing dark:text-slate-600"
-                                title="Arrastrar para reordenar"
-                              >
-                                <GripVertical size={14} />
-                              </span>
-                              <span className="inline-flex h-6 min-w-[2.3rem] items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 px-1.5 font-mono text-[11px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
-                                {subItemNumber}
-                              </span>
-                              <span
-                                aria-hidden="true"
-                                className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-indigo-400/80 dark:bg-indigo-300/70"
-                              />
-                              <input
-                                type="text"
-                                value={item}
-                                onChange={(event) =>
-                                  handleDraftSubItemChange(phase.id, idx, event.target.value)
-                                }
-                                placeholder="Texto del subítem"
-                                className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteDraftSubItem(phase.id, idx)}
-                                disabled={phase.items.length <= 1 || structureSaving}
-                                className="inline-flex h-9 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-2 text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40"
-                                aria-label="Eliminar subítem"
-                              >
-                                <Trash2 size={13} />
-                              </button>
+                              <div className="flex items-center gap-2">
+                                <span className="inline-flex h-6 min-w-[2.3rem] items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 px-1.5 font-mono text-[11px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                                  {node.fullPath}
+                                </span>
+                                <input
+                                  type="text"
+                                  value={node.text}
+                                  onChange={(event) =>
+                                    handleDraftSubItemChange(phase.id, node.nodeId, event.target.value)
+                                  }
+                                  placeholder="Texto del ítem"
+                                  className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleAddDraftChildSubItem(phase.id, node.nodeId)}
+                                  disabled={structureSaving}
+                                  className="inline-flex h-8 items-center justify-center rounded-lg border border-sky-200 bg-sky-50 px-2 text-sky-700 transition-colors hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-sky-800 dark:bg-sky-900/25 dark:text-sky-300 dark:hover:bg-sky-900/40"
+                                  title="Agregar hijo"
+                                  aria-label="Agregar hijo"
+                                >
+                                  <Plus size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAddDraftSiblingSubItem(phase.id, node.nodeId)}
+                                  disabled={structureSaving}
+                                  className="inline-flex h-8 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-2 text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-800 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
+                                  title="Agregar hermano"
+                                  aria-label="Agregar hermano"
+                                >
+                                  <Plus size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteDraftSubItem(phase.id, node.nodeId)}
+                                  disabled={!canDelete || structureSaving}
+                                  className="inline-flex h-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-2 text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40"
+                                  aria-label="Eliminar ítem"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
                             </div>
                           )
                         })}
@@ -3092,7 +3220,7 @@ export function ResultPanel({
                       className="mt-3 ml-2 inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
                     >
                       <Plus size={13} />
-                      Agregar subítem
+                      Agregar ítem raíz
                     </button>
                   </div>
                 ))}
@@ -3199,9 +3327,13 @@ export function ResultPanel({
                             </p>
                           </div>
                           <ul className="space-y-3 md:ml-2 md:space-y-4 md:border-l-2 md:border-dashed md:border-slate-300 md:pl-4 md:dark:border-slate-700">
-                            {phase.items.map((item, idx) => {
-                              const subItemNumber = `${phase.id}.${idx + 1}`
-                              const task = tasksByPhaseItem.get(`${phase.id}:${idx}`) ?? null
+                            {flattenPhaseNodes(phase.id, phase.items).map((node, idx) => {
+                              const itemText = node.text
+                              const subItemNumber = node.fullPath
+                              const task =
+                                tasksByNodeId.get(node.nodeId) ??
+                                tasksByPhaseItem.get(`${phase.id}:${idx}`) ??
+                                null
                               const isTaskMutating = task ? taskMutationLoadingId === task.id : false
                               const taskAttachments = task ? (taskAttachmentsByTaskId[task.id] ?? []) : []
                               const taskAttachmentError = task
@@ -3274,13 +3406,14 @@ export function ResultPanel({
 
                               return (
                                 <li
-                                  key={`${phase.id}-${idx}`}
+                                  key={`${phase.id}-${node.nodeId}`}
                                   id={task ? `task-${task.id}` : undefined}
                                   className={`relative flex flex-col overflow-hidden rounded-xl border bg-white/90 shadow-sm ring-1 transition-all duration-200 dark:bg-slate-900/70 ${
                                     isTaskSelected
                                       ? 'border-indigo-300 ring-indigo-200 shadow-md dark:border-indigo-600 dark:ring-indigo-900/50'
                                       : 'border-slate-200/90 ring-slate-200/70 hover:border-slate-300 hover:shadow-md dark:border-slate-700 dark:ring-slate-700/70 dark:hover:border-slate-600'
                                   }`}
+                                  style={{ marginLeft: `${Math.max(0, node.depth - 1) * 10}px` }}
                                 >
                                   <span
                                     aria-hidden="true"
@@ -3485,7 +3618,7 @@ export function ResultPanel({
                                             : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
                                         }`}
                                       >
-                                        <span className="text-slate-600 leading-relaxed text-sm dark:text-slate-300">{item}</span>
+                                        <span className="text-slate-600 leading-relaxed text-sm dark:text-slate-300">{itemText}</span>
                                       </button>
 
                                       {isTaskMutating && (
@@ -4371,7 +4504,7 @@ export function ResultPanel({
               <div className="flex flex-shrink-0 items-center gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-                    {sheetTask.phaseId}.{sheetTask.itemIndex + 1}
+                    {sheetTask.positionPath?.trim() || `${sheetTask.phaseId}.${sheetTask.itemIndex + 1}`}
                     <span className={`ml-2 rounded-md border px-1.5 py-0.5 text-[10px] ${getTaskStatusChipClassName(sheetTask.status)}`}>
                       {getTaskStatusLabel(sheetTask.status)}
                     </span>
@@ -4910,7 +5043,7 @@ export function ResultPanel({
                     <div key={phase.id} className="rounded-md border border-slate-200/60 bg-white/35 px-2.5 py-2">
                       <p className="truncate text-[11px] font-semibold text-slate-700">{phase.title}</p>
                       <ul className="mt-1 space-y-0.5">
-                        {phase.items.slice(0, 2).map((item, itemIndex) => (
+                        {flattenItemsAsText(phase.items).slice(0, 2).map((item, itemIndex) => (
                           <li key={`${phase.id}-${itemIndex}`} className="line-clamp-1 text-[10px] text-slate-600">
                             • {item}
                           </li>

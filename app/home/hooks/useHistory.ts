@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
+import { normalizePlaybookPhases } from '@/lib/playbook-tree'
 import { formatHistoryDate } from '@/app/home/lib/utils'
 import type { HistoryItem } from '@/app/home/lib/types'
 
@@ -58,7 +59,13 @@ export function useHistory() {
         return
       }
 
-      setHistory(Array.isArray(data.history) ? data.history : [])
+      const nextHistory = Array.isArray(data.history)
+        ? (data.history as HistoryItem[]).map((item) => ({
+            ...item,
+            phases: normalizePlaybookPhases(item.phases),
+          }))
+        : []
+      setHistory(nextHistory)
     } catch {
       setHistory([])
     } finally {

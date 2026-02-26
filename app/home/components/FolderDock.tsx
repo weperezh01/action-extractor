@@ -1,13 +1,27 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import { Check, Plus, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { BookOpen, Check, ChevronDown, ChevronRight, Plus, X } from 'lucide-react'
 
 export interface FolderItem {
   id: string
   name: string
   color: FolderColor
   parentId?: string | null
+}
+
+export interface FolderPlaybookItem {
+  id: string
+  folderId: string | null
+  title: string
+  subtitle?: string | null
+  createdAt?: string | null
+}
+
+export interface OpenDeskPlaybookItem {
+  id: string
+  title: string
+  isMain: boolean
 }
 
 export type FolderColor =
@@ -33,17 +47,41 @@ function getColorMeta(color: FolderColor) {
   return FOLDER_COLORS.find((c) => c.value === color) ?? FOLDER_COLORS[0]
 }
 
+const ROOT_FOLDER_TAB_SELECTED_CLASS =
+  'z-10 border-[#cfb07f] bg-[linear-gradient(180deg,#fff7e7_0%,#f1ddb7_58%,#e5c995_100%)] text-[#4f3b20] shadow-[0_18px_26px_-20px_rgba(74,52,26,0.85),inset_0_1px_0_rgba(255,255,255,0.85)] dark:border-[#7a5f36] dark:bg-[linear-gradient(180deg,#3d3224_0%,#493a28_58%,#5a462f_100%)] dark:text-[#f2e4c6]'
+const ROOT_FOLDER_TAB_IDLE_CLASS =
+  'translate-y-1 border-[#d7c7ab] bg-[linear-gradient(180deg,#fffefb_0%,#f4ecdd_100%)] text-[#7b6546] opacity-95 hover:translate-y-0.5 hover:border-[#c9b28f] hover:bg-[linear-gradient(180deg,#fffdf7_0%,#f1e4cd_100%)] hover:text-[#5f4a2c] dark:border-[#4f4538] dark:bg-[linear-gradient(180deg,#26221d_0%,#2d271f_100%)] dark:text-[#b9a68c] dark:hover:border-[#6b5c46] dark:hover:bg-[linear-gradient(180deg,#332b22_0%,#3b3025_100%)] dark:hover:text-[#e2d2b4]'
+const ROOT_FOLDER_LIP_SELECTED_CLASS =
+  'border-[#cfb07f] bg-[linear-gradient(180deg,#fff4dc_0%,#edd19d_100%)] dark:border-[#7a5f36] dark:bg-[linear-gradient(180deg,#4b3c29_0%,#604b31_100%)]'
+const ROOT_FOLDER_LIP_IDLE_CLASS =
+  'border-[#d9c7a8] bg-[linear-gradient(180deg,#fffdf6_0%,#f4e6cd_100%)] dark:border-[#5a4b38] dark:bg-[linear-gradient(180deg,#2d251d_0%,#3a2f24_100%)]'
+
+const SUB_FOLDER_TAB_SELECTED_CLASS =
+  'z-10 border-[#ceb182] bg-[linear-gradient(180deg,#fff6e4_0%,#f2e1bb_62%,#e8cf9f_100%)] text-[#5a4325] shadow-[0_14px_22px_-18px_rgba(74,52,26,0.76),inset_0_1px_0_rgba(255,255,255,0.8)] dark:border-[#806740] dark:bg-[linear-gradient(180deg,#3b3125_0%,#473927_62%,#594630_100%)] dark:text-[#eddcbf]'
+const SUB_FOLDER_TAB_IDLE_CLASS =
+  'translate-y-1 border-[#d7c9af] bg-[linear-gradient(180deg,#fffdf9_0%,#f6efe1_100%)] text-[#846c4c] opacity-90 hover:translate-y-0.5 hover:border-[#c8b390] hover:bg-[linear-gradient(180deg,#fffdf7_0%,#f1e5d1_100%)] hover:text-[#634d30] dark:border-[#4e4539] dark:bg-[linear-gradient(180deg,#26221d_0%,#2e2821_100%)] dark:text-[#bba98f] dark:hover:border-[#6a5c48] dark:hover:bg-[linear-gradient(180deg,#322b22_0%,#3a3025_100%)] dark:hover:text-[#dfcfb4]'
+const SUB_FOLDER_LIP_SELECTED_CLASS =
+  'border-[#ceb182] bg-[linear-gradient(180deg,#fff5df_0%,#edd8ac_100%)] dark:border-[#806740] dark:bg-[linear-gradient(180deg,#4a3d2b_0%,#5b4a32_100%)]'
+const SUB_FOLDER_LIP_IDLE_CLASS =
+  'border-[#dccbad] bg-[linear-gradient(180deg,#fffef8_0%,#f5ead5_100%)] dark:border-[#5b4f3c] dark:bg-[linear-gradient(180deg,#2e261e_0%,#3b3024_100%)]'
+
 interface FolderDockProps {
   folders: FolderItem[]
   activeFolderIds: string[]
   folderCounts: Record<string, number>
+  playbooks: FolderPlaybookItem[]
+  activePlaybookId?: string | null
+  openDeskPlaybooks?: OpenDeskPlaybookItem[]
   onFolderToggle: (id: string) => void
   onCreateFolder: (name: string, color: FolderColor, parentId?: string | null) => void
   onDeleteFolder: (id: string) => void
+  onSelectPlaybook?: (playbookId: string) => void
+  onFocusOpenDeskPlaybook?: (playbookId: string) => void
+  onCloseOpenDeskPlaybook?: (playbookId: string) => void
 }
 
 interface CreateFormProps {
-  inputRef: React.RefObject<HTMLInputElement>
+  inputRef: RefObject<HTMLInputElement>
   newName: string
   newColor: FolderColor
   onNameChange: (v: string) => void
@@ -64,7 +102,11 @@ function CreateForm({
   placeholder = 'Nombre de la carpeta',
 }: CreateFormProps) {
   return (
-    <div className="relative -mb-px flex-shrink-0 min-w-[220px] rounded-t-xl border border-b-0 border-indigo-300 bg-white px-2.5 py-2 shadow-sm dark:border-indigo-800 dark:bg-zinc-950">
+    <div className="relative w-full max-w-[280px] rounded-t-xl border border-b-0 border-[#cdb084] bg-[linear-gradient(180deg,#fff8ea_0%,#f2e1bf_100%)] px-2.5 py-2 shadow-[0_16px_24px_-18px_rgba(74,52,26,0.62)] dark:border-[#7b623d] dark:bg-[linear-gradient(180deg,#3d3224_0%,#4c3c29_100%)]">
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute left-4 -top-[10px] h-[10px] w-[44px] rounded-t-md border border-b-0 border-[#cdb084] bg-[linear-gradient(180deg,#fff2d7_0%,#ead09e_100%)] dark:border-[#7b623d] dark:bg-[linear-gradient(180deg,#4c3c2a_0%,#5f4a32_100%)]"
+      />
       <input
         ref={inputRef}
         type="text"
@@ -76,7 +118,7 @@ function CreateForm({
         }}
         placeholder={placeholder}
         maxLength={30}
-        className="mb-2 h-8 w-full rounded-md border border-zinc-200 bg-white px-2.5 text-xs text-zinc-800 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/30 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+        className="mb-2 h-8 w-full rounded-md border border-[#cfbe9f] bg-[#fffdf7] px-2.5 text-xs text-[#5b4630] outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/30 dark:border-[#6a5840] dark:bg-[#2f271f] dark:text-[#f0e3ca] dark:placeholder:text-[#b9a58a]"
       />
       <div className="mb-2.5 flex items-center gap-1.5">
         {FOLDER_COLORS.map((c) => (
@@ -85,7 +127,7 @@ function CreateForm({
             type="button"
             onClick={() => onColorChange(c.value)}
             aria-label={c.value}
-            className={`h-4 w-4 rounded-full transition-transform ${c.dot} ${
+            className={`h-4 w-4 rounded-full ring-1 ring-black/10 transition-transform ${c.dot} ${
               newColor === c.value
                 ? 'scale-125 ring-2 ring-offset-1 ring-indigo-400 dark:ring-offset-zinc-900'
                 : 'opacity-70 hover:opacity-100'
@@ -106,7 +148,7 @@ function CreateForm({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-md border border-zinc-200 px-2.5 py-1.5 text-[10px] text-zinc-500 transition-colors hover:bg-zinc-100 dark:border-white/10 dark:hover:bg-white/5"
+          className="rounded-md border border-[#cfbe9f] px-2.5 py-1.5 text-[10px] text-[#6d553b] transition-colors hover:bg-[#f7edda] dark:border-[#6a5840] dark:text-[#cdbb9e] dark:hover:bg-[#3a3025]"
         >
           <X size={10} />
         </button>
@@ -115,19 +157,161 @@ function CreateForm({
   )
 }
 
+const TREE_INDENT_PX = 18
+const MAX_INDENT_LEVEL = 9
+
+function getIndentPx(depth: number) {
+  return Math.min(depth, MAX_INDENT_LEVEL) * TREE_INDENT_PX
+}
+
+function buildFolderPathLabel(folderId: string, folderById: Map<string, FolderItem>) {
+  const names: string[] = []
+  const visited = new Set<string>()
+  let cursorId: string | null = folderId
+
+  while (cursorId && !visited.has(cursorId)) {
+    visited.add(cursorId)
+    const folder = folderById.get(cursorId)
+    if (!folder) break
+    names.push(folder.name)
+    cursorId = folder.parentId ?? null
+  }
+
+  return names.reverse().join(' / ')
+}
+
+function formatPaperDate(isoDate: string | null | undefined) {
+  if (!isoDate) return ''
+  const parsed = new Date(isoDate)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return new Intl.DateTimeFormat('es-ES', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(parsed)
+}
+
+function normalizeSearchText(value: string | null | undefined) {
+  if (!value) return ''
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+}
+
+function FolderStateIcon({
+  isOpen,
+  accentDotClass,
+}: {
+  isOpen: boolean
+  accentDotClass: string
+}) {
+  return (
+    <span
+      className={`relative inline-flex h-6 w-7 shrink-0 items-center justify-center transition-transform duration-200 ease-out ${
+        isOpen ? '-translate-y-0.5 scale-[1.05]' : 'scale-100'
+      }`}
+      aria-hidden="true"
+    >
+      <svg viewBox="0 0 24 20" className="h-[19px] w-[24px] overflow-visible">
+        <path
+          d="M2.4 8.9c0-1.2.9-2.1 2.1-2.1h14.9c1.1 0 2 .9 2 2v1.1H2.4V8.9Z"
+          className="fill-[#f5d8aa] stroke-[#b88041] dark:fill-[#4f3f2d] dark:stroke-[#cd9d65]"
+          strokeWidth="1"
+        />
+        <path
+          d="M2.4 9.8h19v6.7c0 1.1-.9 2-2 2H4.4c-1.1 0-2-.9-2-2V9.8Z"
+          className="fill-[#edbe72] stroke-[#a16f37] dark:fill-[#755831] dark:stroke-[#cc9b61]"
+          strokeWidth="1"
+        />
+        {isOpen && (
+          <path
+            d="M3.2 11.1h17.4"
+            className="stroke-[#f9ddb2] dark:stroke-[#bb9463]"
+            strokeWidth="0.9"
+            strokeLinecap="round"
+          />
+        )}
+        <g
+          className="transition-transform duration-200 ease-out"
+          style={{
+            transformOrigin: '7px 8px',
+            transform: isOpen ? 'translateY(-1.8px) rotate(-17deg)' : 'translateY(0px) rotate(0deg)',
+          }}
+        >
+          <path
+            d="M2.5 7.3c0-1.1.9-2 2-2H9l1.5 1.8h8.9c1.1 0 2 .9 2 2v.8H2.5v-2.6Z"
+            className="fill-[#f7dfb8] stroke-[#b98549] dark:fill-[#544331] dark:stroke-[#cd9d67]"
+            strokeWidth="1"
+          />
+          <path
+            d="M3.8 8.2h15.7"
+            className="stroke-[#ffe8c4] dark:stroke-[#d0ab7a]"
+            strokeWidth="0.9"
+            strokeLinecap="round"
+          />
+        </g>
+      </svg>
+      <span className={`absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ring-1 ring-white/90 dark:ring-zinc-900 ${accentDotClass}`} />
+    </span>
+  )
+}
+
 export function FolderDock({
   folders,
   activeFolderIds,
   folderCounts,
+  playbooks,
+  activePlaybookId = null,
+  openDeskPlaybooks = [],
   onFolderToggle,
   onCreateFolder,
   onDeleteFolder,
+  onSelectPlaybook,
+  onFocusOpenDeskPlaybook,
+  onCloseOpenDeskPlaybook,
 }: FolderDockProps) {
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set())
   const [isCreating, setIsCreating] = useState(false)
   const [creatingParentId, setCreatingParentId] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
   const [newColor, setNewColor] = useState<FolderColor>('indigo')
+  const [deskSearch, setDeskSearch] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const folderById = useMemo(() => {
+    const map = new Map<string, FolderItem>()
+    folders.forEach((folder) => map.set(folder.id, folder))
+    return map
+  }, [folders])
+
+  const childrenByParent = useMemo(() => {
+    const map = new Map<string | null, FolderItem[]>()
+    const pushChild = (parentId: string | null, folder: FolderItem) => {
+      const existing = map.get(parentId)
+      if (existing) {
+        existing.push(folder)
+        return
+      }
+      map.set(parentId, [folder])
+    }
+
+    folders.forEach((folder) => {
+      const parentId = folder.parentId && folderById.has(folder.parentId) ? folder.parentId : null
+      pushChild(parentId, folder)
+    })
+
+    return map
+  }, [folderById, folders])
+
+  const rootFolders = childrenByParent.get(null) ?? []
+
+  const cancelCreate = () => {
+    setIsCreating(false)
+    setCreatingParentId(null)
+    setNewName('')
+    setNewColor('indigo')
+  }
 
   useEffect(() => {
     if (isCreating) {
@@ -136,7 +320,61 @@ export function FolderDock({
     }
   }, [isCreating])
 
+  useEffect(() => {
+    if (rootFolders.length === 0) return
+    setExpandedIds((previous) => {
+      const next = new Set(previous)
+      let changed = false
+      rootFolders.forEach((folder) => {
+        if (!next.has(folder.id)) {
+          next.add(folder.id)
+          changed = true
+        }
+      })
+      return changed ? next : previous
+    })
+  }, [rootFolders])
+
+  useEffect(() => {
+    if (activeFolderIds.length === 0) return
+    setExpandedIds((previous) => {
+      const next = new Set(previous)
+      let changed = false
+
+      activeFolderIds.forEach((id) => {
+        const visited = new Set<string>()
+        let cursor = folderById.get(id)?.parentId ?? null
+
+        while (cursor && !visited.has(cursor)) {
+          visited.add(cursor)
+          if (!next.has(cursor)) {
+            next.add(cursor)
+            changed = true
+          }
+          cursor = folderById.get(cursor)?.parentId ?? null
+        }
+      })
+
+      return changed ? next : previous
+    })
+  }, [activeFolderIds, folderById])
+
+  useEffect(() => {
+    if (!isCreating || !creatingParentId) return
+    if (!folderById.has(creatingParentId)) {
+      cancelCreate()
+    }
+  }, [creatingParentId, folderById, isCreating])
+
   const openCreate = (parentId: string | null) => {
+    if (parentId) {
+      setExpandedIds((previous) => {
+        if (previous.has(parentId)) return previous
+        const next = new Set(previous)
+        next.add(parentId)
+        return next
+      })
+    }
     setCreatingParentId(parentId)
     setNewName('')
     setNewColor('indigo')
@@ -150,106 +388,225 @@ export function FolderDock({
     cancelCreate()
   }
 
-  const cancelCreate = () => {
-    setIsCreating(false)
-    setCreatingParentId(null)
-    setNewName('')
-    setNewColor('indigo')
+  const toggleExpanded = (id: string) => {
+    setExpandedIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
   }
 
-  const rootFolders = folders.filter((f) => !f.parentId)
-  // All selected root folders
-  const selectedRootIds = activeFolderIds.filter((id) => rootFolders.some((f) => f.id === id))
-  // Sub-folders of ALL selected roots combined
-  const subFolders = folders.filter((f) => f.parentId != null && selectedRootIds.includes(f.parentId))
-  const showSubRow = selectedRootIds.length > 0
-  // Allow creating sub-folder only when exactly 1 root is selected
-  const singleSelectedRoot = selectedRootIds.length === 1 ? selectedRootIds[0] : null
-  const singleSelectedRootName = singleSelectedRoot
-    ? folders.find((f) => f.id === singleSelectedRoot)?.name ?? ''
-    : ''
-  const multiRootLabel = selectedRootIds
-    .map((id) => folders.find((f) => f.id === id)?.name)
-    .filter(Boolean)
-    .join(' y ')
-  const activeFolderNames = activeFolderIds
-    .map((id) => folders.find((f) => f.id === id)?.name)
-    .filter((name): name is string => Boolean(name))
-  const activeFoldersSummary = activeFolderNames.join(' · ')
+  const selectedFolderId = activeFolderIds.length > 0
+    ? activeFolderIds[activeFolderIds.length - 1] ?? null
+    : null
+  const selectedFolder = selectedFolderId ? folderById.get(selectedFolderId) ?? null : null
+  const playbooksInSelectedFolder = useMemo(
+    () => (selectedFolderId ? playbooks.filter((playbook) => playbook.folderId === selectedFolderId) : []),
+    [playbooks, selectedFolderId]
+  )
+  const createTargetId = selectedFolder?.id ?? null
+  const createButtonLabel = selectedFolder ? `Nueva en ${selectedFolder.name}` : 'Nueva raíz'
+  const normalizedDeskSearch = useMemo(() => normalizeSearchText(deskSearch).trim(), [deskSearch])
+  const filteredPlaybooksInSelectedFolder = useMemo(() => {
+    if (normalizedDeskSearch.length === 0) return playbooksInSelectedFolder
 
-  return (
-    <div className="-mb-px mx-auto w-full max-w-5xl px-1 pb-0 pt-2">
-      {activeFolderNames.length > 0 && (
-        <p className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wide text-indigo-600 dark:text-indigo-300">
-          Abiertas: {activeFoldersSummary}
-        </p>
-      )}
-      <div className="relative">
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 border-b border-zinc-300/80 dark:border-white/15" />
-        <div className="flex items-end gap-1.5 overflow-x-auto pb-0 pr-1" style={{ scrollbarWidth: 'none' }}>
-          {rootFolders.map((folder) => {
-            const isSelected = activeFolderIds.includes(folder.id)
-            const meta = getColorMeta(folder.color)
-            const count = folderCounts[folder.id] ?? 0
+    return playbooksInSelectedFolder.filter((playbook) => {
+      const searchable = [
+        playbook.id,
+        playbook.folderId ?? '',
+        playbook.title,
+        playbook.subtitle ?? '',
+        playbook.createdAt ?? '',
+        formatPaperDate(playbook.createdAt),
+      ].join(' ')
 
-            return (
-              <div key={folder.id} className="group relative flex-shrink-0">
-                <button
-                  type="button"
-                  onClick={() => onFolderToggle(folder.id)}
-                  className={`relative -mb-px inline-flex h-11 min-w-[118px] max-w-[220px] items-center gap-2 rounded-t-xl border border-b-0 px-3 text-xs font-semibold transition-all duration-200 ${
-                    isSelected
-                      ? `${meta.active} z-10 border-zinc-400/90 text-zinc-900 ring-2 ring-indigo-400/45 shadow-[0_12px_24px_-14px_rgba(24,24,27,0.55)] dark:border-white/30 dark:text-zinc-50`
-                      : 'translate-y-1 border-zinc-300/80 bg-white/70 text-zinc-500 opacity-80 hover:translate-y-0.5 hover:border-zinc-400 hover:bg-white hover:text-zinc-700 hover:opacity-100 dark:border-white/15 dark:bg-zinc-950/70 dark:text-zinc-400 dark:hover:border-white/25 dark:hover:bg-zinc-900 dark:hover:text-zinc-200'
-                  }`}
-                >
-                  {isSelected && (
-                    <span className="absolute right-2 top-1 inline-flex items-center rounded-full border border-indigo-300 bg-indigo-50 px-1.5 py-[1px] text-[9px] font-bold leading-none text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200">
-                      Abierta
-                    </span>
-                  )}
-                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${meta.dot}`} />
-                  {isSelected && (
-                    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm">
-                      <Check size={10} />
-                    </span>
-                  )}
-                  <span className="truncate">{folder.name}</span>
-                  {count > 0 && (
-                    <span className={`ml-auto inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1 text-[10px] font-bold ${
-                      isSelected
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300'
-                    }`}>
-                      {count}
-                    </span>
-                  )}
-                </button>
+      return normalizeSearchText(searchable).includes(normalizedDeskSearch)
+    })
+  }, [normalizedDeskSearch, playbooksInSelectedFolder])
 
-                {folder.id !== 'general' && (
-                  <button
-                    type="button"
-                    onClick={() => onDeleteFolder(folder.id)}
-                    aria-label={`Eliminar carpeta ${folder.name}`}
-                    className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-400 shadow-sm transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 group-hover:flex dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-500 dark:hover:border-rose-800 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
-                  >
-                    <X size={9} />
-                  </button>
-                )}
-              </div>
-            )
-          })}
+  useEffect(() => {
+    setDeskSearch('')
+  }, [selectedFolderId])
 
-          {!isCreating ? (
+  const activeFolderPaths = activeFolderIds
+    .map((id) => (folderById.has(id) ? buildFolderPathLabel(id, folderById) : null))
+    .filter((path): path is string => Boolean(path))
+  const activeFoldersSummary = activeFolderPaths.join(' · ')
+  const selectedFolderPath = selectedFolder ? buildFolderPathLabel(selectedFolder.id, folderById) : null
+  const openDeskPlaybookIds = useMemo(() => {
+    const ids = new Set<string>()
+    openDeskPlaybooks.forEach((playbook) => {
+      const id = playbook.id.trim()
+      if (id.length > 0) ids.add(id)
+    })
+    return ids
+  }, [openDeskPlaybooks])
+  const activeBranchIds = useMemo(() => {
+    const branchIds = new Set<string>()
+
+    activeFolderIds.forEach((id) => {
+      const visited = new Set<string>()
+      let cursorId: string | null = id
+
+      while (cursorId && !visited.has(cursorId)) {
+        visited.add(cursorId)
+        branchIds.add(cursorId)
+        cursorId = folderById.get(cursorId)?.parentId ?? null
+      }
+    })
+
+    return branchIds
+  }, [activeFolderIds, folderById])
+
+  const renderFolderNode = (folder: FolderItem, depth: number): ReactNode => {
+    const children = childrenByParent.get(folder.id) ?? []
+    const hasChildren = children.length > 0
+    const isExpanded = expandedIds.has(folder.id)
+    const isSelected = activeFolderIds.includes(folder.id)
+    const isOnActiveBranch = activeBranchIds.has(folder.id)
+    const meta = getColorMeta(folder.color)
+    const count = folderCounts[folder.id] ?? 0
+    const isRoot = depth === 0
+
+    const tabClasses = isRoot
+      ? isSelected
+        ? ROOT_FOLDER_TAB_SELECTED_CLASS
+        : ROOT_FOLDER_TAB_IDLE_CLASS
+      : isSelected
+        ? SUB_FOLDER_TAB_SELECTED_CLASS
+        : SUB_FOLDER_TAB_IDLE_CLASS
+    const lipClasses = isRoot
+      ? isSelected
+        ? ROOT_FOLDER_LIP_SELECTED_CLASS
+        : ROOT_FOLDER_LIP_IDLE_CLASS
+      : isSelected
+        ? SUB_FOLDER_LIP_SELECTED_CLASS
+        : SUB_FOLDER_LIP_IDLE_CLASS
+    const buttonSize = isRoot
+      ? 'h-10 min-w-[124px] max-w-[260px] px-3 text-xs'
+      : 'h-8 min-w-[104px] max-w-[240px] px-2.5 text-[11px]'
+    const lipSize = isRoot
+      ? 'left-4 -top-[10px] h-[10px] w-[46px]'
+      : 'left-3 -top-[8px] h-[8px] w-[34px]'
+    const topDotSize = isRoot
+      ? 'left-[1.7rem] -top-[6px] h-1.5 w-3.5'
+      : 'left-[1.2rem] -top-[4px] h-1 w-3'
+    const countBadgeSize = isRoot ? 'h-5 min-w-[20px] text-[10px]' : 'h-4 min-w-[16px] text-[9px]'
+    const connectorGuideClass = isOnActiveBranch
+      ? 'bg-[#b89362] dark:bg-[#a2835e]'
+      : 'bg-[#d7c4a6] dark:bg-[#61503d]'
+    const isFolderOpenVisual = isSelected
+
+    return (
+      <div key={folder.id} className="mt-1.5">
+        <div className="relative flex items-end gap-1.5" style={{ marginLeft: getIndentPx(depth) }}>
+          {depth > 0 && (
+            <>
+              <span
+                aria-hidden="true"
+                className={`pointer-events-none absolute -left-3.5 top-1/2 h-px w-3.5 -translate-y-1/2 rounded-full ${connectorGuideClass}`}
+              />
+              <span
+                aria-hidden="true"
+                className={`pointer-events-none absolute -left-3.5 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full ${connectorGuideClass}`}
+              />
+            </>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              if (hasChildren) toggleExpanded(folder.id)
+            }}
+            disabled={!hasChildren}
+            aria-label={
+              hasChildren
+                ? isExpanded
+                  ? `Contraer carpeta ${folder.name}`
+                  : `Expandir carpeta ${folder.name}`
+                : `Carpeta ${folder.name} sin subcarpetas`
+            }
+            className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border text-[#7b6546] transition-colors dark:text-[#c3ae90] ${
+              hasChildren
+                ? isOnActiveBranch
+                  ? 'border-[#bf9a68] bg-[#f5e6c9] hover:border-[#b08b58] hover:bg-[#efd8ae] dark:border-[#7f6545] dark:bg-[#3c3125] dark:hover:border-[#917252] dark:hover:bg-[#4b3a2a]'
+                  : 'border-[#d8c7aa] bg-[#fbf2e2] hover:border-[#c2aa84] hover:bg-[#f3e1c2] dark:border-[#655640] dark:bg-[#332a21] dark:hover:border-[#7d6a4c] dark:hover:bg-[#443628]'
+                : 'cursor-default border-transparent bg-transparent'
+            }`}
+          >
+            {hasChildren ? (
+              isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />
+            ) : (
+              <span className="h-1.5 w-1.5 rounded-full bg-[#d8bf98] dark:bg-[#6f5d45]" />
+            )}
+          </button>
+
+          <div className="group relative flex-shrink-0">
             <button
               type="button"
-              onClick={() => openCreate(null)}
-              className="-mb-px inline-flex h-11 min-w-[90px] flex-shrink-0 translate-y-1 items-center justify-center gap-1.5 rounded-t-xl border border-dashed border-b-0 border-zinc-300 text-xs font-semibold text-zinc-500 transition-all duration-200 hover:translate-y-0.5 hover:border-zinc-400 hover:bg-white hover:text-zinc-700 dark:border-white/15 dark:text-zinc-400 dark:hover:border-white/25 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+              onClick={() => {
+                onFolderToggle(folder.id)
+                if (hasChildren) {
+                  setExpandedIds((previous) => {
+                    if (previous.has(folder.id)) return previous
+                    const next = new Set(previous)
+                    next.add(folder.id)
+                    return next
+                  })
+                }
+              }}
+              className={`relative -mb-px inline-flex items-center gap-1.5 rounded-t-xl border border-b-0 font-semibold transition-all duration-200 ${buttonSize} ${tabClasses}`}
             >
-              <Plus size={14} />
-              Nueva
+              <span
+                aria-hidden="true"
+                className={`pointer-events-none absolute rounded-t-md border border-b-0 ${lipSize} ${lipClasses}`}
+              />
+              <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/70 dark:bg-white/10" />
+              <span
+                aria-hidden="true"
+                className={`pointer-events-none absolute rounded-full ${topDotSize} ${meta.dot} ${isSelected ? 'opacity-95' : 'opacity-80'}`}
+              />
+              <FolderStateIcon isOpen={isFolderOpenVisual} accentDotClass={meta.dot} />
+              {isSelected && (
+                <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm">
+                  <Check size={8} />
+                </span>
+              )}
+              <span className="truncate">{folder.name}</span>
+              {hasChildren && (
+                <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#eee0c6] px-1 text-[9px] font-bold text-[#7a5c37] dark:bg-[#5e4a32] dark:text-[#f0ddba]">
+                  {children.length}
+                </span>
+              )}
+              {count > 0 && (
+                <span className={`ml-auto inline-flex items-center justify-center rounded-full px-1 font-bold ${countBadgeSize} ${
+                  isSelected
+                    ? 'bg-[#7d6040] text-[#fff7e8] dark:bg-[#d4bf98] dark:text-[#3f3120]'
+                    : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300'
+                }`}>
+                  {count}
+                </span>
+              )}
             </button>
-          ) : creatingParentId === null ? (
+
+            {folder.id !== 'general' && (
+              <button
+                type="button"
+                onClick={() => onDeleteFolder(folder.id)}
+                aria-label={`Eliminar carpeta ${folder.name}`}
+                className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-400 shadow-sm transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 group-hover:flex dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-500 dark:hover:border-rose-800 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
+              >
+                <X size={9} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {isCreating && creatingParentId === folder.id && (
+          <div className="mt-1" style={{ marginLeft: getIndentPx(depth + 1) }}>
             <CreateForm
               inputRef={inputRef}
               newName={newName}
@@ -258,110 +615,274 @@ export function FolderDock({
               onColorChange={setNewColor}
               onCreate={handleCreate}
               onCancel={cancelCreate}
+              placeholder={`Nombre dentro de ${folder.name}`}
             />
-          ) : null}
-        </div>
-      </div>
+          </div>
+        )}
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateRows: showSubRow ? '1fr' : '0fr',
-          opacity: showSubRow ? 1 : 0,
-          transition: 'grid-template-rows 0.35s ease, opacity 0.3s ease',
-          marginTop: showSubRow ? '8px' : '0',
-        }}
-      >
-        <div style={{ overflow: 'hidden' }}>
-          <div className="pb-0 pt-1">
-            <div className="mb-1 flex items-center gap-2 px-1">
-              <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
-                {singleSelectedRoot ? `Dentro de ${singleSelectedRootName}` : `Subcarpetas · ${multiRootLabel}`}
-              </p>
-              <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
-            </div>
-
-            <div className="relative">
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 border-b border-zinc-200/80 dark:border-white/10" />
-              <div className="flex items-end gap-1 overflow-x-auto pb-0 pr-1" style={{ scrollbarWidth: 'none' }}>
-                {subFolders.map((folder) => {
-                  const isSelected = activeFolderIds.includes(folder.id)
-                  const meta = getColorMeta(folder.color)
-                  const count = folderCounts[folder.id] ?? 0
-
-                  return (
-                    <div key={folder.id} className="group relative flex-shrink-0">
-	                      <button
-	                        type="button"
-	                        onClick={() => onFolderToggle(folder.id)}
-	                        className={`relative -mb-px inline-flex h-9 min-w-[104px] max-w-[196px] items-center gap-1.5 rounded-t-lg border border-b-0 px-2.5 text-[11px] font-semibold transition-all duration-200 ${
-	                          isSelected
-	                            ? `${meta.active} z-10 border-zinc-400/90 text-zinc-900 ring-2 ring-indigo-400/35 shadow-[0_10px_20px_-14px_rgba(24,24,27,0.45)] dark:border-white/30 dark:text-zinc-50`
-	                            : 'translate-y-1 border-zinc-300/70 bg-white/65 text-zinc-500 opacity-80 hover:translate-y-0.5 hover:border-zinc-400 hover:bg-white hover:text-zinc-700 hover:opacity-100 dark:border-white/15 dark:bg-zinc-950/70 dark:text-zinc-400 dark:hover:border-white/25 dark:hover:bg-zinc-900 dark:hover:text-zinc-200'
-	                        }`}
-	                      >
-	                        {isSelected && (
-	                          <span className="absolute right-2 top-0.5 inline-flex items-center rounded-full border border-indigo-300 bg-indigo-50 px-1 py-[1px] text-[8px] font-bold leading-none text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200">
-	                            Abierta
-	                          </span>
-	                        )}
-	                        <span className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`} />
-	                        {isSelected && (
-	                          <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm">
-	                            <Check size={9} />
-	                          </span>
-	                        )}
-	                        <span className="truncate">{folder.name}</span>
-	                        {count > 0 && (
-	                          <span className={`ml-auto inline-flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[9px] font-bold ${
-                            isSelected
-                              ? 'bg-indigo-600 text-white'
-                              : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300'
-                          }`}>
-                            {count}
-                          </span>
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => onDeleteFolder(folder.id)}
-                        aria-label={`Eliminar subcarpeta ${folder.name}`}
-                        className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-400 shadow-sm transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 group-hover:flex dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-500 dark:hover:border-rose-800 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
-                      >
-                        <X size={9} />
-                      </button>
-                    </div>
-                  )
-                })}
-
-                {singleSelectedRoot && (
-                  !isCreating ? (
-                    <button
-                      type="button"
-                      onClick={() => openCreate(singleSelectedRoot)}
-                      className="-mb-px inline-flex h-9 min-w-[86px] flex-shrink-0 translate-y-1 items-center justify-center gap-1 rounded-t-lg border border-dashed border-b-0 border-zinc-300 text-[11px] font-semibold text-zinc-500 transition-all duration-200 hover:translate-y-0.5 hover:border-zinc-400 hover:bg-white hover:text-zinc-700 dark:border-white/15 dark:text-zinc-400 dark:hover:border-white/25 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
-                    >
-                      <Plus size={12} />
-                      Nueva
-                    </button>
-                  ) : creatingParentId === singleSelectedRoot ? (
-                    <CreateForm
-                      inputRef={inputRef}
-                      newName={newName}
-                      newColor={newColor}
-                      onNameChange={setNewName}
-                      onColorChange={setNewColor}
-                      onCreate={handleCreate}
-                      onCancel={cancelCreate}
-                      placeholder="Nombre de la subcarpeta"
-                    />
-                  ) : null
-                )}
+        {hasChildren && isExpanded && (
+          <div
+            className={`mt-1.5 rounded-lg border px-1.5 py-1 dark:bg-[#2e261f]/45 ${
+              isOnActiveBranch
+                ? 'border-[#d2b689]/85 bg-[#fff6e4]/85 dark:border-[#7f6545]/80'
+                : 'border-[#e8dbc5]/70 bg-[#fffaf0]/70 dark:border-[#554735]/70'
+            }`}
+          >
+            <p className="px-1 text-[9px] font-semibold uppercase tracking-wide text-[#8b6f4a] dark:text-[#bea483]">
+              Subcarpetas
+            </p>
+            <div className="relative mt-0.5">
+              <span
+                aria-hidden="true"
+                className={`pointer-events-none absolute bottom-0 left-[10px] top-0 w-px ${
+                  isOnActiveBranch ? 'bg-[#bf9a68] dark:bg-[#8d6f4e]' : 'bg-[#dcccad] dark:bg-[#5f4e3c]'
+                }`}
+              />
+              <div className="space-y-1">
+                {children.map((child) => renderFolderNode(child, depth + 1))}
               </div>
             </div>
           </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="-mb-px mx-auto w-full max-w-5xl px-1 pb-0 pt-2">
+      {activeFolderPaths.length > 0 && (
+        <p className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wide text-indigo-600 dark:text-indigo-300">
+          Activas: {activeFoldersSummary}
+        </p>
+      )}
+      <div className="rounded-xl border border-[#d7c6a7]/70 bg-[linear-gradient(180deg,#fffdfa_0%,#f7efdf_100%)] p-2 shadow-[0_10px_22px_-20px_rgba(74,52,26,0.65)] dark:border-[#5d4f3f]/80 dark:bg-[linear-gradient(180deg,#26211c_0%,#2f271f_100%)]">
+        <div className="grid gap-2 lg:grid-cols-[minmax(14.5rem,max-content)_minmax(0,1fr)]">
+          <div className="min-w-0">
+            <div className="mb-2 flex items-center gap-2 px-1">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#8d714e] dark:text-[#c8b292]">
+                Carpetas
+              </p>
+              {!isCreating ? (
+                <button
+                  type="button"
+                  onClick={() => openCreate(createTargetId)}
+                  title={createButtonLabel}
+                  className="inline-flex items-center gap-1 rounded-md border border-[#ccb085] bg-[linear-gradient(180deg,#fff7e8_0%,#efdbb3_100%)] px-2 py-1 text-[10px] font-semibold text-[#5e4728] transition-colors hover:border-[#b49361] hover:bg-[linear-gradient(180deg,#fff4e1_0%,#e8cd98_100%)] dark:border-[#705c3f] dark:bg-[linear-gradient(180deg,#3b2f24_0%,#4c3a2a_100%)] dark:text-[#e0ceaf] dark:hover:border-[#8d734f] dark:hover:bg-[linear-gradient(180deg,#4a392a_0%,#5b4733_100%)]"
+                >
+                  <Plus size={11} />
+                  <span className="truncate">Nueva carpeta</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={cancelCreate}
+                  className="inline-flex items-center rounded-md border border-[#ccb085] px-2 py-1 text-[10px] font-semibold text-[#6c5436] transition-colors hover:bg-[#f8ecd6] dark:border-[#6f5d43] dark:text-[#cdbb9d] dark:hover:bg-[#3b3025]"
+                >
+                  Cancelar
+                </button>
+              )}
+            </div>
+
+            {selectedFolder && !isCreating && (
+              <p className="mb-2 px-1 text-[10px] text-[#886d4b] dark:text-[#bda789]">
+                Destino actual: <span className="font-semibold">{selectedFolderPath}</span>
+              </p>
+            )}
+
+            {isCreating && creatingParentId === null && (
+              <div className="mb-2 px-1">
+                <CreateForm
+                  inputRef={inputRef}
+                  newName={newName}
+                  newColor={newColor}
+                  onNameChange={setNewName}
+                  onColorChange={setNewColor}
+                  onCreate={handleCreate}
+                  onCancel={cancelCreate}
+                  placeholder={selectedFolder ? `Nombre dentro de ${selectedFolder.name}` : 'Nombre de la carpeta'}
+                />
+              </div>
+            )}
+
+            <div className="max-h-[330px] overflow-y-auto overflow-x-hidden pr-1">
+              {rootFolders.length === 0 && !isCreating ? (
+                <p className="px-1 py-4 text-xs text-[#8c7352] dark:text-[#b9a487]">
+                  Crea tu primera carpeta para comenzar a organizar tus playbooks.
+                </p>
+              ) : (
+                <div className="space-y-1">{rootFolders.map((folder) => renderFolderNode(folder, 0))}</div>
+              )}
+            </div>
+          </div>
+
+          <aside className="folder-playbooks-desk min-w-0 rounded-lg p-2">
+            <span aria-hidden="true" className="folder-playbooks-desk-stamp">
+              Escritorio
+            </span>
+            <div
+              className="folder-playbooks-desk-layout"
+              data-has-open={openDeskPlaybooks.length > 0 ? 'true' : 'false'}
+            >
+              {openDeskPlaybooks.length > 0 && (
+                <div className="folder-playbooks-openbar">
+                  <p className="folder-playbooks-openbar-label">Abiertos</p>
+                  <div className="folder-playbooks-openbar-scroll">
+                    {openDeskPlaybooks.map((playbook) => (
+                      <div
+                        key={`open-desk-chip-${playbook.id}`}
+                        className={`folder-playbooks-openbar-chip ${
+                          playbook.isMain
+                            ? 'folder-playbooks-openbar-chip-main'
+                            : 'folder-playbooks-openbar-chip-secondary'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => onFocusOpenDeskPlaybook?.(playbook.id)}
+                          className="folder-playbooks-openbar-chip-focus"
+                          title={`Ir a ${playbook.title}`}
+                        >
+                          <span className="folder-playbooks-openbar-chip-icon">
+                            <BookOpen size={11} />
+                          </span>
+                          <span className="folder-playbooks-openbar-chip-title">{playbook.title}</span>
+                        </button>
+                        {onCloseOpenDeskPlaybook && (
+                          <button
+                            type="button"
+                            onClick={() => onCloseOpenDeskPlaybook(playbook.id)}
+                            className="folder-playbooks-openbar-chip-close"
+                            aria-label={`Cerrar ${playbook.title}`}
+                            title={`Cerrar ${playbook.title}`}
+                          >
+                            <X size={10} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="folder-playbooks-desk-surface">
+                <div className="folder-playbooks-desk-header">
+                  <p className="folder-playbooks-desk-path truncate text-[11px] font-semibold">
+                    {selectedFolderPath ?? 'Selecciona una carpeta'}
+                  </p>
+                  <span className="folder-playbooks-desk-accessories" aria-hidden="true">
+                    <span className="folder-playbooks-desk-calculator">
+                      <span className="folder-playbooks-desk-calculator-screen" />
+                      <span className="folder-playbooks-desk-calculator-keys">
+                        <span className="folder-playbooks-desk-calculator-key" />
+                        <span className="folder-playbooks-desk-calculator-key" />
+                        <span className="folder-playbooks-desk-calculator-key" />
+                        <span className="folder-playbooks-desk-calculator-key" />
+                        <span className="folder-playbooks-desk-calculator-key" />
+                        <span className="folder-playbooks-desk-calculator-key" />
+                        <span className="folder-playbooks-desk-calculator-key" />
+                        <span className="folder-playbooks-desk-calculator-key" />
+                        <span className="folder-playbooks-desk-calculator-key" />
+                      </span>
+                    </span>
+                    <span className="folder-playbooks-desk-pen" />
+                    <span className="folder-playbooks-desk-sticky">nota</span>
+                  </span>
+                </div>
+
+                <div className="folder-playbooks-desk-search mt-1.5">
+                  <input
+                    type="text"
+                    value={deskSearch}
+                    onChange={(e) => setDeskSearch(e.target.value)}
+                    placeholder="Buscar por titulo, ID o fecha"
+                    className="folder-playbooks-desk-search-input"
+                    aria-label="Buscar playbooks en la carpeta"
+                  />
+                  {deskSearch.trim().length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setDeskSearch('')}
+                      className="folder-playbooks-desk-search-clear"
+                      aria-label="Limpiar busqueda"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+
+                <div className="folder-playbooks-desk-scroll mt-1.5 max-h-[50vh] overflow-y-auto pr-1">
+                  {!selectedFolder ? (
+                    <p className="folder-playbooks-desk-empty rounded-md px-2.5 py-2 text-xs">
+                      Selecciona una carpeta para ver sus playbooks.
+                    </p>
+                  ) : playbooksInSelectedFolder.length === 0 ? (
+                    <p className="folder-playbooks-desk-empty rounded-md px-2.5 py-2 text-xs">
+                      Esta carpeta aún no tiene playbooks.
+                    </p>
+                  ) : filteredPlaybooksInSelectedFolder.length === 0 ? (
+                    <p className="folder-playbooks-desk-empty rounded-md px-2.5 py-2 text-xs">
+                      No hay playbooks que coincidan con tu búsqueda.
+                    </p>
+                  ) : (
+                    <div className="relative pt-1">
+                      {filteredPlaybooksInSelectedFolder.map((playbook, index) => {
+                        const isActive = activePlaybookId != null && activePlaybookId === playbook.id
+                        const isOpenInDesk = openDeskPlaybookIds.has(playbook.id)
+                        const paperAngleClass = index % 2 === 0 ? '-rotate-[0.35deg]' : 'rotate-[0.35deg]'
+                        const paperDate = formatPaperDate(playbook.createdAt)
+                        const stackZIndex = isActive
+                          ? filteredPlaybooksInSelectedFolder.length + 20
+                          : index + 1
+                        return (
+                          <div
+                            key={playbook.id}
+                            className={`relative ${index === 0 ? '' : '-mt-3'}`}
+                            style={{ zIndex: stackZIndex }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => onSelectPlaybook?.(playbook.id)}
+                              disabled={!onSelectPlaybook}
+                              title={playbook.title}
+                              className={`folder-playbooks-desk-card group relative w-full rounded-sm border text-left transition-all duration-200 ${
+                                isActive
+                                  ? 'rotate-0 border-[#c69d64] bg-[linear-gradient(180deg,#fff7e6_0%,#f5e2bd_100%)] px-3 pt-2.5 pb-4 shadow-[0_14px_22px_-18px_rgba(92,63,29,0.95)]'
+                                  : isOpenInDesk
+                                    ? `${paperAngleClass} border-[#cda66f] bg-[linear-gradient(180deg,#fff8e8_0%,#f4e4c5_100%)] px-2.5 pt-2 pb-3.5 shadow-[0_10px_18px_-14px_rgba(92,63,29,0.9)] ring-1 ring-[#efd3a7]/80 hover:rotate-0 hover:border-[#bc9156] hover:bg-[linear-gradient(180deg,#fff7e1_0%,#efdbb4_100%)]`
+                                  : `${paperAngleClass} border-[#d8c5a5] bg-[linear-gradient(180deg,#fffefb_0%,#f6ead3_100%)] px-2.5 pt-2 pb-3.5 shadow-[0_8px_16px_-16px_rgba(92,63,29,0.95)] hover:rotate-0 hover:border-[#c7aa7d] hover:bg-[linear-gradient(180deg,#fffdf7_0%,#f1dfbe_100%)]`
+                              } disabled:cursor-default dark:border-[#6b5740] dark:bg-[linear-gradient(180deg,#3c3024_0%,#34291f_100%)] dark:hover:border-[#82684a] dark:hover:bg-[linear-gradient(180deg,#443629_0%,#3b2d22_100%)]`}
+                            >
+                              <span className="pointer-events-none absolute inset-x-1 top-1 h-px bg-[#fff9ef] dark:bg-[#ead8bc]/25" />
+                              <span className="pointer-events-none absolute left-1.5 top-0.5 h-[2px] w-12 rounded-full bg-[#f3dfbb] dark:bg-[#9d7d53]/45" />
+                              <p className="line-clamp-2 text-[12px] font-semibold text-[#533c21] dark:text-[#ead7b9]">
+                                {playbook.title}
+                              </p>
+                              {playbook.subtitle && (
+                                <p className="mt-0.5 line-clamp-1 text-[10px] text-[#7a6140] dark:text-[#bda587]">
+                                  {playbook.subtitle}
+                                </p>
+                              )}
+                            <div className="mt-1 flex items-center justify-between gap-2 text-[9px] text-[#8a6b46] dark:text-[#b9a182]">
+                              <span className={`rounded-full border px-1.5 py-[1px] uppercase tracking-wide ${
+                                isOpenInDesk
+                                  ? 'border-[#c7a06a] bg-[#f4dfbc] text-[#684423] dark:border-[#9e7a4f] dark:bg-[#5a442e] dark:text-[#f0ddbf]'
+                                  : 'border-[#ddc9a8] bg-[#f9f0df] dark:border-[#6b5841] dark:bg-[#463729]'
+                              }`}>
+                                {isOpenInDesk ? 'Abierto' : 'Papel'}
+                              </span>
+                              {paperDate && <span>{paperDate}</span>}
+                            </div>
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+            </div>
+          </aside>
         </div>
       </div>
     </div>

@@ -3,6 +3,7 @@
 import { useCallback, useState } from 'react'
 import { buildExtractionMarkdown } from '@/lib/export-content'
 import { normalizeExtractionMode, type ExtractionMode } from '@/lib/extraction-modes'
+import { flattenItemsAsText, normalizePlaybookPhases } from '@/lib/playbook-tree'
 import { ResultPanel } from '@/app/home/components/ResultPanel'
 import {
   getShareVisibilityChangeNotice,
@@ -58,20 +59,7 @@ interface ExtractionFeedCardProps {
 }
 
 function normalizePersistedPhases(payload: unknown, fallback: Phase[]): Phase[] {
-  if (!Array.isArray(payload)) return fallback
-  const normalized = payload
-    .map((phase, index) => {
-      if (!phase || typeof phase !== 'object') return null
-      const rawTitle = (phase as { title?: unknown }).title
-      const rawItems = (phase as { items?: unknown }).items
-      const title = typeof rawTitle === 'string' ? rawTitle.trim() : ''
-      const items = Array.isArray(rawItems)
-        ? rawItems.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
-        : []
-      if (!title || items.length === 0) return null
-      return { id: index + 1, title, items }
-    })
-    .filter((phase): phase is Phase => Boolean(phase))
+  const normalized = normalizePlaybookPhases(payload)
   return normalized.length > 0 ? normalized : fallback
 }
 
@@ -126,7 +114,7 @@ export function ExtractionFeedCard({
     thumbnailUrl: item.thumbnailUrl ?? null,
     mode: extractionMode,
     objective: item.objective,
-    phases: item.phases,
+    phases: normalizePlaybookPhases(item.phases),
     proTip: item.proTip,
     metadata: item.metadata,
   })
@@ -413,6 +401,7 @@ export function ExtractionFeedCard({
       const generatedAt = new Intl.DateTimeFormat('es-ES', {
         dateStyle: 'medium',
         timeStyle: 'short',
+        hour12: true,
       }).format(new Date())
       pdf.text(`Generado: ${generatedAt}`, marginX, y)
       y += 6
@@ -436,7 +425,7 @@ export function ExtractionFeedCard({
       addWrappedText('Fases y Acciones', { fontSize: 12, fontStyle: 'bold', spacingAfter: 2 })
       localResult.phases.forEach((phase, phaseIndex) => {
         addWrappedText(`${phaseIndex + 1}. ${phase.title}`, { fontSize: 11.5, fontStyle: 'bold', spacingAfter: 1.5 })
-        phase.items.forEach((item) => {
+        flattenItemsAsText(phase.items).forEach((item) => {
           addWrappedText(`- ${item}`, { fontSize: 10.5, x: marginX + 2, width: maxWidth - 2, spacingAfter: 1.2 })
         })
         y += 1

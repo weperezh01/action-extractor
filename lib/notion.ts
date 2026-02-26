@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
+import { flattenItemsAsText, type PlaybookNode } from '@/lib/playbook-tree'
 
 const NOTION_API_BASE_URL = 'https://api.notion.com/v1'
 const NOTION_API_VERSION = '2022-06-28'
@@ -23,7 +24,7 @@ export interface NotionOAuthTokenResponse {
 export interface NotionPhase {
   id: number
   title: string
-  items: string[]
+  items: PlaybookNode[]
 }
 
 export interface NotionMetadata {
@@ -258,7 +259,7 @@ export async function createNotionPageFromExtraction(input: CreateNotionPageInpu
       },
     })
 
-    for (const item of phase.items) {
+    for (const item of flattenItemsAsText(phase.items)) {
       children.push({
         object: 'block',
         type: 'to_do',

@@ -55,6 +55,7 @@ interface CommunityPanelProps {
   currentExtractionId?: string | null
   onError?: (message: string) => void
   onNotice?: (message: string) => void
+  className?: string
 }
 
 function parseErrorMessage(payload: unknown, fallback: string) {
@@ -69,6 +70,7 @@ function formatDate(value: string) {
     return date.toLocaleString('es-ES', {
       dateStyle: 'short',
       timeStyle: 'short',
+      hour12: true,
     })
   } catch {
     return 'Ahora'
@@ -86,6 +88,7 @@ export function CommunityPanel({
   currentExtractionId = null,
   onError,
   onNotice,
+  className,
 }: CommunityPanelProps) {
   const [feedMode, setFeedMode] = useState<CommunityFeedMode>('home')
   const [loading, setLoading] = useState(false)
@@ -394,7 +397,11 @@ export function CommunityPanel({
   )
 
   return (
-    <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <section
+      className={`mt-8 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 ${
+        className ?? ''
+      }`}
+    >
       <div className="mb-3 flex items-center justify-between gap-2">
         <div>
           <p className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
@@ -641,4 +648,3 @@ export function CommunityPanel({
     </section>
   )
 }
-

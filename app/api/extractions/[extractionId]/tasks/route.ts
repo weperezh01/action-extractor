@@ -11,6 +11,7 @@ import {
   type ExtractionTaskEventType,
   type ExtractionTaskStatus,
 } from '@/lib/db'
+import { normalizePlaybookPhases } from '@/lib/playbook-tree'
 import {
   addGuestTaskEvent,
   findGuestTaskById,
@@ -51,6 +52,10 @@ function toGuestClientTask(task: GuestTask, extractionId: string) {
     phaseTitle: task.phaseTitle,
     itemIndex: task.itemIndex,
     itemText: task.itemText,
+    nodeId: `p${task.phaseId}-i${task.itemIndex}`,
+    parentNodeId: null,
+    depth: 1,
+    positionPath: `${task.phaseId}.${task.itemIndex + 1}`,
     checked: task.checked,
     status: task.status,
     dueAt: null,
@@ -71,34 +76,7 @@ function toGuestClientTask(task: GuestTask, extractionId: string) {
 }
 
 function parseSyncPhases(payload: unknown) {
-  if (!Array.isArray(payload)) return []
-
-  return payload
-    .map((phase) => {
-      if (!phase || typeof phase !== 'object') return null
-
-      const rawId = (phase as { id?: unknown }).id
-      const rawTitle = (phase as { title?: unknown }).title
-      const rawItems = (phase as { items?: unknown }).items
-      const phaseId = Number.parseInt(String(rawId ?? ''), 10)
-      const title = typeof rawTitle === 'string' ? rawTitle.trim() : ''
-      const items = Array.isArray(rawItems)
-        ? rawItems
-            .map((item) => (typeof item === 'string' ? item.trim() : ''))
-            .filter((item) => item.length > 0)
-        : []
-
-      if (!Number.isFinite(phaseId) || phaseId <= 0 || !title || items.length === 0) {
-        return null
-      }
-
-      return {
-        id: phaseId,
-        title,
-        items,
-      }
-    })
-    .filter((phase): phase is { id: number; title: string; items: string[] } => Boolean(phase))
+  return normalizePlaybookPhases(payload).filter((phase) => phase.items.length > 0)
 }
 
 function toClientTask(task: Awaited<ReturnType<typeof listExtractionTasksWithEventsForUser>>[number]) {
@@ -109,6 +87,10 @@ function toClientTask(task: Awaited<ReturnType<typeof listExtractionTasksWithEve
     phaseTitle: task.phase_title,
     itemIndex: task.item_index,
     itemText: task.item_text,
+    nodeId: task.node_id,
+    parentNodeId: task.parent_node_id,
+    depth: task.depth,
+    positionPath: task.position_path,
     checked: task.checked,
     status: task.status,
     dueAt: task.due_at,

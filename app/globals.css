@@ -206,15 +206,15 @@ html.dark textarea::placeholder {
   position: absolute;
   top: 0;
   right: 0;
-  width: 46px;
-  height: 46px;
+  width: 56px;
+  height: 56px;
   pointer-events: none;
-  z-index: 3;
+  z-index: 6;
   clip-path: polygon(100% 0, 0 0, 100% 100%);
   background: linear-gradient(140deg, rgba(255, 255, 255, 0.94) 0 52%, rgba(224, 200, 162, 0.95) 53% 100%);
   border-left: 1px solid rgba(170, 138, 88, 0.35);
   border-bottom: 1px solid rgba(170, 138, 88, 0.35);
-  box-shadow: -3px 3px 6px rgba(85, 62, 30, 0.18);
+  box-shadow: -4px 4px 10px rgba(85, 62, 30, 0.26);
 }
 
 .paper-playbook-cover {
@@ -440,19 +440,22 @@ html.dark textarea::placeholder {
   pointer-events: none;
   z-index: 0;
   background-image:
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.16)),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.14)),
     repeating-linear-gradient(
       to bottom,
-      transparent 0,
-      transparent 30px,
-      rgba(138, 111, 73, 0.08) 31px
+      rgba(146, 170, 195, 0) 0,
+      rgba(146, 170, 195, 0) 29px,
+      rgba(146, 170, 195, 0.26) 29px,
+      rgba(146, 170, 195, 0.26) 30px,
+      rgba(255, 255, 255, 0.22) 30px,
+      rgba(255, 255, 255, 0.22) 31px
     ),
-    radial-gradient(circle at 1px 1px, rgba(120, 93, 54, 0.06) 1px, transparent 0);
+    radial-gradient(circle at 1px 1px, rgba(120, 93, 54, 0.05) 1px, transparent 0);
   background-size:
     100% 100%,
-    100% 32px,
+    100% 31px,
     12px 12px;
-  opacity: 0.72;
+  opacity: 0.69;
 }
 
 .paper-playbook::after {
@@ -465,6 +468,23 @@ html.dark textarea::placeholder {
   background: rgba(226, 93, 112, 0.3);
   pointer-events: none;
   z-index: 0;
+}
+
+.paper-playbook-date-note {
+  display: inline-block;
+  max-width: min(100%, 18rem);
+  font-family: 'Patrick Hand', 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive;
+  font-size: 1.02rem;
+  line-height: 1.2;
+  letter-spacing: 0.012em;
+  color: rgba(34, 86, 160, 0.78);
+  text-align: right;
+  transform: rotate(-1.2deg);
+}
+
+.paper-playbook-date-note-label {
+  font-weight: 700;
+  color: rgba(29, 74, 138, 0.82);
 }
 
 .paper-playbook > * {
@@ -557,8 +577,951 @@ html.dark textarea::placeholder {
   color: #7f6647;
 }
 
+.playbook-folder-drawer {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  z-index: 0;
+  transform: translateY(0);
+  will-change: transform;
+  transition: transform 0.92s cubic-bezier(0.22, 0.78, 0.24, 1);
+}
+
+.playbook-folder-drawer[data-open='true'] {
+  transform: translateY(-100%);
+}
+
+.playbook-folder-drawer-panel {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.36s ease;
+}
+
+.playbook-folder-drawer[data-open='true'] .playbook-folder-drawer-panel {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.playbook-folder-drawer-tab {
+  --folder-drawer-tab-height: 2.35rem;
+  position: absolute;
+  left: 50%;
+  top: 0;
+  z-index: 34;
+  min-height: var(--folder-drawer-tab-height);
+  min-width: 152px;
+  border: 1px solid #a48150;
+  border-radius: 13px;
+  padding: 0.42rem 1.15rem 0.46rem;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.22rem;
+  color: #5f4422;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 45%),
+    linear-gradient(180deg, #f9ecd3 0%, #e8ca99 56%, #d8b078 100%);
+  transform: translate(-50%, -102%);
+  box-shadow:
+    0 13px 20px -15px rgba(64, 42, 18, 0.9),
+    0 6px 12px -8px rgba(64, 42, 18, 0.52),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  will-change: transform;
+  transition:
+    transform 0.92s cubic-bezier(0.22, 0.78, 0.24, 1),
+    box-shadow 0.3s ease,
+    border-color 0.3s ease,
+    background 0.3s ease;
+}
+
+.playbook-folder-drawer-tab::before {
+  content: '';
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: -7px;
+  height: 7px;
+  border: 1px solid #9a7847;
+  border-top: 0;
+  border-radius: 0 0 9px 9px;
+  background: linear-gradient(180deg, #d7b27d 0%, #bb915f 100%);
+  box-shadow: 0 6px 8px -8px rgba(56, 38, 17, 0.7);
+}
+
+.playbook-folder-drawer-tab:hover {
+  border-color: #956b34;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0) 45%),
+    linear-gradient(180deg, #fff3dc 0%, #e8c792 56%, #cf9f62 100%);
+}
+
+.playbook-folder-drawer-tab:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.95),
+    0 0 0 5px rgba(79, 70, 229, 0.5),
+    0 13px 20px -15px rgba(64, 42, 18, 0.9);
+}
+
+.playbook-folder-drawer-tab-handle {
+  position: relative;
+  width: 54px;
+  height: 11px;
+  border-radius: 9999px;
+  border: 1px solid rgba(114, 83, 45, 0.7);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.1)),
+    linear-gradient(180deg, #f7edd9 0%, #e4c88f 56%, #c79c61 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    inset 0 -1px 0 rgba(109, 78, 43, 0.32);
+}
+
+.playbook-folder-drawer-tab-handle::before,
+.playbook-folder-drawer-tab-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: #8b673d;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transform: translateY(-50%);
+}
+
+.playbook-folder-drawer-tab-handle::before {
+  left: 5px;
+}
+
+.playbook-folder-drawer-tab-handle::after {
+  right: 5px;
+}
+
+.playbook-folder-drawer-tab-label {
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.19em;
+  line-height: 1;
+}
+
+html.dark .playbook-folder-drawer-tab {
+  color: #e6d1ae;
+  border-color: #7e623d;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0) 45%),
+    linear-gradient(180deg, #4a3a29 0%, #5a452f 56%, #6a5133 100%);
+  box-shadow:
+    0 13px 20px -15px rgba(0, 0, 0, 0.9),
+    0 6px 12px -8px rgba(0, 0, 0, 0.62),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+
+html.dark .playbook-folder-drawer-tab::before {
+  border-color: #6f5739;
+  background: linear-gradient(180deg, #654d33 0%, #4f3c28 100%);
+}
+
+html.dark .playbook-folder-drawer-tab:hover {
+  border-color: #94734b;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 45%),
+    linear-gradient(180deg, #5a472f 0%, #6a5236 56%, #7b5f3d 100%);
+}
+
+html.dark .playbook-folder-drawer-tab-handle {
+  border-color: rgba(208, 170, 112, 0.6);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.04)),
+    linear-gradient(180deg, #80623c 0%, #6f5434 56%, #5e472e 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.38);
+}
+
+html.dark .playbook-folder-drawer-tab-handle::before,
+html.dark .playbook-folder-drawer-tab-handle::after {
+  background: #d8b581;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.folder-playbooks-desk {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #7a4f24;
+  background:
+    radial-gradient(circle at 18% -12%, rgba(255, 236, 206, 0.44) 0%, transparent 36%),
+    radial-gradient(circle at 84% 108%, rgba(79, 48, 22, 0.28) 0%, transparent 44%),
+    repeating-linear-gradient(
+      8deg,
+      rgba(150, 102, 56, 0.32) 0 2px,
+      rgba(122, 79, 41, 0.32) 2px 6px,
+      rgba(170, 120, 68, 0.28) 6px 10px
+    ),
+    linear-gradient(180deg, #cc9357 0%, #aa6f3c 58%, #8e592f 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    inset 0 -30px 36px rgba(74, 45, 21, 0.34),
+    0 12px 18px -14px rgba(57, 36, 17, 0.84);
+}
+
+.folder-playbooks-desk::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 11px;
+  border-bottom: 1px solid rgba(92, 57, 27, 0.44);
+  background:
+    linear-gradient(180deg, rgba(255, 226, 185, 0.66), rgba(255, 206, 145, 0.18)),
+    linear-gradient(90deg, rgba(255, 248, 230, 0.24), rgba(255, 255, 255, 0) 60%);
+  pointer-events: none;
+}
+
+.folder-playbooks-desk::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 14px;
+  border-top: 1px solid rgba(76, 48, 23, 0.6);
+  background:
+    linear-gradient(180deg, rgba(98, 61, 31, 0.86), rgba(62, 37, 19, 0.95)),
+    repeating-linear-gradient(
+      90deg,
+      rgba(151, 103, 56, 0.24) 0 2px,
+      rgba(95, 58, 31, 0.24) 2px 6px
+    );
+  box-shadow: 0 -2px 4px rgba(50, 30, 15, 0.24);
+  pointer-events: none;
+}
+
+.folder-playbooks-desk > * {
+  position: relative;
+  z-index: 1;
+}
+
+.folder-playbooks-desk-layout {
+  margin-top: 0.36rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.52rem;
+  align-items: start;
+}
+
+.folder-playbooks-desk-layout[data-has-open='true'] {
+  grid-template-columns: minmax(8.2rem, 0.58fr) minmax(0, 1fr);
+}
+
+.folder-playbooks-desk-surface {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 0.54rem 0.44rem 0.5rem;
+  background: transparent;
+  box-shadow: none;
+}
+
+.folder-playbooks-desk-surface::before {
+  content: none;
+}
+
+.folder-playbooks-desk-stamp {
+  position: absolute;
+  top: 0.24rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(118, 77, 39, 0.58);
+  border-radius: 9999px;
+  padding: 0.12rem 0.48rem;
+  font-size: 0.53rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #6a4a25;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.12)),
+    linear-gradient(180deg, #f7e1ba 0%, #e2bc83 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.58);
+  pointer-events: none;
+}
+
+.folder-playbooks-desk-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #4f3218;
+  text-shadow: 0 1px 1px rgba(255, 247, 235, 0.34);
+  padding-left: 0.1rem;
+}
+
+.folder-playbooks-desk-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.folder-playbooks-desk-accessories {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 0.26rem;
+  flex-shrink: 0;
+  pointer-events: none;
+  padding-right: 0.06rem;
+  transform: translateY(-0.16rem);
+  transform-origin: right top;
+}
+
+.folder-playbooks-desk-calculator {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  width: 1.58rem;
+  border: 1px solid rgba(86, 57, 31, 0.62);
+  border-radius: 5px;
+  padding: 0.12rem 0.12rem 0.14rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.12)),
+    linear-gradient(180deg, #f0dfbf 0%, #c79b60 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 4px 8px -8px rgba(57, 35, 18, 0.88);
+}
+
+.folder-playbooks-desk-calculator-screen {
+  display: block;
+  height: 0.28rem;
+  border: 1px solid rgba(82, 59, 33, 0.48);
+  border-radius: 2px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.54), rgba(255, 255, 255, 0.1)),
+    #cfdaa8;
+}
+
+.folder-playbooks-desk-calculator-keys {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.folder-playbooks-desk-calculator-key {
+  display: block;
+  height: 0.2rem;
+  border-radius: 2px;
+  border: 1px solid rgba(96, 66, 35, 0.45);
+  background: #f7eddc;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.folder-playbooks-desk-pen {
+  display: inline-block;
+  width: 1.58rem;
+  height: 0.18rem;
+  border-radius: 999px;
+  border: 1px solid rgba(83, 55, 31, 0.6);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.08)),
+    linear-gradient(180deg, #f6cb72 0%, #cf8428 100%);
+  box-shadow: 0 3px 6px -6px rgba(44, 25, 11, 0.86);
+  transform: translateY(-0.08rem) rotate(-22deg);
+}
+
+.folder-playbooks-desk-sticky {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.56rem;
+  height: 1.45rem;
+  border: 1px solid rgba(120, 96, 40, 0.5);
+  border-radius: 3px;
+  font-size: 0.4rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #75511d;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.08)),
+    #f4e57f;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.68),
+    0 4px 8px -8px rgba(60, 36, 16, 0.84);
+  transform: rotate(3deg);
+}
+
+.folder-playbooks-desk-sticky::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  top: -1px;
+  width: 0.36rem;
+  height: 0.36rem;
+  border-left: 1px solid rgba(181, 154, 86, 0.52);
+  border-bottom: 1px solid rgba(181, 154, 86, 0.52);
+  background: rgba(255, 246, 190, 0.88);
+  clip-path: polygon(100% 0, 0 0, 100% 100%);
+}
+
+.folder-playbooks-openbar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0.06rem 0.02rem 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.folder-playbooks-openbar-label {
+  margin: 0 0 0.2rem 0.12rem;
+  font-size: 0.55rem;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: #6a4a25;
+}
+
+.folder-playbooks-openbar-scroll {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.34rem;
+  max-height: min(50vh, 19.5rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0.04rem 0.06rem 0.12rem 0.02rem;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(136, 95, 54, 0.28) transparent;
+}
+
+.folder-playbooks-openbar-scroll::-webkit-scrollbar {
+  width: 7px;
+}
+
+.folder-playbooks-openbar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(136, 95, 54, 0.45);
+  border-radius: 9999px;
+}
+
+.folder-playbooks-openbar-chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0;
+  min-width: 0;
+  width: 100%;
+  border-radius: 8px 6px 8px 6px;
+  border: 1px solid rgba(177, 140, 77, 0.68);
+  padding: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(255, 255, 255, 0.08)),
+    linear-gradient(170deg, #f6e88f 0%, #edd76f 100%);
+  box-shadow:
+    0 8px 12px -12px rgba(72, 48, 21, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  transform: rotate(-1deg);
+}
+
+.folder-playbooks-openbar-chip::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 0.52rem;
+  height: 0.52rem;
+  border-left: 1px solid rgba(191, 162, 95, 0.66);
+  border-bottom: 1px solid rgba(191, 162, 95, 0.66);
+  background: rgba(255, 243, 173, 0.88);
+  clip-path: polygon(100% 0, 0 0, 100% 100%);
+  pointer-events: none;
+}
+
+.folder-playbooks-openbar-scroll > .folder-playbooks-openbar-chip:nth-child(even) {
+  transform: rotate(1deg);
+}
+
+.folder-playbooks-openbar-chip-main {
+  border-color: rgba(175, 132, 64, 0.8);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.56), rgba(255, 255, 255, 0.12)),
+    linear-gradient(170deg, #f9eea2 0%, #ebd168 100%);
+}
+
+.folder-playbooks-openbar-chip-secondary {
+  border-color: rgba(173, 142, 89, 0.72);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.1)),
+    linear-gradient(170deg, #f7e7a2 0%, #e6ce7b 100%);
+}
+
+.folder-playbooks-openbar-chip-focus {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 0.12rem;
+  min-width: 0;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 3.2rem;
+  border-radius: 7px;
+  padding: 0.3rem 1.35rem 0.36rem 0.34rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-align: left;
+  color: #58381c;
+  transition: background 0.2s ease;
+}
+
+.folder-playbooks-openbar-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #7b5426;
+}
+
+.folder-playbooks-openbar-chip-title {
+  display: -webkit-box;
+  min-width: 0;
+  width: 100%;
+  line-height: 1.15;
+  text-align: justify;
+  text-justify: inter-word;
+  word-break: break-word;
+  hyphens: auto;
+  overflow: hidden;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+
+.folder-playbooks-openbar-chip-focus:hover {
+  background: rgba(255, 255, 255, 0.26);
+}
+
+.folder-playbooks-openbar-chip-close {
+  position: absolute;
+  top: 0.17rem;
+  right: 0.14rem;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 9999px;
+  color: #6d4a22;
+  background: rgba(255, 255, 255, 0.52);
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.folder-playbooks-openbar-chip-close:hover {
+  background: rgba(246, 214, 150, 0.76);
+  color: #4f3519;
+}
+
+.folder-playbooks-desk-search {
+  position: relative;
+}
+
+.folder-playbooks-desk-search-input {
+  width: 100%;
+  height: 1.95rem;
+  border: 1px solid rgba(118, 82, 49, 0.52);
+  border-radius: 8px;
+  padding: 0 1.85rem 0 0.62rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #57361a;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.28)),
+    #f4e3c5;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -1px 0 rgba(151, 112, 75, 0.22);
+}
+
+.folder-playbooks-desk-search-input::placeholder {
+  color: #91693f;
+  font-weight: 500;
+}
+
+.folder-playbooks-desk-search-input:focus {
+  outline: none;
+  border-color: rgba(86, 59, 33, 0.72);
+  box-shadow:
+    0 0 0 2px rgba(255, 250, 241, 0.86),
+    0 0 0 4px rgba(205, 157, 96, 0.34);
+}
+
+.folder-playbooks-desk-search-clear {
+  position: absolute;
+  right: 0.34rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border: 1px solid rgba(132, 96, 60, 0.46);
+  border-radius: 9999px;
+  color: #6b4a27;
+  background: rgba(255, 244, 225, 0.82);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.folder-playbooks-desk-search-clear:hover {
+  border-color: rgba(112, 76, 43, 0.66);
+  background: rgba(255, 237, 206, 0.96);
+}
+
+.folder-playbooks-desk-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #c6b58c rgba(255, 255, 255, 0.08);
+}
+
+.folder-playbooks-desk-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.folder-playbooks-desk-scroll::-webkit-scrollbar-thumb {
+  background: #c6b58c;
+  border-radius: 9999px;
+}
+
+.folder-playbooks-desk-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.folder-playbooks-desk-empty {
+  border: 1px solid rgba(154, 125, 86, 0.55);
+  color: #f4ebd8;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.08)),
+    #6b573f;
+}
+
+.folder-playbooks-desk-card {
+  isolation: isolate;
+  overflow: visible;
+}
+
+.folder-playbooks-desk-card::before,
+.folder-playbooks-desk-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.folder-playbooks-desk-card::before {
+  z-index: -1;
+  border: 1px solid rgba(190, 155, 112, 0.72);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.18)),
+    linear-gradient(180deg, #f7ecd9 0%, #ebd8b8 100%);
+  transform: translate(2px, 2px) rotate(0.55deg);
+  box-shadow: 0 10px 14px -14px rgba(88, 61, 31, 0.78);
+}
+
+.folder-playbooks-desk-card::after {
+  z-index: -2;
+  border: 1px solid rgba(169, 138, 100, 0.64);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.12)),
+    linear-gradient(180deg, #f1dfbf 0%, #dcc29a 100%);
+  transform: translate(4px, 4px) rotate(-0.72deg);
+  box-shadow: 0 14px 16px -16px rgba(78, 53, 26, 0.72);
+}
+
+html.dark .folder-playbooks-desk {
+  border-color: #5e3f22;
+  background:
+    radial-gradient(circle at 18% -12%, rgba(255, 220, 176, 0.24) 0%, transparent 36%),
+    radial-gradient(circle at 84% 108%, rgba(19, 11, 5, 0.46) 0%, transparent 44%),
+    repeating-linear-gradient(
+      8deg,
+      rgba(82, 52, 28, 0.36) 0 2px,
+      rgba(66, 41, 22, 0.34) 2px 6px,
+      rgba(101, 63, 34, 0.34) 6px 10px
+    ),
+    linear-gradient(180deg, #6b4b2f 0%, #523621 58%, #392415 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -30px 36px rgba(0, 0, 0, 0.42),
+    0 12px 18px -14px rgba(0, 0, 0, 0.84);
+}
+
+html.dark .folder-playbooks-desk::before {
+  border-bottom-color: rgba(34, 20, 9, 0.52);
+  background:
+    linear-gradient(180deg, rgba(201, 164, 111, 0.42), rgba(180, 138, 84, 0.1)),
+    linear-gradient(90deg, rgba(255, 251, 235, 0.14), rgba(255, 255, 255, 0) 60%);
+}
+
+html.dark .folder-playbooks-desk::after {
+  border-top-color: rgba(28, 17, 8, 0.72);
+  background:
+    linear-gradient(180deg, rgba(62, 38, 20, 0.92), rgba(34, 20, 10, 0.98)),
+    repeating-linear-gradient(
+      90deg,
+      rgba(122, 84, 46, 0.24) 0 2px,
+      rgba(68, 41, 22, 0.24) 2px 6px
+    );
+  box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.35);
+}
+
+html.dark .folder-playbooks-desk-surface {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+html.dark .folder-playbooks-desk-surface::before {
+  content: none;
+}
+
+html.dark .folder-playbooks-desk-stamp {
+  border-color: rgba(178, 136, 77, 0.58);
+  color: #ebd4af;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.03)),
+    linear-gradient(180deg, #6f5231 0%, #5a402a 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+html.dark .folder-playbooks-desk-path {
+  color: #f2dec0;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.48);
+}
+
+html.dark .folder-playbooks-desk-calculator {
+  border-color: rgba(147, 113, 75, 0.66);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.03)),
+    linear-gradient(180deg, #7b5a39 0%, #624327 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 4px 8px -8px rgba(0, 0, 0, 0.82);
+}
+
+html.dark .folder-playbooks-desk-calculator-screen {
+  border-color: rgba(162, 132, 82, 0.54);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04)),
+    #6f7a55;
+}
+
+html.dark .folder-playbooks-desk-calculator-key {
+  border-color: rgba(146, 113, 74, 0.56);
+  background: #8c6a48;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+html.dark .folder-playbooks-desk-pen {
+  border-color: rgba(153, 118, 76, 0.66);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04)),
+    linear-gradient(180deg, #c89446 0%, #8f561f 100%);
+  box-shadow: 0 3px 6px -6px rgba(0, 0, 0, 0.8);
+}
+
+html.dark .folder-playbooks-desk-sticky {
+  border-color: rgba(155, 132, 73, 0.62);
+  color: #352404;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.04)),
+    #c6b947;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    0 4px 8px -8px rgba(0, 0, 0, 0.8);
+}
+
+html.dark .folder-playbooks-desk-sticky::after {
+  border-left-color: rgba(120, 101, 54, 0.66);
+  border-bottom-color: rgba(120, 101, 54, 0.66);
+  background: rgba(238, 229, 135, 0.84);
+}
+
+@media (max-width: 960px) {
+  .folder-playbooks-desk-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .folder-playbooks-desk-layout[data-has-open='true'] {
+    grid-template-columns: minmax(8rem, 0.62fr) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .folder-playbooks-desk-layout[data-has-open='true'] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .folder-playbooks-desk-accessories {
+    transform: translateY(-0.14rem) scale(0.92);
+    transform-origin: right top;
+  }
+}
+
+html.dark .folder-playbooks-openbar {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+html.dark .folder-playbooks-openbar-label {
+  color: #e9d3b0;
+}
+
+html.dark .folder-playbooks-openbar-scroll {
+  scrollbar-color: rgba(233, 200, 152, 0.3) transparent;
+}
+
+html.dark .folder-playbooks-openbar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(233, 200, 152, 0.42);
+}
+
+html.dark .folder-playbooks-openbar-chip {
+  border-color: rgba(170, 133, 78, 0.72);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04)),
+    linear-gradient(170deg, #6f5b2f 0%, #5e4d27 100%);
+}
+
+html.dark .folder-playbooks-openbar-chip-main {
+  border-color: rgba(196, 156, 88, 0.8);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.05)),
+    linear-gradient(170deg, #7f6731 0%, #6a5529 100%);
+}
+
+html.dark .folder-playbooks-openbar-chip-secondary {
+  border-color: rgba(171, 139, 90, 0.76);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04)),
+    linear-gradient(170deg, #705c31 0%, #5f4d29 100%);
+}
+
+html.dark .folder-playbooks-openbar-chip::before {
+  border-left-color: rgba(182, 150, 95, 0.7);
+  border-bottom-color: rgba(182, 150, 95, 0.7);
+  background: rgba(138, 118, 67, 0.82);
+}
+
+html.dark .folder-playbooks-openbar-chip-focus {
+  color: #f1dfc2;
+}
+
+html.dark .folder-playbooks-openbar-chip-focus:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+html.dark .folder-playbooks-openbar-chip-icon {
+  color: #f0d39b;
+}
+
+html.dark .folder-playbooks-openbar-chip-close {
+  color: #f0d7b2;
+  background: rgba(41, 28, 17, 0.42);
+}
+
+html.dark .folder-playbooks-openbar-chip-close:hover {
+  background: rgba(192, 150, 96, 0.38);
+  color: #fff2dc;
+}
+
+html.dark .folder-playbooks-desk-search-input {
+  border-color: rgba(159, 122, 79, 0.46);
+  color: #f2dfbf;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04)),
+    #5b432d;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+}
+
+html.dark .folder-playbooks-desk-search-input::placeholder {
+  color: #d2b086;
+}
+
+html.dark .folder-playbooks-desk-search-input:focus {
+  border-color: rgba(212, 174, 121, 0.72);
+  box-shadow:
+    0 0 0 2px rgba(34, 24, 15, 0.92),
+    0 0 0 4px rgba(188, 146, 92, 0.36);
+}
+
+html.dark .folder-playbooks-desk-search-clear {
+  border-color: rgba(167, 127, 82, 0.5);
+  color: #e6cda6;
+  background: rgba(89, 66, 43, 0.92);
+}
+
+html.dark .folder-playbooks-desk-search-clear:hover {
+  border-color: rgba(198, 154, 104, 0.68);
+  background: rgba(108, 81, 54, 0.96);
+}
+
+html.dark .folder-playbooks-desk-empty {
+  border-color: rgba(151, 118, 76, 0.58);
+  color: #efe3cc;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.04)),
+    #5c4a36;
+}
+
+html.dark .folder-playbooks-desk-scroll {
+  scrollbar-color: #d8c9a4 rgba(0, 0, 0, 0.18);
+}
+
+html.dark .folder-playbooks-desk-scroll::-webkit-scrollbar-thumb {
+  background: #d8c9a4;
+}
+
+html.dark .folder-playbooks-desk-scroll::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+html.dark .folder-playbooks-desk-card::before {
+  border-color: rgba(153, 120, 82, 0.72);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04)),
+    linear-gradient(180deg, #5e4a34 0%, #4d3b2b 100%);
+  box-shadow: 0 10px 14px -14px rgba(0, 0, 0, 0.72);
+}
+
+html.dark .folder-playbooks-desk-card::after {
+  border-color: rgba(129, 99, 67, 0.64);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02)),
+    linear-gradient(180deg, #4f3d2c 0%, #3f2f23 100%);
+  box-shadow: 0 14px 16px -16px rgba(0, 0, 0, 0.78);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playbook-folder-drawer,
+  .playbook-folder-drawer-panel,
+  .playbook-folder-drawer-tab {
+    transition-duration: 0.01ms;
+  }
+}
+
 .playbook-side-tabs-shell {
   position: relative;
+  min-height: 0;
 }
 
 .playbook-side-tabs-shell::before {
@@ -591,6 +1554,7 @@ html.dark textarea::placeholder {
 }
 
 .playbook-side-tabs-scroll {
+  min-height: 0;
   scrollbar-width: thin;
   scrollbar-color: #b08f60 transparent;
 }
@@ -644,9 +1608,14 @@ html.dark textarea::placeholder {
     left: 24px;
   }
 
+  .paper-playbook-date-note {
+    max-width: min(100%, 14rem);
+    font-size: 0.92rem;
+  }
+
   .paper-playbook-fold {
-    width: 34px;
-    height: 34px;
+    width: 42px;
+    height: 42px;
   }
 
   .paper-playbook-cover {
