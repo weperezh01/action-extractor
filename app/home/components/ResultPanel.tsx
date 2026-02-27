@@ -147,6 +147,7 @@ interface ResultPanelProps {
   memberMutationLoading?: boolean
   onAddMember?: (input: { email: string; role: 'editor' | 'viewer' }) => Promise<boolean>
   onRemoveMember?: (memberUserId: string) => Promise<boolean>
+  onOpenPlaybookReference?: (playbookIdentifier: string) => void
 }
 
 type PlaybookCloseStage = 'idle' | 'folding' | 'cover'
@@ -217,6 +218,40 @@ function getTaskStatusChipClassName(status: InteractiveTaskStatus) {
 
 function getTaskEventTypeLabel(eventType: InteractiveTaskEventType) {
   return TASK_EVENT_TYPE_OPTIONS.find((option) => option.value === eventType)?.label ?? 'Nota'
+}
+
+interface PlaybookReferenceToken {
+  start: number
+  end: number
+  id: string
+  label: string
+}
+
+const PLAYBOOK_REFERENCE_REGEX =
+  /\[\[\s*playbook:([^\]\|\s]+)(?:\|([^\]]+))?\s*\]\]|\[([^\]]+)\]\(\s*playbook:([^) \t\r\n]+)\s*\)|\bplaybook:([A-Za-z0-9][A-Za-z0-9._-]*)\b/gi
+
+function parsePlaybookReferenceTokens(text: unknown): PlaybookReferenceToken[] {
+  const tokens: PlaybookReferenceToken[] = []
+  if (typeof text !== 'string') return tokens
+  if (!text.trim()) return tokens
+
+  PLAYBOOK_REFERENCE_REGEX.lastIndex = 0
+  let match: RegExpExecArray | null = PLAYBOOK_REFERENCE_REGEX.exec(text)
+  while (match) {
+    const rawId = (match[1] ?? match[4] ?? match[5] ?? '').trim()
+    if (rawId) {
+      const rawLabel = (match[2] ?? match[3] ?? '').trim()
+      tokens.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        id: rawId,
+        label: rawLabel || `playbook:${rawId}`,
+      })
+    }
+    match = PLAYBOOK_REFERENCE_REGEX.exec(text)
+  }
+
+  return tokens
 }
 
 function formatTaskEventDate(isoDate: string) {
@@ -405,6 +440,7 @@ export function ResultPanel({
   memberMutationLoading = false,
   onAddMember,
   onRemoveMember,
+  onOpenPlaybookReference,
 }: ResultPanelProps) {
   const resolvedMode = normalizeExtractionMode(result.mode ?? extractionMode)
   const sourceUrl = (result.url ?? url).trim()
@@ -483,6 +519,7 @@ export function ResultPanel({
   const [taskMutationLoadingId, setTaskMutationLoadingId] = useState<string | null>(null)
   const [eventDraftContent, setEventDraftContent] = useState('')
   const [idCopied, setIdCopied] = useState(false)
+  const [playbookLinkCopied, setPlaybookLinkCopied] = useState(false)
   const [isAssigningFolder, setIsAssigningFolder] = useState(false)
   const [closeStage, setCloseStage] = useState<PlaybookCloseStage>('cover')
   const [coverMotion, setCoverMotion] = useState<PlaybookCoverMotion>(
@@ -1821,6 +1858,61 @@ export function ResultPanel({
     }
   }
 
+  const handleCopyPlaybookReference = async () => {
+    const extractionId = result.id?.trim()
+    if (!extractionId) return
+
+    try {
+      await navigator.clipboard.writeText(`playbook:${extractionId}`)
+      setPlaybookLinkCopied(true)
+      window.setTimeout(() => setPlaybookLinkCopied(false), 2200)
+    } catch {
+      setPlaybookLinkCopied(false)
+    }
+  }
+
+  const renderTextWithPlaybookReferences = (text: unknown) => {
+    const safeText = typeof text === 'string' ? text : text == null ? '' : String(text)
+    const tokens = parsePlaybookReferenceTokens(safeText)
+    if (tokens.length === 0) return safeText
+
+    const parts: Array<string | JSX.Element> = []
+    let cursor = 0
+
+    tokens.forEach((token, index) => {
+      if (token.start > cursor) {
+        parts.push(safeText.slice(cursor, token.start))
+      }
+
+      parts.push(
+        <span
+          key={`playbook-reference-${token.id}-${token.start}-${index}`}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            onOpenPlaybookReference?.(token.id)
+          }}
+          className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[0.86em] ${
+            onOpenPlaybookReference
+              ? 'cursor-pointer border-violet-300 bg-violet-50 text-violet-700 underline decoration-violet-500/70 underline-offset-2 transition-colors hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-900/25 dark:text-violet-200 dark:hover:bg-violet-900/40'
+              : 'border-slate-300 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
+          }`}
+          title={`Abrir playbook ${token.id}`}
+        >
+          {token.label}
+        </span>
+      )
+
+      cursor = token.end
+    })
+
+    if (cursor < safeText.length) {
+      parts.push(safeText.slice(cursor))
+    }
+
+    return parts
+  }
+
   const handleStartStructureEditing = () => {
     if (!canEditStructure) return
     setPhaseDrafts(normalizePlaybookPhases(result.phases))
@@ -2433,9 +2525,18 @@ export function ResultPanel({
           style={{ marginInline: '4.5%' }}
         >
           <div className="mb-3 flex items-center justify-between gap-2">
-            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-              {sourceSectionLabel}
-            </h2>
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                {sourceSectionLabel}
+              </h2>
+              <span
+                title={`Carpeta: ${coverFolderLabel}`}
+                className="inline-flex min-w-0 items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-200"
+              >
+                <Folder size={12} />
+                <span className="max-w-[220px] truncate">{coverFolderLabel}</span>
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               {result.id && onAssignFolder && canManageFolder && (
                 <label className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
@@ -2646,6 +2747,17 @@ export function ResultPanel({
                       >
                         <Copy size={12} />
                         {idCopied ? 'Copiado' : 'Copiar'}
+                      </button>
+                    )}
+                    {result.id && (
+                      <button
+                        type="button"
+                        onClick={handleCopyPlaybookReference}
+                        className="inline-flex h-7 items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2 text-[11px] font-semibold text-violet-700 transition-colors hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-900/25 dark:text-violet-200 dark:hover:bg-violet-900/40"
+                        aria-label="Copiar enlace interno de playbook"
+                      >
+                        <Link2 size={12} />
+                        {playbookLinkCopied ? 'Link copiado' : 'Link interno'}
                       </button>
                     )}
                     {result.id && canManageVisibility && (
@@ -3077,7 +3189,7 @@ export function ResultPanel({
             </div>
           ) : (
             <p className="text-lg font-medium text-slate-800 leading-relaxed dark:text-slate-100">
-              {result.objective}
+              {renderTextWithPlaybookReferences(result.objective)}
             </p>
           )}
         </div>
@@ -3329,6 +3441,11 @@ export function ResultPanel({
                           <ul className="space-y-3 md:ml-2 md:space-y-4 md:border-l-2 md:border-dashed md:border-slate-300 md:pl-4 md:dark:border-slate-700">
                             {flattenPhaseNodes(phase.id, phase.items).map((node, idx) => {
                               const itemText = node.text
+                              const normalizedItemText =
+                                typeof itemText === 'string' ? itemText : itemText == null ? '' : String(itemText)
+                              const itemDisplayText = normalizedItemText.trim()
+                                ? renderTextWithPlaybookReferences(normalizedItemText)
+                                : 'Subítem sin texto'
                               const subItemNumber = node.fullPath
                               const task =
                                 tasksByNodeId.get(node.nodeId) ??
@@ -3618,7 +3735,9 @@ export function ResultPanel({
                                             : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
                                         }`}
                                       >
-                                        <span className="text-slate-600 leading-relaxed text-sm dark:text-slate-300">{itemText}</span>
+                                        <span className="text-slate-600 leading-relaxed text-sm dark:text-slate-300">
+                                          {itemDisplayText}
+                                        </span>
                                       </button>
 
                                       {isTaskMutating && (
@@ -4488,6 +4607,14 @@ export function ResultPanel({
         const sheetEstadoExpanded = taskEstadoExpandedByTaskId[sheetTask.id] ?? false
         const sheetAddEvidenceExpanded = taskAddEvidenceExpandedByTaskId[sheetTask.id] ?? false
         const sheetNoteContent = noteDraftByTaskId[sheetTask.id] ?? ''
+        const sheetTaskDisplayText =
+          typeof sheetTask.itemText === 'string'
+            ? sheetTask.itemText.trim()
+              ? renderTextWithPlaybookReferences(sheetTask.itemText)
+              : 'Subítem sin texto'
+            : sheetTask.itemText == null
+              ? 'Subítem sin texto'
+              : renderTextWithPlaybookReferences(String(sheetTask.itemText))
 
         const TABS = [
           { key: 'gestion', label: 'Gestión' },
@@ -4510,7 +4637,7 @@ export function ResultPanel({
                     </span>
                   </p>
                   <p className="mt-0.5 line-clamp-2 text-sm font-semibold text-slate-800 dark:text-slate-100">
-                    {sheetTask.itemText}
+                    {sheetTaskDisplayText}
                   </p>
                 </div>
                 <button

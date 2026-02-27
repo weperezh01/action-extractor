@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import { deleteExtractionFolderTreeForUser } from '@/lib/db'
+import { isProtectedExtractionFolderIdForUser } from '@/lib/extraction-folders'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -18,6 +19,12 @@ export async function DELETE(
     const folderId = (context.params?.folderId ?? '').trim()
     if (!folderId) {
       return NextResponse.json({ error: 'folderId inválido.' }, { status: 400 })
+    }
+    if (isProtectedExtractionFolderIdForUser({ userId: user.id, id: folderId })) {
+      return NextResponse.json(
+        { error: 'Esta carpeta es del sistema y no se puede eliminar.' },
+        { status: 403 }
+      )
     }
 
     const deletedIds = await deleteExtractionFolderTreeForUser({

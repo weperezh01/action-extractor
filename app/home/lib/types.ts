@@ -66,6 +66,11 @@ export interface SharedExtractionItem extends HistoryItem {
   accessRole: Exclude<ExtractionAccessRole, 'owner'>
   ownerName: string | null
   ownerEmail: string | null
+  shareSource?: 'direct' | 'folder' | 'both'
+  sharedFolderContext?: {
+    rootFolderId: string | null
+    rootFolderName: string | null
+  } | null
 }
 
 export type InteractiveTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed'

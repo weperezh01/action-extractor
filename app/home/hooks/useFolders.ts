@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from 'react'
 import type { FolderColor, FolderItem } from '@/app/home/components/FolderDock'
+import { isSystemExtractionFolderId } from '@/lib/extraction-folders'
 
 const STORAGE_KEY = 'ae_folders'
 const FOLDER_REQUEST_TIMEOUT_MS = 10000
@@ -193,7 +194,7 @@ export function useFolders() {
 
   const deleteFolder = useCallback(
     (id: string) => {
-      if (!id || id === 'general') return
+      if (!id || isSystemExtractionFolderId(id)) return
 
       setFolders((prev) => {
         const toDelete = new Set<string>()

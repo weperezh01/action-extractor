@@ -77,5 +77,33 @@ describe('lib/playbook-tree', () => {
     expect(rows[0].positionPath).toBe('1.1')
     expect(countNodes(phases[0].items)).toBe(2)
   })
-})
 
+  it('tolera nodos legacy sin children en flatten y edición', () => {
+    const malformed = [{ id: 'legacy', text: 'Nodo legacy' }] as unknown as Parameters<typeof flattenPhaseNodes>[1]
+
+    const flat = flattenPhaseNodes(1, malformed)
+    expect(flat).toHaveLength(1)
+    expect(flat[0].fullPath).toBe('1.1')
+
+    const withChild = addChildNode(malformed, 'legacy', { id: 'child', text: 'Hijo', children: [] })
+    expect(withChild[0].children).toHaveLength(1)
+  })
+
+  it('normaliza nodos legacy con itemText y fallback para objetos sin texto', () => {
+    const phases = normalizePlaybookPhases([
+      {
+        id: 1,
+        title: 'Fase',
+        items: [
+          { id: 'n1', itemText: 'Desde itemText' },
+          { id: 'n2', children: [] },
+        ],
+      },
+    ])
+
+    expect(phases).toHaveLength(1)
+    expect(phases[0].items).toHaveLength(2)
+    expect(phases[0].items[0].text).toBe('Desde itemText')
+    expect(phases[0].items[1].text).toBe('Ítem 2')
+  })
+})

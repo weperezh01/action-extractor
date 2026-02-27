@@ -20,6 +20,12 @@ export interface FlattenedPlaybookNode {
   text: string
 }
 
+function getNodeChildren(node: unknown): PlaybookNode[] {
+  if (!node || typeof node !== 'object') return []
+  const children = (node as { children?: unknown }).children
+  return Array.isArray(children) ? (children as PlaybookNode[]) : []
+}
+
 function sanitizeNodeId(raw: unknown) {
   if (typeof raw !== 'string') return ''
   return raw.trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9:_-]/g, '')
@@ -64,9 +70,14 @@ function parseRawText(raw: unknown) {
   if (!raw || typeof raw !== 'object') return ''
   return (
     normalizeNodeText((raw as { text?: unknown }).text) ||
+    normalizeNodeText((raw as { itemText?: unknown }).itemText) ||
+    normalizeNodeText((raw as { item_text?: unknown }).item_text) ||
     normalizeNodeText((raw as { title?: unknown }).title) ||
     normalizeNodeText((raw as { item?: unknown }).item) ||
-    normalizeNodeText((raw as { label?: unknown }).label)
+    normalizeNodeText((raw as { label?: unknown }).label) ||
+    normalizeNodeText((raw as { content?: unknown }).content) ||
+    normalizeNodeText((raw as { description?: unknown }).description) ||
+    normalizeNodeText((raw as { name?: unknown }).name)
   )
 }
 
@@ -90,7 +101,9 @@ function normalizeNodes(input: {
       usedIds: input.usedIds,
     })
 
-    const normalizedText = text.trim() || (children.length > 0 ? `Ítem ${pathSegments.join('.')}` : '')
+    const isObjectNode = rawNode !== null && typeof rawNode === 'object'
+    const normalizedText =
+      text.trim() || (isObjectNode || children.length > 0 ? `Ítem ${pathSegments.join('.')}` : '')
     if (!normalizedText) continue
 
     const preferredId =
@@ -158,6 +171,7 @@ function flattenNodes(input: {
 
   for (let index = 0; index < input.nodes.length; index += 1) {
     const node = input.nodes[index]
+    const children = getNodeChildren(node)
     const pathSegments = [...input.pathPrefix, index + 1]
     const path = pathSegments.join('.')
     const fullPath = `${input.phaseId}.${path}`
@@ -172,10 +186,10 @@ function flattenNodes(input: {
     })
     order += 1
 
-    if (node.children.length > 0) {
+    if (children.length > 0) {
       const childRows = flattenNodes({
         phaseId: input.phaseId,
-        nodes: node.children,
+        nodes: children,
         parentNodeId: node.id,
         pathPrefix: pathSegments,
         depth: input.depth + 1,
@@ -220,10 +234,11 @@ export function flattenItemsAsText(items: PlaybookNode[]) {
   const walk = (nodes: PlaybookNode[], pathPrefix: number[]) => {
     for (let index = 0; index < nodes.length; index += 1) {
       const node = nodes[index]
+      const children = getNodeChildren(node)
       const path = [...pathPrefix, index + 1].join('.')
       rows.push(`${path} ${node.text}`)
-      if (node.children.length > 0) {
-        walk(node.children, [...pathPrefix, index + 1])
+      if (children.length > 0) {
+        walk(children, [...pathPrefix, index + 1])
       }
     }
   }
@@ -242,29 +257,31 @@ export function buildNewNode(label = 'Nuevo ítem'): PlaybookNode {
 
 export function updateNodeText(items: PlaybookNode[], nodeId: string, nextText: string): PlaybookNode[] {
   return items.map((node) => {
+    const children = getNodeChildren(node)
     if (node.id === nodeId) {
       return { ...node, text: nextText }
     }
-    if (node.children.length === 0) return node
+    if (children.length === 0) return node
     return {
       ...node,
-      children: updateNodeText(node.children, nodeId, nextText),
+      children: updateNodeText(children, nodeId, nextText),
     }
   })
 }
 
 export function addChildNode(items: PlaybookNode[], parentNodeId: string, node: PlaybookNode): PlaybookNode[] {
   return items.map((item) => {
+    const children = getNodeChildren(item)
     if (item.id === parentNodeId) {
       return {
         ...item,
-        children: [...item.children, node],
+        children: [...children, node],
       }
     }
-    if (item.children.length === 0) return item
+    if (children.length === 0) return item
     return {
       ...item,
-      children: addChildNode(item.children, parentNodeId, node),
+      children: addChildNode(children, parentNodeId, node),
     }
   })
 }
@@ -272,14 +289,15 @@ export function addChildNode(items: PlaybookNode[], parentNodeId: string, node: 
 export function addSiblingNode(items: PlaybookNode[], siblingNodeId: string, node: PlaybookNode): PlaybookNode[] {
   const next: PlaybookNode[] = []
   for (const item of items) {
+    const children = getNodeChildren(item)
     if (item.id === siblingNodeId) {
       next.push(item, node)
       continue
     }
-    if (item.children.length > 0) {
+    if (children.length > 0) {
       next.push({
         ...item,
-        children: addSiblingNode(item.children, siblingNodeId, node),
+        children: addSiblingNode(children, siblingNodeId, node),
       })
       continue
     }
@@ -293,20 +311,19 @@ export function deleteNode(items: PlaybookNode[], nodeId: string): PlaybookNode[
     .filter((item) => item.id !== nodeId)
     .map((item) => ({
       ...item,
-      children: deleteNode(item.children, nodeId),
+      children: deleteNode(getNodeChildren(item), nodeId),
     }))
 }
 
 export function findNode(items: PlaybookNode[], nodeId: string): PlaybookNode | null {
   for (const item of items) {
     if (item.id === nodeId) return item
-    const child = findNode(item.children, nodeId)
+    const child = findNode(getNodeChildren(item), nodeId)
     if (child) return child
   }
   return null
 }
 
 export function countNodes(items: PlaybookNode[]): number {
-  return items.reduce((total, item) => total + 1 + countNodes(item.children), 0)
+  return items.reduce((total, item) => total + 1 + countNodes(getNodeChildren(item)), 0)
 }
-

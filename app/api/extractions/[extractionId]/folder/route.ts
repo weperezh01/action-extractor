@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { findExtractionFolderByIdForUser, updateExtractionFolderForUser } from '@/lib/db'
+import {
+  ensureDefaultExtractionFoldersForUser,
+  findExtractionFolderByIdForUser,
+  updateExtractionFolderForUser,
+} from '@/lib/db'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -14,6 +18,7 @@ export async function PATCH(
     if (!user) {
       return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
+    await ensureDefaultExtractionFoldersForUser(user.id)
 
     const extractionId = (context.params?.extractionId ?? '').trim()
     if (!extractionId) {

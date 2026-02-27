@@ -2,10 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
   createExtractionFolderForUser,
+  ensureDefaultExtractionFoldersForUser,
   findExtractionFolderByIdForUser,
   listExtractionFoldersByUser,
   type DbExtractionFolder,
 } from '@/lib/db'
+import {
+  isProtectedExtractionFolderIdForUser,
+  resolveSystemExtractionFolderKey,
+  isSystemExtractionFolderId,
+} from '@/lib/extraction-folders'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -36,6 +42,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
 
+    await ensureDefaultExtractionFoldersForUser(user.id)
     const folders = await listExtractionFoldersByUser(user.id)
     return NextResponse.json({ folders: folders.map(mapFolder) })
   } catch (error: unknown) {
@@ -51,6 +58,7 @@ export async function POST(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
+    await ensureDefaultExtractionFoldersForUser(user.id)
 
     let body: unknown
     try {
@@ -63,6 +71,13 @@ export async function POST(req: NextRequest) {
       ? (body as { id: string }).id.trim()
       : ''
     const id = rawId || undefined
+
+    if (id && isSystemExtractionFolderId(id)) {
+      return NextResponse.json({ error: 'Ese id está reservado por el sistema.' }, { status: 400 })
+    }
+    if (id && isProtectedExtractionFolderIdForUser({ userId: user.id, id })) {
+      return NextResponse.json({ error: 'No se puede crear ni reemplazar una carpeta del sistema.' }, { status: 400 })
+    }
 
     const name = typeof (body as { name?: unknown }).name === 'string'
       ? (body as { name: string }).name.trim()
@@ -94,6 +109,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (parentId) {
+      const parentSystemKey = resolveSystemExtractionFolderKey(parentId)
+      if (parentSystemKey === 'shared-with-me') {
+        return NextResponse.json({ error: 'No se puede crear dentro de "Compartidos conmigo".' }, { status: 400 })
+      }
       const parent = await findExtractionFolderByIdForUser({ id: parentId, userId: user.id })
       if (!parent) {
         return NextResponse.json({ error: 'La carpeta padre no existe.' }, { status: 400 })

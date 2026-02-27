@@ -1,13 +1,22 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { BookOpen, Check, ChevronDown, ChevronRight, Plus, X } from 'lucide-react'
+import { BookOpen, Check, ChevronDown, ChevronRight, Plus, UserPlus, X } from 'lucide-react'
+import {
+  isSystemExtractionFolderId,
+  resolveSystemExtractionFolderKey,
+} from '@/lib/extraction-folders'
 
 export interface FolderItem {
   id: string
   name: string
   color: FolderColor
   parentId?: string | null
+  isShared?: boolean
+  ownerUserId?: string | null
+  ownerName?: string | null
+  ownerEmail?: string | null
+  rootSharedFolderId?: string | null
 }
 
 export interface FolderPlaybookItem {
@@ -16,6 +25,7 @@ export interface FolderPlaybookItem {
   title: string
   subtitle?: string | null
   createdAt?: string | null
+  source?: 'mine' | 'shared'
 }
 
 export interface OpenDeskPlaybookItem {
@@ -75,7 +85,8 @@ interface FolderDockProps {
   onFolderToggle: (id: string) => void
   onCreateFolder: (name: string, color: FolderColor, parentId?: string | null) => void
   onDeleteFolder: (id: string) => void
-  onSelectPlaybook?: (playbookId: string) => void
+  onManageFolderShare?: (folderId: string) => void
+  onSelectPlaybook?: (playbookId: string, source?: 'mine' | 'shared') => void
   onFocusOpenDeskPlaybook?: (playbookId: string) => void
   onCloseOpenDeskPlaybook?: (playbookId: string) => void
 }
@@ -267,6 +278,7 @@ export function FolderDock({
   onFolderToggle,
   onCreateFolder,
   onDeleteFolder,
+  onManageFolderShare,
   onSelectPlaybook,
   onFocusOpenDeskPlaybook,
   onCloseOpenDeskPlaybook,
@@ -336,6 +348,23 @@ export function FolderDock({
   }, [rootFolders])
 
   useEffect(() => {
+    const sharedWithMeRoot = folders.find(
+      (folder) => resolveSystemExtractionFolderKey(folder.id) === 'shared-with-me'
+    )
+    if (!sharedWithMeRoot) return
+
+    const hasSharedFolders = folders.some((folder) => folder.isShared === true)
+    if (!hasSharedFolders) return
+
+    setExpandedIds((previous) => {
+      if (previous.has(sharedWithMeRoot.id)) return previous
+      const next = new Set(previous)
+      next.add(sharedWithMeRoot.id)
+      return next
+    })
+  }, [folders])
+
+  useEffect(() => {
     if (activeFolderIds.length === 0) return
     setExpandedIds((previous) => {
       const next = new Set(previous)
@@ -400,21 +429,64 @@ export function FolderDock({
     })
   }
 
-  const selectedFolderId = activeFolderIds.length > 0
-    ? activeFolderIds[activeFolderIds.length - 1] ?? null
+  const requestDeleteFolder = (folder: FolderItem) => {
+    if (isSystemExtractionFolderId(folder.id) || folder.isShared) return
+
+    const childFolders = childrenByParent.get(folder.id) ?? []
+    const hasChildFolders = childFolders.length > 0
+    const ownPlaybookCount = folderCounts[folder.id] ?? 0
+
+    const messageLines = [`¿Eliminar la carpeta "${folder.name}"?`]
+    if (hasChildFolders) {
+      messageLines.push('También se eliminarán sus subcarpetas.')
+    }
+    if (ownPlaybookCount > 0) {
+      messageLines.push(
+        `Contiene ${ownPlaybookCount} playbook${ownPlaybookCount === 1 ? '' : 's'}.`
+      )
+    }
+    messageLines.push('Esta acción no se puede deshacer.')
+
+    const shouldDelete =
+      typeof window === 'undefined' ? true : window.confirm(messageLines.join('\n'))
+    if (!shouldDelete) return
+
+    onDeleteFolder(folder.id)
+  }
+
+  const selectedFolderIds = useMemo(
+    () => activeFolderIds.filter((id) => folderById.has(id)),
+    [activeFolderIds, folderById]
+  )
+  const selectedFolderId = selectedFolderIds.length > 0
+    ? selectedFolderIds[selectedFolderIds.length - 1] ?? null
     : null
   const selectedFolder = selectedFolderId ? folderById.get(selectedFolderId) ?? null : null
-  const playbooksInSelectedFolder = useMemo(
-    () => (selectedFolderId ? playbooks.filter((playbook) => playbook.folderId === selectedFolderId) : []),
-    [playbooks, selectedFolderId]
+  const selectedFolderSystemKey = resolveSystemExtractionFolderKey(selectedFolder?.id)
+  const canCreateInSelectedFolder = Boolean(
+    selectedFolder &&
+      !selectedFolder.isShared &&
+      selectedFolderSystemKey !== 'shared-with-me'
   )
-  const createTargetId = selectedFolder?.id ?? null
-  const createButtonLabel = selectedFolder ? `Nueva en ${selectedFolder.name}` : 'Nueva raíz'
+  const selectedFolderIdSet = useMemo(() => new Set(selectedFolderIds), [selectedFolderIds])
+  const hasDeskSelection = selectedFolderIds.length > 0
+  const playbooksInDeskSelection = useMemo(
+    () =>
+      hasDeskSelection
+        ? playbooks.filter(
+            (playbook) => playbook.folderId != null && selectedFolderIdSet.has(playbook.folderId)
+          )
+        : [],
+    [hasDeskSelection, playbooks, selectedFolderIdSet]
+  )
+  const createTargetId = canCreateInSelectedFolder && selectedFolder ? selectedFolder.id : null
+  const createButtonLabel =
+    canCreateInSelectedFolder && selectedFolder ? `Nueva en ${selectedFolder.name}` : 'Nueva raíz'
   const normalizedDeskSearch = useMemo(() => normalizeSearchText(deskSearch).trim(), [deskSearch])
-  const filteredPlaybooksInSelectedFolder = useMemo(() => {
-    if (normalizedDeskSearch.length === 0) return playbooksInSelectedFolder
+  const filteredPlaybooksInDeskSelection = useMemo(() => {
+    if (normalizedDeskSearch.length === 0) return playbooksInDeskSelection
 
-    return playbooksInSelectedFolder.filter((playbook) => {
+    return playbooksInDeskSelection.filter((playbook) => {
       const searchable = [
         playbook.id,
         playbook.folderId ?? '',
@@ -426,17 +498,29 @@ export function FolderDock({
 
       return normalizeSearchText(searchable).includes(normalizedDeskSearch)
     })
-  }, [normalizedDeskSearch, playbooksInSelectedFolder])
+  }, [normalizedDeskSearch, playbooksInDeskSelection])
+  const visiblePaperCount = hasDeskSelection ? filteredPlaybooksInDeskSelection.length : 0
+  const totalPaperCount = hasDeskSelection ? playbooksInDeskSelection.length : 0
+  const deskPaperCountLabel =
+    normalizedDeskSearch.length > 0
+      ? `${visiblePaperCount} de ${totalPaperCount} papeles`
+      : `${totalPaperCount} papeles`
+  const deskSelectionKey = useMemo(() => selectedFolderIds.join('|'), [selectedFolderIds])
 
   useEffect(() => {
     setDeskSearch('')
-  }, [selectedFolderId])
+  }, [deskSelectionKey])
 
-  const activeFolderPaths = activeFolderIds
+  const activeFolderPaths = selectedFolderIds
     .map((id) => (folderById.has(id) ? buildFolderPathLabel(id, folderById) : null))
     .filter((path): path is string => Boolean(path))
   const activeFoldersSummary = activeFolderPaths.join(' · ')
-  const selectedFolderPath = selectedFolder ? buildFolderPathLabel(selectedFolder.id, folderById) : null
+  const deskFolderPathLabel =
+    activeFolderPaths.length === 0
+      ? null
+      : activeFolderPaths.length === 1
+        ? activeFolderPaths[0] ?? null
+        : `${activeFolderPaths.length} carpetas seleccionadas`
   const openDeskPlaybookIds = useMemo(() => {
     const ids = new Set<string>()
     openDeskPlaybooks.forEach((playbook) => {
@@ -448,7 +532,7 @@ export function FolderDock({
   const activeBranchIds = useMemo(() => {
     const branchIds = new Set<string>()
 
-    activeFolderIds.forEach((id) => {
+    selectedFolderIds.forEach((id) => {
       const visited = new Set<string>()
       let cursorId: string | null = id
 
@@ -460,7 +544,7 @@ export function FolderDock({
     })
 
     return branchIds
-  }, [activeFolderIds, folderById])
+  }, [folderById, selectedFolderIds])
 
   const renderFolderNode = (folder: FolderItem, depth: number): ReactNode => {
     const children = childrenByParent.get(folder.id) ?? []
@@ -468,6 +552,7 @@ export function FolderDock({
     const isExpanded = expandedIds.has(folder.id)
     const isSelected = activeFolderIds.includes(folder.id)
     const isOnActiveBranch = activeBranchIds.has(folder.id)
+    const isSharedFolder = folder.isShared === true
     const meta = getColorMeta(folder.color)
     const count = folderCounts[folder.id] ?? 0
     const isRoot = depth === 0
@@ -500,6 +585,9 @@ export function FolderDock({
       ? 'bg-[#b89362] dark:bg-[#a2835e]'
       : 'bg-[#d7c4a6] dark:bg-[#61503d]'
     const isFolderOpenVisual = isSelected
+    const canManageShare = !isSharedFolder && !isSystemExtractionFolderId(folder.id) && Boolean(onManageFolderShare)
+    const canDelete = !isSharedFolder && !isSystemExtractionFolderId(folder.id)
+    const sharedByLabel = folder.ownerName?.trim() || folder.ownerEmail || 'otro usuario'
 
     return (
       <div key={folder.id} className="mt-1.5">
@@ -576,6 +664,14 @@ export function FolderDock({
                 </span>
               )}
               <span className="truncate">{folder.name}</span>
+              {isSharedFolder && (
+                <span
+                  title={`Compartida por ${sharedByLabel}`}
+                  className="inline-flex h-4 items-center rounded-full border border-sky-200 bg-sky-50 px-1.5 text-[9px] font-bold uppercase tracking-wide text-sky-700 dark:border-sky-700 dark:bg-sky-900/25 dark:text-sky-300"
+                >
+                  Compartida
+                </span>
+              )}
               {hasChildren && (
                 <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#eee0c6] px-1 text-[9px] font-bold text-[#7a5c37] dark:bg-[#5e4a32] dark:text-[#f0ddba]">
                   {children.length}
@@ -592,15 +688,31 @@ export function FolderDock({
               )}
             </button>
 
-            {folder.id !== 'general' && (
-              <button
-                type="button"
-                onClick={() => onDeleteFolder(folder.id)}
-                aria-label={`Eliminar carpeta ${folder.name}`}
-                className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-400 shadow-sm transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 group-hover:flex dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-500 dark:hover:border-rose-800 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
-              >
-                <X size={9} />
-              </button>
+            {(canManageShare || canDelete) && (
+              <div className="absolute -right-1 -top-1 z-20 hidden items-center gap-1 group-hover:flex">
+                {canManageShare && (
+                  <button
+                    type="button"
+                    onClick={() => onManageFolderShare?.(folder.id)}
+                    aria-label={`Compartir carpeta ${folder.name}`}
+                    title={`Compartir carpeta ${folder.name}`}
+                    className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-sky-200 bg-white text-sky-500 shadow-sm transition-colors hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600 dark:border-sky-800 dark:bg-zinc-900 dark:text-sky-400 dark:hover:border-sky-700 dark:hover:bg-sky-950/40 dark:hover:text-sky-300"
+                  >
+                    <UserPlus size={9} />
+                  </button>
+                )}
+
+                {canDelete && (
+                  <button
+                    type="button"
+                    onClick={() => requestDeleteFolder(folder)}
+                    aria-label={`Eliminar carpeta ${folder.name}`}
+                    className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-400 shadow-sm transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-500 dark:hover:border-rose-800 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
+                  >
+                    <X size={9} />
+                  </button>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -683,9 +795,10 @@ export function FolderDock({
               )}
             </div>
 
-            {selectedFolder && !isCreating && (
+            {hasDeskSelection && !isCreating && (
               <p className="mb-2 px-1 text-[10px] text-[#886d4b] dark:text-[#bda789]">
-                Destino actual: <span className="font-semibold">{selectedFolderPath}</span>
+                {selectedFolderIds.length > 1 ? 'Destinos activos:' : 'Destino actual:'}{' '}
+                <span className="font-semibold">{deskFolderPathLabel}</span>
               </p>
             )}
 
@@ -725,7 +838,9 @@ export function FolderDock({
             >
               {openDeskPlaybooks.length > 0 && (
                 <div className="folder-playbooks-openbar">
-                  <p className="folder-playbooks-openbar-label">Abiertos</p>
+                  <p className="folder-playbooks-openbar-label">
+                    Abiertos ({openDeskPlaybooks.length})
+                  </p>
                   <div className="folder-playbooks-openbar-scroll">
                     {openDeskPlaybooks.map((playbook) => (
                       <div
@@ -767,7 +882,7 @@ export function FolderDock({
               <div className="folder-playbooks-desk-surface">
                 <div className="folder-playbooks-desk-header">
                   <p className="folder-playbooks-desk-path truncate text-[11px] font-semibold">
-                    {selectedFolderPath ?? 'Selecciona una carpeta'}
+                    {deskFolderPathLabel ?? 'Selecciona una carpeta'}
                   </p>
                   <span className="folder-playbooks-desk-accessories" aria-hidden="true">
                     <span className="folder-playbooks-desk-calculator">
@@ -789,99 +904,119 @@ export function FolderDock({
                   </span>
                 </div>
 
-                <div className="folder-playbooks-desk-search mt-1.5">
-                  <input
-                    type="text"
-                    value={deskSearch}
-                    onChange={(e) => setDeskSearch(e.target.value)}
-                    placeholder="Buscar por titulo, ID o fecha"
-                    className="folder-playbooks-desk-search-input"
-                    aria-label="Buscar playbooks en la carpeta"
-                  />
-                  {deskSearch.trim().length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setDeskSearch('')}
-                      className="folder-playbooks-desk-search-clear"
-                      aria-label="Limpiar busqueda"
-                    >
-                      <X size={12} />
-                    </button>
-                  )}
-                </div>
-
-                <div className="folder-playbooks-desk-scroll mt-1.5 max-h-[50vh] overflow-y-auto pr-1">
-                  {!selectedFolder ? (
-                    <p className="folder-playbooks-desk-empty rounded-md px-2.5 py-2 text-xs">
-                      Selecciona una carpeta para ver sus playbooks.
-                    </p>
-                  ) : playbooksInSelectedFolder.length === 0 ? (
-                    <p className="folder-playbooks-desk-empty rounded-md px-2.5 py-2 text-xs">
-                      Esta carpeta aún no tiene playbooks.
-                    </p>
-                  ) : filteredPlaybooksInSelectedFolder.length === 0 ? (
-                    <p className="folder-playbooks-desk-empty rounded-md px-2.5 py-2 text-xs">
-                      No hay playbooks que coincidan con tu búsqueda.
-                    </p>
-                  ) : (
-                    <div className="relative pt-1">
-                      {filteredPlaybooksInSelectedFolder.map((playbook, index) => {
-                        const isActive = activePlaybookId != null && activePlaybookId === playbook.id
-                        const isOpenInDesk = openDeskPlaybookIds.has(playbook.id)
-                        const paperAngleClass = index % 2 === 0 ? '-rotate-[0.35deg]' : 'rotate-[0.35deg]'
-                        const paperDate = formatPaperDate(playbook.createdAt)
-                        const stackZIndex = isActive
-                          ? filteredPlaybooksInSelectedFolder.length + 20
-                          : index + 1
-                        return (
-                          <div
-                            key={playbook.id}
-                            className={`relative ${index === 0 ? '' : '-mt-3'}`}
-                            style={{ zIndex: stackZIndex }}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => onSelectPlaybook?.(playbook.id)}
-                              disabled={!onSelectPlaybook}
-                              title={playbook.title}
-                              className={`folder-playbooks-desk-card group relative w-full rounded-sm border text-left transition-all duration-200 ${
-                                isActive
-                                  ? 'rotate-0 border-[#c69d64] bg-[linear-gradient(180deg,#fff7e6_0%,#f5e2bd_100%)] px-3 pt-2.5 pb-4 shadow-[0_14px_22px_-18px_rgba(92,63,29,0.95)]'
-                                  : isOpenInDesk
-                                    ? `${paperAngleClass} border-[#cda66f] bg-[linear-gradient(180deg,#fff8e8_0%,#f4e4c5_100%)] px-2.5 pt-2 pb-3.5 shadow-[0_10px_18px_-14px_rgba(92,63,29,0.9)] ring-1 ring-[#efd3a7]/80 hover:rotate-0 hover:border-[#bc9156] hover:bg-[linear-gradient(180deg,#fff7e1_0%,#efdbb4_100%)]`
-                                  : `${paperAngleClass} border-[#d8c5a5] bg-[linear-gradient(180deg,#fffefb_0%,#f6ead3_100%)] px-2.5 pt-2 pb-3.5 shadow-[0_8px_16px_-16px_rgba(92,63,29,0.95)] hover:rotate-0 hover:border-[#c7aa7d] hover:bg-[linear-gradient(180deg,#fffdf7_0%,#f1dfbe_100%)]`
-                              } disabled:cursor-default dark:border-[#6b5740] dark:bg-[linear-gradient(180deg,#3c3024_0%,#34291f_100%)] dark:hover:border-[#82684a] dark:hover:bg-[linear-gradient(180deg,#443629_0%,#3b2d22_100%)]`}
-                            >
-                              <span className="pointer-events-none absolute inset-x-1 top-1 h-px bg-[#fff9ef] dark:bg-[#ead8bc]/25" />
-                              <span className="pointer-events-none absolute left-1.5 top-0.5 h-[2px] w-12 rounded-full bg-[#f3dfbb] dark:bg-[#9d7d53]/45" />
-                              <p className="line-clamp-2 text-[12px] font-semibold text-[#533c21] dark:text-[#ead7b9]">
-                                {playbook.title}
-                              </p>
-                              {playbook.subtitle && (
-                                <p className="mt-0.5 line-clamp-1 text-[10px] text-[#7a6140] dark:text-[#bda587]">
-                                  {playbook.subtitle}
-                                </p>
-                              )}
-                            <div className="mt-1 flex items-center justify-between gap-2 text-[9px] text-[#8a6b46] dark:text-[#b9a182]">
-                              <span className={`rounded-full border px-1.5 py-[1px] uppercase tracking-wide ${
-                                isOpenInDesk
-                                  ? 'border-[#c7a06a] bg-[#f4dfbc] text-[#684423] dark:border-[#9e7a4f] dark:bg-[#5a442e] dark:text-[#f0ddbf]'
-                                  : 'border-[#ddc9a8] bg-[#f9f0df] dark:border-[#6b5841] dark:bg-[#463729]'
-                              }`}>
-                                {isOpenInDesk ? 'Abierto' : 'Papel'}
-                              </span>
-                              {paperDate && <span>{paperDate}</span>}
-                            </div>
-                            </button>
-                          </div>
-                        )
-                      })}
+                {hasDeskSelection && (
+                  <>
+                    <div className="folder-playbooks-desk-search mt-1.5">
+                      <input
+                        type="text"
+                        value={deskSearch}
+                        onChange={(e) => setDeskSearch(e.target.value)}
+                        placeholder="Buscar por titulo, ID o fecha"
+                        className="folder-playbooks-desk-search-input"
+                        aria-label="Buscar playbooks en la carpeta"
+                      />
+                      {deskSearch.trim().length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setDeskSearch('')}
+                          className="folder-playbooks-desk-search-clear"
+                          aria-label="Limpiar busqueda"
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
                     </div>
-                  )}
-                </div>
+
+                    <p className="folder-playbooks-desk-count mt-1">
+                      {deskPaperCountLabel}
+                    </p>
+
+                    <div className="folder-playbooks-desk-scroll mt-1.5 max-h-[50vh] overflow-y-auto pr-1">
+                      {playbooksInDeskSelection.length === 0 ? (
+                        <p className="folder-playbooks-desk-empty rounded-md px-2.5 py-2 text-xs">
+                          Las carpetas seleccionadas aún no tienen playbooks.
+                        </p>
+                      ) : filteredPlaybooksInDeskSelection.length === 0 ? (
+                        <p className="folder-playbooks-desk-empty rounded-md px-2.5 py-2 text-xs">
+                          No hay playbooks que coincidan con tu búsqueda.
+                        </p>
+                      ) : (
+                        <div className="relative pt-1">
+                          {filteredPlaybooksInDeskSelection.map((playbook, index) => {
+                            const isActive = activePlaybookId != null && activePlaybookId === playbook.id
+                            const isOpenInDesk = openDeskPlaybookIds.has(playbook.id)
+                            const paperAngleClass = index % 2 === 0 ? '-rotate-[0.35deg]' : 'rotate-[0.35deg]'
+                            const paperDate = formatPaperDate(playbook.createdAt)
+                            const playbookFolderLabel = playbook.folderId
+                              ? buildFolderPathLabel(playbook.folderId, folderById)
+                              : 'Sin carpeta'
+                            const stackZIndex = isActive
+                              ? filteredPlaybooksInDeskSelection.length + 20
+                              : index + 1
+                            return (
+                              <div
+                                key={playbook.id}
+                                className={`relative ${index === 0 ? '' : '-mt-3'}`}
+                                style={{ zIndex: stackZIndex }}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => onSelectPlaybook?.(playbook.id, playbook.source)}
+                                  disabled={!onSelectPlaybook}
+                                  title={playbook.title}
+                                  className={`folder-playbooks-desk-card group relative w-full rounded-sm border text-left transition-all duration-200 ${
+                                    isActive
+                                      ? 'rotate-0 border-[#c69d64] bg-[linear-gradient(180deg,#fff7e6_0%,#f5e2bd_100%)] px-3 pt-2.5 pb-4 shadow-[0_14px_22px_-18px_rgba(92,63,29,0.95)]'
+                                      : isOpenInDesk
+                                        ? `${paperAngleClass} border-[#cda66f] bg-[linear-gradient(180deg,#fff8e8_0%,#f4e4c5_100%)] px-2.5 pt-2 pb-3.5 shadow-[0_10px_18px_-14px_rgba(92,63,29,0.9)] ring-1 ring-[#efd3a7]/80 hover:rotate-0 hover:border-[#bc9156] hover:bg-[linear-gradient(180deg,#fff7e1_0%,#efdbb4_100%)]`
+                                      : `${paperAngleClass} border-[#d8c5a5] bg-[linear-gradient(180deg,#fffefb_0%,#f6ead3_100%)] px-2.5 pt-2 pb-3.5 shadow-[0_8px_16px_-16px_rgba(92,63,29,0.95)] hover:rotate-0 hover:border-[#c7aa7d] hover:bg-[linear-gradient(180deg,#fffdf7_0%,#f1dfbe_100%)]`
+                                  } disabled:cursor-default dark:border-[#6b5740] dark:bg-[linear-gradient(180deg,#3c3024_0%,#34291f_100%)] dark:hover:border-[#82684a] dark:hover:bg-[linear-gradient(180deg,#443629_0%,#3b2d22_100%)]`}
+                                >
+                                  <span className="pointer-events-none absolute inset-x-1 top-1 h-px bg-[#fff9ef] dark:bg-[#ead8bc]/25" />
+                                  <span className="pointer-events-none absolute left-1.5 top-0.5 h-[2px] w-12 rounded-full bg-[#f3dfbb] dark:bg-[#9d7d53]/45" />
+                                  <p className="line-clamp-2 text-[12px] font-semibold text-[#533c21] dark:text-[#ead7b9]">
+                                    {playbook.title}
+                                  </p>
+                                  {playbook.subtitle && (
+                                    <p className="mt-0.5 line-clamp-1 text-[10px] text-[#7a6140] dark:text-[#bda587]">
+                                      {playbook.subtitle}
+                                    </p>
+                                  )}
+                                  <div className="mt-1 flex items-center justify-between gap-2 text-[9px] text-[#8a6b46] dark:text-[#b9a182]">
+                                    <div className="flex min-w-0 items-center gap-1.5">
+                                      <span className={`rounded-full border px-1.5 py-[1px] uppercase tracking-wide ${
+                                        isOpenInDesk
+                                          ? 'border-[#c7a06a] bg-[#f4dfbc] text-[#684423] dark:border-[#9e7a4f] dark:bg-[#5a442e] dark:text-[#f0ddbf]'
+                                          : 'border-[#ddc9a8] bg-[#f9f0df] dark:border-[#6b5841] dark:bg-[#463729]'
+                                      }`}>
+                                        {isOpenInDesk ? 'Abierto' : 'Papel'}
+                                      </span>
+                                      <span
+                                        title={`Carpeta: ${playbookFolderLabel}`}
+                                        className="max-w-[9.8rem] truncate rounded-full border border-[#d6c3a1] bg-[#f8ecd6] px-1.5 py-[1px] text-[9px] font-semibold text-[#6d5233] dark:border-[#6b5841] dark:bg-[#4a3a2c] dark:text-[#e1ccad]"
+                                      >
+                                        {playbookFolderLabel}
+                                      </span>
+                                    </div>
+                                    {paperDate && <span className="shrink-0">{paperDate}</span>}
+                                  </div>
+                                </button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
               </div>
 
             </div>
+            <span className="folder-playbooks-desk-bottom-accessories" aria-hidden="true">
+              <span className="folder-playbooks-desk-keyboard" />
+              <span className="folder-playbooks-desk-mouse" />
+            </span>
           </aside>
         </div>
       </div>

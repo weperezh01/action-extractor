@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import { createExtraction, findExtractionOrderNumberForUser } from '@/lib/db'
 import { normalizeExtractionMode } from '@/lib/extraction-modes'
+import { normalizePlaybookPhases } from '@/lib/playbook-tree'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -81,6 +82,7 @@ export async function POST(req: NextRequest) {
     const orderNumber =
       (await findExtractionOrderNumberForUser({ id: row.id, userId: user.id })) ?? 0
 
+    const normalizedPhases = normalizePlaybookPhases(safeParse(row.phases_json, emptyPhases))
     const result = {
       id: row.id,
       orderNumber,
@@ -93,7 +95,7 @@ export async function POST(req: NextRequest) {
       thumbnailUrl,
       mode,
       objective: '',
-      phases: safeParse(row.phases_json, emptyPhases),
+      phases: normalizedPhases.length > 0 ? normalizedPhases : emptyPhases,
       proTip: '',
       metadata: emptyMetadata,
       sourceType: 'manual' as const,

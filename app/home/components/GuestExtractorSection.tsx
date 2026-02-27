@@ -19,6 +19,7 @@ import {
 } from '@/lib/output-language'
 import { buildExtractionMarkdown } from '@/lib/export-content'
 import { detectSourceType } from '@/lib/source-detector'
+import { normalizePlaybookPhases } from '@/lib/playbook-tree'
 import { parseSseFrame } from '@/app/home/lib/utils'
 import type { ExtractResult, Phase, SourceType } from '@/app/home/lib/types'
 import type { UploadedFileState } from '@/app/home/components/ExtractionForm'
@@ -309,11 +310,15 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
           if (payload && typeof payload === 'object') {
             const resolvedMode = normalizeExtractionMode((payload as { mode?: unknown }).mode)
             const fromCache = (payload as { cached?: unknown }).cached === true
+            const normalizedPhases = normalizePlaybookPhases((payload as { phases?: unknown }).phases)
+            const objectiveRaw = (payload as { objective?: unknown }).objective
 
             const newResult: ExtractResult = {
               ...(payload as ExtractResult),
               // Unique per-extraction ID so task API routes can isolate guest tasks
               id: guestExtractionId,
+              objective: typeof objectiveRaw === 'string' ? objectiveRaw : '',
+              phases: normalizedPhases,
               mode: resolvedMode,
               shareVisibility: 'private',
             }
