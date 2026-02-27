@@ -26,6 +26,8 @@ export interface FolderPlaybookItem {
   subtitle?: string | null
   createdAt?: string | null
   source?: 'mine' | 'shared'
+  ownerName?: string | null
+  ownerEmail?: string | null
 }
 
 export interface OpenDeskPlaybookItem {
@@ -959,10 +961,17 @@ export function FolderDock({
                             const paperDate = formatPaperDate(playbook.createdAt)
                             const playbookFolderLabel = playbook.folderId
                               ? buildFolderPathLabel(playbook.folderId, folderById)
-                              : 'Sin carpeta'
+                              : 'General'
                             const stackZIndex = isActive
                               ? filteredPlaybooksInDeskSelection.length + 20
                               : index + 1
+                            const ownerSignature = (() => {
+                              const ownerName = playbook.ownerName?.trim()
+                              if (ownerName) return ownerName
+                              const ownerEmail = playbook.ownerEmail?.trim()
+                              if (ownerEmail) return ownerEmail
+                              return playbook.source === 'mine' ? 'Propietario' : 'Sin firma'
+                            })()
                             return (
                               <div
                                 key={playbook.id}
@@ -1010,6 +1019,12 @@ export function FolderDock({
                                     </div>
                                     {paperDate && <span className="shrink-0">{paperDate}</span>}
                                   </div>
+                                  <p
+                                    title={`Dueño: ${ownerSignature}`}
+                                    className="folder-playbooks-desk-owner-signature"
+                                  >
+                                    {ownerSignature}
+                                  </p>
                                 </button>
                               </div>
                             )

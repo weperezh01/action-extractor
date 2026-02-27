@@ -5,6 +5,7 @@ import {
   findExtractionFolderByIdForUser,
   updateExtractionFolderForUser,
 } from '@/lib/db'
+import { buildSystemExtractionFolderIdForUser } from '@/lib/extraction-folders'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -44,8 +45,13 @@ export async function PATCH(
       return NextResponse.json({ error: 'folderId inválido.' }, { status: 400 })
     }
 
-    if (folderId) {
-      const folder = await findExtractionFolderByIdForUser({ id: folderId, userId: user.id })
+    const targetFolderId = folderId ?? buildSystemExtractionFolderIdForUser({
+      userId: user.id,
+      key: 'general',
+    })
+
+    if (targetFolderId) {
+      const folder = await findExtractionFolderByIdForUser({ id: targetFolderId, userId: user.id })
       if (!folder) {
         return NextResponse.json({ error: 'La carpeta seleccionada no existe.' }, { status: 400 })
       }
@@ -54,14 +60,14 @@ export async function PATCH(
     const updated = await updateExtractionFolderForUser({
       id: extractionId,
       userId: user.id,
-      folderId,
+      folderId: targetFolderId,
     })
 
     if (!updated) {
       return NextResponse.json({ error: 'No se encontró la extracción.' }, { status: 404 })
     }
 
-    return NextResponse.json({ folderId })
+    return NextResponse.json({ folderId: targetFolderId })
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Error interno.'
     console.error('[ActionExtractor] folder PATCH error:', message)

@@ -465,6 +465,7 @@ export async function POST(req: NextRequest) {
               cached: true,
               sourceType,
               sourceLabel: saved.source_label,
+              folderId: saved.folder_id,
             })
           } else {
             send('result', {
@@ -761,6 +762,7 @@ export async function POST(req: NextRequest) {
             cached: false,
             sourceType,
             sourceLabel: saved.source_label,
+            folderId: saved.folder_id,
           })
         } else {
           send('result', {

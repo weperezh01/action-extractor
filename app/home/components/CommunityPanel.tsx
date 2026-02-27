@@ -1,9 +1,11 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { type ChangeEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  ExternalLink,
   Globe,
   Heart,
+  ImagePlus,
   Link2,
   Lock,
   MessageCircle,
@@ -12,10 +14,26 @@ import {
   UserMinus,
   UserPlus,
   Users,
+  X,
 } from 'lucide-react'
 
 type CommunityFeedMode = 'home' | 'explore' | 'extraction'
 type CommunityPostVisibility = 'private' | 'circle' | 'followers' | 'public'
+type CommunityPostAttachmentType = 'link' | 'image' | 'audio' | 'video' | 'file'
+type CommunityPostAttachmentStorageProvider = 'external' | 'cloudinary'
+
+interface CommunityPostAttachmentItem {
+  id: string
+  attachmentType: CommunityPostAttachmentType
+  storageProvider: CommunityPostAttachmentStorageProvider
+  url: string
+  thumbnailUrl: string | null
+  title: string | null
+  mimeType: string | null
+  metadataJson: string
+  createdAt: string
+  updatedAt: string
+}
 
 interface CommunityPostItem {
   id: string
@@ -38,7 +56,27 @@ interface CommunityPostItem {
     email: string | null
     following: boolean
   }
+  attachments: CommunityPostAttachmentItem[]
   createdAt: string
+}
+
+interface ComposerImageAttachment {
+  storageProvider: CommunityPostAttachmentStorageProvider
+  url: string
+  thumbnailUrl: string | null
+  title: string | null
+  mimeType: string | null
+  metadata: Record<string, unknown>
+}
+
+interface ComposerAttachmentPayload {
+  attachmentType: CommunityPostAttachmentType
+  storageProvider: CommunityPostAttachmentStorageProvider
+  url: string
+  thumbnailUrl?: string | null
+  title?: string | null
+  mimeType?: string | null
+  metadata?: Record<string, unknown>
 }
 
 interface CommunityComment {
@@ -84,6 +122,28 @@ function visibilityLabel(value: CommunityPostVisibility) {
   return 'Público'
 }
 
+function normalizeExternalUrl(raw: string) {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  const value = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+  try {
+    const parsed = new URL(value)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    return parsed.toString()
+  } catch {
+    return null
+  }
+}
+
+function normalizeAttachments(raw: unknown): CommunityPostAttachmentItem[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter((item): item is CommunityPostAttachmentItem => {
+    if (!item || typeof item !== 'object') return false
+    const record = item as Record<string, unknown>
+    return typeof record.id === 'string' && typeof record.url === 'string'
+  })
+}
+
 export function CommunityPanel({
   currentExtractionId = null,
   onError,
@@ -96,6 +156,10 @@ export function CommunityPanel({
   const [postContent, setPostContent] = useState('')
   const [postVisibility, setPostVisibility] = useState<CommunityPostVisibility>('followers')
   const [linkCurrentExtraction, setLinkCurrentExtraction] = useState(true)
+  const [attachmentLinkUrl, setAttachmentLinkUrl] = useState('')
+  const [attachmentLinkTitle, setAttachmentLinkTitle] = useState('')
+  const [imageAttachment, setImageAttachment] = useState<ComposerImageAttachment | null>(null)
+  const [imageUploading, setImageUploading] = useState(false)
   const [postSubmitting, setPostSubmitting] = useState(false)
   const [commentsByPostId, setCommentsByPostId] = useState<Record<string, CommunityComment[]>>({})
   const [openCommentsByPostId, setOpenCommentsByPostId] = useState<Record<string, boolean>>({})
@@ -132,7 +196,12 @@ export function CommunityPanel({
         return
       }
 
-      const nextItems = Array.isArray(data?.items) ? (data?.items as CommunityPostItem[]) : []
+      const nextItems = Array.isArray(data?.items)
+        ? (data.items as CommunityPostItem[]).map((item) => ({
+            ...item,
+            attachments: normalizeAttachments((item as { attachments?: unknown }).attachments),
+          }))
+        : []
       setItems(nextItems)
     } catch {
       onError?.('Error de conexión cargando feed de comunidad.')
@@ -146,9 +215,92 @@ export function CommunityPanel({
     void loadFeed()
   }, [loadFeed])
 
+  const handleImageAttachmentChange = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      if (imageUploading) {
+        event.target.value = ''
+        return
+      }
+
+      const file = event.target.files?.[0]
+      event.target.value = ''
+      if (!file) return
+
+      setImageUploading(true)
+      try {
+        const formData = new FormData()
+        formData.set('file', file)
+
+        const res = await fetch('/api/community/uploads/image', {
+          method: 'POST',
+          body: formData,
+        })
+
+        const data = (await res.json().catch(() => null)) as
+          | {
+              attachment?: {
+                storageProvider?: unknown
+                url?: unknown
+                thumbnailUrl?: unknown
+                title?: unknown
+                mimeType?: unknown
+                metadata?: unknown
+              }
+              error?: unknown
+            }
+          | null
+
+        if (!res.ok) {
+          onError?.(parseErrorMessage(data, 'No se pudo subir la imagen.'))
+          return
+        }
+
+        const attachment = data?.attachment
+        const url = typeof attachment?.url === 'string' ? attachment.url.trim() : ''
+        if (!url) {
+          onError?.('La subida devolvió una imagen inválida.')
+          return
+        }
+
+        const metadata =
+          attachment?.metadata && typeof attachment.metadata === 'object' && !Array.isArray(attachment.metadata)
+            ? (attachment.metadata as Record<string, unknown>)
+            : {}
+
+        setImageAttachment({
+          storageProvider: attachment?.storageProvider === 'cloudinary' ? 'cloudinary' : 'external',
+          url,
+          thumbnailUrl:
+            typeof attachment?.thumbnailUrl === 'string' && attachment.thumbnailUrl.trim()
+              ? attachment.thumbnailUrl.trim()
+              : null,
+          title: typeof attachment?.title === 'string' && attachment.title.trim() ? attachment.title.trim() : null,
+          mimeType:
+            typeof attachment?.mimeType === 'string' && attachment.mimeType.trim()
+              ? attachment.mimeType.trim()
+              : null,
+          metadata,
+        })
+      } catch {
+        onError?.('Error de conexión subiendo imagen.')
+      } finally {
+        setImageUploading(false)
+      }
+    },
+    [imageUploading, onError]
+  )
+
   const handleCreatePost = useCallback(async () => {
     const content = postContent.trim()
     if (!content || postSubmitting) return
+
+    const normalizedLinkUrl = attachmentLinkUrl.trim()
+      ? normalizeExternalUrl(attachmentLinkUrl)
+      : null
+    if (attachmentLinkUrl.trim() && !normalizedLinkUrl) {
+      onError?.('El link del adjunto debe ser una URL válida (http o https).')
+      return
+    }
 
     setPostSubmitting(true)
     try {
@@ -158,6 +310,33 @@ export function CommunityPanel({
       }
       if (linkCurrentExtraction && currentExtractionId?.trim()) {
         body.extractionId = currentExtractionId.trim()
+      }
+
+      const attachments: ComposerAttachmentPayload[] = []
+      if (imageAttachment) {
+        attachments.push({
+          attachmentType: 'image',
+          storageProvider: imageAttachment.storageProvider,
+          url: imageAttachment.url,
+          thumbnailUrl: imageAttachment.thumbnailUrl,
+          title: imageAttachment.title,
+          mimeType: imageAttachment.mimeType,
+          metadata: imageAttachment.metadata,
+        })
+      }
+
+      if (normalizedLinkUrl) {
+        attachments.push({
+          attachmentType: 'link',
+          storageProvider: 'external',
+          url: normalizedLinkUrl,
+          title: attachmentLinkTitle.trim() ? attachmentLinkTitle.trim() : null,
+          metadata: {},
+        })
+      }
+
+      if (attachments.length > 0) {
+        body.attachments = attachments
       }
 
       const res = await fetch('/api/community/posts', {
@@ -176,16 +355,34 @@ export function CommunityPanel({
 
       const created = data?.post
       if (created) {
-        setItems((prev) => [created, ...prev.filter((item) => item.id !== created.id)])
+        const normalized = {
+          ...created,
+          attachments: normalizeAttachments((created as { attachments?: unknown }).attachments),
+        } satisfies CommunityPostItem
+        setItems((prev) => [normalized, ...prev.filter((item) => item.id !== created.id)])
       }
       setPostContent('')
+      setAttachmentLinkUrl('')
+      setAttachmentLinkTitle('')
+      setImageAttachment(null)
       onNotice?.('Post publicado en comunidad.')
     } catch {
       onError?.('Error de conexión al publicar el post.')
     } finally {
       setPostSubmitting(false)
     }
-  }, [currentExtractionId, linkCurrentExtraction, onError, onNotice, postContent, postSubmitting, postVisibility])
+  }, [
+    attachmentLinkTitle,
+    attachmentLinkUrl,
+    currentExtractionId,
+    imageAttachment,
+    linkCurrentExtraction,
+    onError,
+    onNotice,
+    postContent,
+    postSubmitting,
+    postVisibility,
+  ])
 
   const toggleReaction = useCallback(
     async (postId: string) => {
@@ -429,6 +626,59 @@ export function CommunityPanel({
           placeholder="Comparte qué avanzaste hoy, qué aprendiste o qué necesitas."
           className="min-h-[84px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-indigo-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
         />
+        <div className="mt-2 rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300">
+              <Link2 size={11} />
+              Link
+            </span>
+            <input
+              value={attachmentLinkUrl}
+              onChange={(event) => setAttachmentLinkUrl(event.target.value)}
+              placeholder="https://sitio.com/recurso"
+              className="h-8 min-w-[200px] flex-1 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            />
+            <input
+              value={attachmentLinkTitle}
+              onChange={(event) => setAttachmentLinkTitle(event.target.value)}
+              placeholder="Título del link (opcional)"
+              className="h-8 min-w-[170px] flex-1 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            />
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <label className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300 dark:hover:bg-slate-800">
+              <ImagePlus size={12} />
+              {imageUploading ? 'Subiendo imagen...' : imageAttachment ? 'Cambiar imagen' : 'Adjuntar imagen'}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                onChange={handleImageAttachmentChange}
+                disabled={imageUploading || postSubmitting}
+                className="hidden"
+              />
+            </label>
+            {imageAttachment && (
+              <button
+                type="button"
+                onClick={() => setImageAttachment(null)}
+                disabled={postSubmitting || imageUploading}
+                className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                <X size={11} />
+                Quitar imagen
+              </button>
+            )}
+          </div>
+          {imageAttachment && (
+            <div className="mt-2 overflow-hidden rounded-md border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50">
+              <img
+                src={imageAttachment.thumbnailUrl || imageAttachment.url}
+                alt={imageAttachment.title || 'Adjunto de imagen'}
+                className="max-h-52 w-full object-cover"
+              />
+            </div>
+          )}
+        </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <select
             value={postVisibility}
@@ -457,7 +707,7 @@ export function CommunityPanel({
           <button
             type="button"
             onClick={() => void handleCreatePost()}
-            disabled={postSubmitting || !postContent.trim()}
+            disabled={postSubmitting || imageUploading || !postContent.trim()}
             className="ml-auto inline-flex h-8 items-center gap-1 rounded-md bg-indigo-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:opacity-60"
           >
             <Send size={12} />
@@ -559,6 +809,53 @@ export function CommunityPanel({
                   <p className="mt-1 truncate text-[11px] text-slate-500 dark:text-slate-400">
                     Fuente: {post.source.label || `Extraction ${post.source.extractionId}`}
                   </p>
+                )}
+                {post.attachments.length > 0 && (
+                  <div className="mt-2 space-y-2">
+                    {post.attachments.map((attachment) => {
+                      if (attachment.attachmentType === 'image') {
+                        return (
+                          <a
+                            key={attachment.id}
+                            href={attachment.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block overflow-hidden rounded-md border border-slate-200 bg-white transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+                          >
+                            <img
+                              src={attachment.thumbnailUrl || attachment.url}
+                              alt={attachment.title || 'Adjunto de imagen'}
+                              className="max-h-64 w-full object-cover"
+                            />
+                            {attachment.title && (
+                              <p className="truncate px-2 py-1 text-[11px] text-slate-500 dark:text-slate-400">
+                                {attachment.title}
+                              </p>
+                            )}
+                          </a>
+                        )
+                      }
+
+                      const label = attachment.title?.trim() || attachment.url
+                      return (
+                        <a
+                          key={attachment.id}
+                          href={attachment.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+                        >
+                          <span className="inline-flex h-5 items-center gap-1 rounded-md bg-slate-100 px-1.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            <ExternalLink size={10} />
+                            {attachment.attachmentType === 'link' ? 'Link' : attachment.attachmentType}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-xs text-slate-600 dark:text-slate-300">
+                            {label}
+                          </span>
+                        </a>
+                      )
+                    })}
+                  </div>
                 )}
 
                 <div className="mt-2 flex items-center gap-2">

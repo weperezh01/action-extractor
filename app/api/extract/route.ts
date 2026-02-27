@@ -376,6 +376,7 @@ export async function POST(req: NextRequest) {
         cached: true,
         sourceType,
         sourceLabel: saved.source_label,
+        folderId: saved.folder_id,
       })
     }
 
@@ -568,6 +569,7 @@ export async function POST(req: NextRequest) {
       cached: false,
       sourceType,
       sourceLabel: saved.source_label,
+      folderId: saved.folder_id,
     })
   } catch (err: unknown) {
     console.error('[ActionExtractor] extract error:', err)

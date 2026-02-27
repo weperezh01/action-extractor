@@ -6,6 +6,7 @@ import Image from 'next/image'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
 import { getShareVisibilityLabel, isShareVisibilityShareable } from '@/app/home/lib/share-visibility'
 import { formatHistoryDate } from '@/app/home/lib/utils'
+import { resolveSystemExtractionFolderKey } from '@/lib/extraction-folders'
 import type { HistoryItem, SourceType } from '@/app/home/lib/types'
 
 function SourceIcon({ sourceType, size = 20 }: { sourceType: SourceType; size?: number }) {
@@ -122,14 +123,15 @@ export function HistoryPanel({
   onDeleteItem,
   onClearHistory,
 }: HistoryPanelProps) {
+  const generalFolderId = folders.find((folder) => resolveSystemExtractionFolderKey(folder.id) === 'general')?.id ?? null
   const hasHistory = history.length > 0
   const activeFolder = activeFolderIds.length === 1
     ? folders.find((f) => f.id === activeFolderIds[0]) ?? null
     : null
   const panelTitle = activeFolderIds.length === 0
-    ? 'Playbooks sueltos'
+    ? 'Historial'
     : activeFolderIds.length === 1
-      ? (activeFolder?.name ?? 'Playbooks sueltos')
+      ? (activeFolder?.name ?? 'General')
       : activeFolderIds
           .map((id) => folders.find((f) => f.id === id)?.name)
           .filter(Boolean)
@@ -384,13 +386,15 @@ export function HistoryPanel({
                           </p>
                           <button
                             type="button"
-                            onClick={() => { onAssignFolder(item.id, null); setFolderPickerItemId(null) }}
-                            className={`flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-slate-50 dark:hover:bg-slate-800 ${!item.folderId ? 'text-slate-400' : 'text-slate-600 dark:text-slate-300'}`}
+                            onClick={() => { onAssignFolder(item.id, generalFolderId); setFolderPickerItemId(null) }}
+                            className={`flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-slate-50 dark:hover:bg-slate-800 ${
+                              item.folderId === generalFolderId ? 'text-slate-400' : 'text-slate-600 dark:text-slate-300'
+                            }`}
                           >
                             <span className="h-3 w-3 rounded-full border border-slate-300 dark:border-slate-600" />
-                            Sin carpeta
+                            General
                           </button>
-                          {folders.map(f => {
+                          {folders.filter((f) => f.id !== generalFolderId).map(f => {
                             const meta = FOLDER_COLORS.find(c => c.value === f.color)
                             const isSelected = item.folderId === f.id
                             return (

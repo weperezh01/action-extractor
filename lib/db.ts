@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { flattenPlaybookPhases, normalizePlaybookPhases } from '@/lib/playbook-tree'
 import {
+  buildSystemExtractionFolderIdForUser,
   isProtectedExtractionFolderIdForUser,
   listSystemExtractionFoldersForUser,
 } from '@/lib/extraction-folders'
@@ -106,6 +107,12 @@ export interface DbSharedExtraction {
   root_folder_name: string | null
 }
 
+export interface DbPublicExtraction {
+  extraction: DbExtraction
+  owner_name: string | null
+  owner_email: string | null
+}
+
 export interface DbVideoCache {
   video_id: string
   video_title: string | null
@@ -188,6 +195,19 @@ export type CommunityPostReactionType = 'like'
 export type CommunityPostAttachmentType = 'link' | 'image' | 'audio' | 'video' | 'file'
 export type CommunityPostAttachmentStorageProvider = 'external' | 'cloudinary'
 
+export interface DbCommunityPostAttachment {
+  id: string
+  attachment_type: CommunityPostAttachmentType
+  storage_provider: CommunityPostAttachmentStorageProvider
+  url: string
+  thumbnail_url: string | null
+  title: string | null
+  mime_type: string | null
+  metadata_json: string
+  created_at: string
+  updated_at: string
+}
+
 export interface DbCommunityPost {
   id: string
   user_id: string
@@ -204,6 +224,7 @@ export interface DbCommunityPost {
   views_count: number
   reacted_by_me: boolean
   following_author: boolean
+  attachments: DbCommunityPostAttachment[]
   created_at: string
   updated_at: string
 }
@@ -486,6 +507,11 @@ interface DbSharedExtractionRow extends DbExtractionRow {
   root_folder_name: string | null
 }
 
+interface DbPublicExtractionRow extends DbExtractionRow {
+  owner_name: string | null
+  owner_email: string | null
+}
+
 interface DbSharedExtractionFolderRow extends DbExtractionFolderRow {
   root_folder_id: string
   owner_user_id: string
@@ -661,6 +687,7 @@ interface DbCommunityPostRow {
   views_count: number | string
   reacted_by_me: boolean | null
   following_author: boolean | null
+  attachments_json: unknown
   created_at: Date | string
   updated_at: Date | string
 }
@@ -1766,6 +1793,17 @@ function normalizeAttachmentStorageProvider(value: unknown): ExtractionTaskAttac
   return value === 'cloudinary' ? 'cloudinary' : 'external'
 }
 
+function normalizeCommunityPostAttachmentType(value: unknown): CommunityPostAttachmentType {
+  if (value === 'image' || value === 'audio' || value === 'video' || value === 'file') return value
+  return 'link'
+}
+
+function normalizeCommunityPostAttachmentStorageProvider(
+  value: unknown
+): CommunityPostAttachmentStorageProvider {
+  return value === 'cloudinary' ? 'cloudinary' : 'external'
+}
+
 function mapExtractionTaskAttachmentRow(row: DbExtractionTaskAttachmentRow): DbExtractionTaskAttachment {
   return {
     id: row.id,
@@ -1803,6 +1841,53 @@ function mapExtractionTaskCommentRow(row: DbExtractionTaskCommentRow): DbExtract
   }
 }
 
+function parseCommunityPostAttachments(raw: unknown): DbCommunityPostAttachment[] {
+  let value = raw
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      value = []
+    }
+  }
+
+  if (!Array.isArray(value)) return []
+
+  const normalized: DbCommunityPostAttachment[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const record = item as Record<string, unknown>
+    const id = typeof record.id === 'string' ? record.id.trim() : ''
+    const url = typeof record.url === 'string' ? record.url.trim() : ''
+    if (!id || !url) continue
+
+    const createdAtRaw = record.created_at
+    const updatedAtRaw = record.updated_at
+
+    normalized.push({
+      id,
+      attachment_type: normalizeCommunityPostAttachmentType(record.attachment_type),
+      storage_provider: normalizeCommunityPostAttachmentStorageProvider(record.storage_provider),
+      url,
+      thumbnail_url:
+        typeof record.thumbnail_url === 'string' && record.thumbnail_url.trim()
+          ? record.thumbnail_url.trim()
+          : null,
+      title: typeof record.title === 'string' && record.title.trim() ? record.title.trim() : null,
+      mime_type:
+        typeof record.mime_type === 'string' && record.mime_type.trim() ? record.mime_type.trim() : null,
+      metadata_json:
+        typeof record.metadata_json === 'string' && record.metadata_json.trim() ? record.metadata_json : '{}',
+      created_at:
+        typeof createdAtRaw === 'string' && createdAtRaw.trim() ? createdAtRaw : toIso(new Date()),
+      updated_at:
+        typeof updatedAtRaw === 'string' && updatedAtRaw.trim() ? updatedAtRaw : toIso(new Date()),
+    })
+  }
+
+  return normalized
+}
+
 function mapCommunityPostRow(row: DbCommunityPostRow): DbCommunityPost {
   return {
     id: row.id,
@@ -1820,6 +1905,7 @@ function mapCommunityPostRow(row: DbCommunityPostRow): DbCommunityPost {
     views_count: parseDbInteger(row.views_count),
     reacted_by_me: row.reacted_by_me === true,
     following_author: row.following_author === true,
+    attachments: parseCommunityPostAttachments(row.attachments_json),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   }
@@ -1915,6 +2001,7 @@ const COMMUNITY_POST_SELECT_SQL = `
     COALESCE(cc.comments_count, 0)::int AS comments_count,
     COALESCE(vc.views_count, 0)::int AS views_count,
     COALESCE(rc.reacted_by_me, FALSE) AS reacted_by_me,
+    COALESCE(att.attachments_json, '[]'::json) AS attachments_json,
     EXISTS (
       SELECT 1
       FROM community_follows cf
@@ -1959,6 +2046,29 @@ const COMMUNITY_POST_SELECT_SQL = `
     FROM community_post_views
     GROUP BY post_id
   ) vc ON vc.post_id = p.id
+  LEFT JOIN LATERAL (
+    SELECT
+      COALESCE(
+        JSON_AGG(
+          JSON_BUILD_OBJECT(
+            'id', a.id,
+            'attachment_type', a.attachment_type,
+            'storage_provider', a.storage_provider,
+            'url', a.url,
+            'thumbnail_url', a.thumbnail_url,
+            'title', a.title,
+            'mime_type', a.mime_type,
+            'metadata_json', a.metadata_json,
+            'created_at', a.created_at,
+            'updated_at', a.updated_at
+          )
+          ORDER BY a.created_at ASC, a.id ASC
+        ),
+        '[]'::json
+      ) AS attachments_json
+    FROM community_post_attachments a
+    WHERE a.post_id = p.id
+  ) att ON TRUE
 `
 
 export async function ensureDbReady() {
@@ -2109,8 +2219,13 @@ export async function createExtraction(input: {
   sourceLabel?: string | null
 }) {
   await ensureDbReady()
+  await ensureDefaultExtractionFoldersForUser(input.userId)
   const id = randomUUID()
   const sourceType = input.sourceType ?? 'youtube'
+  const defaultFolderId = buildSystemExtractionFolderIdForUser({
+    userId: input.userId,
+    key: 'general',
+  })
   const { rows } = await pool.query<DbExtractionRow>(
     `
       INSERT INTO extractions (
@@ -2126,9 +2241,10 @@ export async function createExtraction(input: {
         pro_tip,
         metadata_json,
         source_type,
-        source_label
+        source_label,
+        folder_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING
         id,
         user_id,
@@ -2144,7 +2260,8 @@ export async function createExtraction(input: {
         share_visibility,
         created_at,
         source_type,
-        source_label
+        source_label,
+        folder_id
     `,
     [
       id,
@@ -2160,6 +2277,7 @@ export async function createExtraction(input: {
       input.metadataJson,
       sourceType,
       input.sourceLabel ?? null,
+      defaultFolderId,
     ]
   )
 
@@ -2216,6 +2334,27 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
     [userId, limit]
   )
   return rows.map(mapExtractionRow)
+}
+
+export async function assignUnfolderedExtractionsToGeneralForUser(userId: string) {
+  await ensureDbReady()
+  await ensureDefaultExtractionFoldersForUser(userId)
+
+  const generalFolderId = buildSystemExtractionFolderIdForUser({
+    userId,
+    key: 'general',
+  })
+
+  await pool.query(
+    `
+      UPDATE extractions
+      SET folder_id = $2
+      WHERE user_id = $1 AND folder_id IS NULL
+    `,
+    [userId, generalFolderId]
+  )
+
+  return generalFolderId
 }
 
 export async function listCircleExtractionsForMember(userId: string, limit = 30) {
@@ -2465,6 +2604,112 @@ export async function findExtractionById(id: string) {
     [id]
   )
   return rows[0] ? mapExtractionRow(rows[0]) : null
+}
+
+export async function findPublicExtractionById(id: string) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbPublicExtractionRow>(
+    `
+      SELECT
+        e.id,
+        e.user_id,
+        e.url,
+        e.video_id,
+        e.video_title,
+        e.thumbnail_url,
+        e.extraction_mode,
+        e.objective,
+        e.phases_json,
+        e.pro_tip,
+        e.metadata_json,
+        e.share_visibility,
+        e.created_at,
+        e.source_type,
+        e.source_label,
+        e.folder_id,
+        owner.name AS owner_name,
+        owner.email AS owner_email
+      FROM extractions e
+      INNER JOIN users owner ON owner.id = e.user_id
+      WHERE
+        e.id = $1
+        AND e.share_visibility = 'public'
+        AND owner.blocked_at IS NULL
+      LIMIT 1
+    `,
+    [id]
+  )
+
+  if (!rows[0]) return null
+  return {
+    extraction: mapExtractionRow(rows[0]),
+    owner_name: rows[0].owner_name ?? null,
+    owner_email: rows[0].owner_email ?? null,
+  } satisfies DbPublicExtraction
+}
+
+export async function listPublicExtractionsForSearch(input: { query: string; limit: number }) {
+  await ensureDbReady()
+  const normalizedQuery = input.query.trim()
+  const hasQuery = normalizedQuery.length > 0
+  const likeQuery = `%${normalizedQuery}%`
+  const startsWithQuery = `${normalizedQuery}%`
+  const limit = Number.isFinite(input.limit) ? Math.max(1, Math.min(60, Math.trunc(input.limit))) : 20
+
+  const { rows } = await pool.query<DbPublicExtractionRow>(
+    `
+      SELECT
+        e.id,
+        e.user_id,
+        e.url,
+        e.video_id,
+        e.video_title,
+        e.thumbnail_url,
+        e.extraction_mode,
+        e.objective,
+        e.phases_json,
+        e.pro_tip,
+        e.metadata_json,
+        e.share_visibility,
+        e.created_at,
+        e.source_type,
+        e.source_label,
+        e.folder_id,
+        owner.name AS owner_name,
+        owner.email AS owner_email
+      FROM extractions e
+      INNER JOIN users owner ON owner.id = e.user_id
+      WHERE
+        e.share_visibility = 'public'
+        AND owner.blocked_at IS NULL
+        AND (
+          NOT $1
+          OR COALESCE(e.video_title, '') ILIKE $2
+          OR COALESCE(e.source_label, '') ILIKE $2
+          OR COALESCE(e.objective, '') ILIKE $2
+          OR COALESCE(e.url, '') ILIKE $2
+          OR COALESCE(owner.name, '') ILIKE $2
+          OR COALESCE(owner.email, '') ILIKE $2
+        )
+      ORDER BY
+        CASE
+          WHEN $1 AND COALESCE(e.video_title, '') ILIKE $3 THEN 0
+          WHEN $1 AND COALESCE(e.source_label, '') ILIKE $3 THEN 1
+          WHEN $1 AND COALESCE(e.objective, '') ILIKE $3 THEN 2
+          ELSE 3
+        END ASC,
+        e.created_at DESC,
+        e.id DESC
+      LIMIT $4
+    `,
+    [hasQuery, likeQuery, startsWithQuery, limit]
+  )
+
+  return rows.map((row) => ({
+    extraction: mapExtractionRow(row),
+    owner_name: row.owner_name ?? null,
+    owner_email: row.owner_email ?? null,
+  })) satisfies DbPublicExtraction[]
 }
 
 export async function findExtractionAccessForUser(input: { id: string; userId: string }) {
@@ -3102,6 +3347,12 @@ export async function deleteExtractionFolderTreeForUser(input: { id: string; use
     return []
   }
 
+  await ensureDefaultExtractionFoldersForUser(input.userId)
+  const generalFolderId = buildSystemExtractionFolderIdForUser({
+    userId: input.userId,
+    key: 'general',
+  })
+
   const { rows } = await pool.query<{ id: string }>(
     `
       WITH RECURSIVE folder_tree AS (
@@ -3116,7 +3367,7 @@ export async function deleteExtractionFolderTreeForUser(input: { id: string; use
       ),
       detached_extractions AS (
         UPDATE extractions
-        SET folder_id = NULL
+        SET folder_id = $3
         WHERE user_id = $2 AND folder_id IN (SELECT id FROM folder_tree)
       ),
       deleted_folders AS (
@@ -3126,7 +3377,7 @@ export async function deleteExtractionFolderTreeForUser(input: { id: string; use
       )
       SELECT id FROM deleted_folders
     `,
-    [input.id, input.userId]
+    [input.id, input.userId, generalFolderId]
   )
 
   return rows.map((row) => row.id)
@@ -3138,6 +3389,13 @@ export async function updateExtractionFolderForUser(input: {
   folderId: string | null
 }): Promise<boolean> {
   await ensureDbReady()
+  await ensureDefaultExtractionFoldersForUser(input.userId)
+
+  const targetFolderId = input.folderId ?? buildSystemExtractionFolderIdForUser({
+    userId: input.userId,
+    key: 'general',
+  })
+
   const { rowCount } = await pool.query(
     `
       UPDATE extractions
@@ -3146,15 +3404,14 @@ export async function updateExtractionFolderForUser(input: {
         id = $2
         AND user_id = $3
         AND (
-          $1::text IS NULL
-          OR EXISTS (
+          EXISTS (
             SELECT 1
             FROM extraction_folders
             WHERE id = $1::text AND user_id = $3
           )
         )
     `,
-    [input.folderId, input.id, input.userId]
+    [targetFolderId, input.id, input.userId]
   )
   return (rowCount ?? 0) > 0
 }

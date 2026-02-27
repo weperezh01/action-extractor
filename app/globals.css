@@ -487,6 +487,20 @@ html.dark textarea::placeholder {
   color: rgba(29, 74, 138, 0.82);
 }
 
+.paper-playbook-owner-signature {
+  display: inline-block;
+  max-width: min(100%, 22rem);
+  font-family: 'Patrick Hand', 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive;
+  font-size: 1.05rem;
+  line-height: 1.1;
+  letter-spacing: 0.015em;
+  font-weight: 700;
+  color: rgba(31, 99, 200, 0.9);
+  text-align: right;
+  transform: rotate(-2deg);
+  text-shadow: 0.25px 0 rgba(19, 72, 150, 0.42);
+}
+
 .paper-playbook > * {
   position: relative;
   z-index: 1;
@@ -577,29 +591,43 @@ html.dark textarea::placeholder {
   color: #7f6647;
 }
 
+html.dark .paper-playbook-owner-signature {
+  color: rgba(123, 176, 255, 0.95);
+  text-shadow: 0.25px 0 rgba(152, 198, 255, 0.35);
+}
+
 .playbook-folder-drawer {
-  position: absolute;
-  inset-inline: 0;
-  top: 0;
-  z-index: 0;
-  transform: translateY(0);
-  will-change: transform;
-  transition: transform 0.92s cubic-bezier(0.22, 0.78, 0.24, 1);
+  --folder-drawer-max-height: min(76vh, 980px);
+  --folder-drawer-tab-height: 2.35rem;
+  position: relative;
+  z-index: 18;
+  padding-top: 1.45rem;
+  margin-bottom: 0.35rem;
 }
 
 .playbook-folder-drawer[data-open='true'] {
-  transform: translateY(-100%);
+  z-index: 22;
 }
 
 .playbook-folder-drawer-panel {
+  max-height: 0;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.36s ease;
+  overflow: hidden;
+  transform: translateY(-8px) scaleY(0.98);
+  transform-origin: top center;
+  will-change: max-height, opacity, transform;
+  transition:
+    max-height 0.72s cubic-bezier(0.22, 0.78, 0.24, 1),
+    opacity 0.32s ease,
+    transform 0.72s cubic-bezier(0.22, 0.78, 0.24, 1);
 }
 
 .playbook-folder-drawer[data-open='true'] .playbook-folder-drawer-panel {
+  max-height: var(--folder-drawer-max-height);
   opacity: 1;
   pointer-events: auto;
+  transform: translateY(0) scaleY(1);
 }
 
 .playbook-folder-drawer-tab {
@@ -622,7 +650,7 @@ html.dark textarea::placeholder {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 45%),
     linear-gradient(180deg, #f9ecd3 0%, #e8ca99 56%, #d8b078 100%);
-  transform: translate(-50%, -102%);
+  transform: translate(-50%, -58%);
   box-shadow:
     0 13px 20px -15px rgba(64, 42, 18, 0.9),
     0 6px 12px -8px rgba(64, 42, 18, 0.52),
@@ -881,22 +909,22 @@ html.dark .playbook-folder-drawer-tab-handle::after {
 .folder-playbooks-desk-accessories {
   display: inline-flex;
   align-items: flex-end;
-  gap: 0.26rem;
+  gap: 0.39rem;
   flex-shrink: 0;
   pointer-events: none;
-  padding-right: 0.06rem;
-  transform: translateY(-0.16rem);
+  padding-right: 0.09rem;
+  transform: translateY(-0.24rem);
   transform-origin: right top;
 }
 
 .folder-playbooks-desk-calculator {
   display: inline-flex;
   flex-direction: column;
-  gap: 0.1rem;
-  width: 1.58rem;
+  gap: 0.15rem;
+  width: 2.37rem;
   border: 1px solid rgba(86, 57, 31, 0.62);
-  border-radius: 5px;
-  padding: 0.12rem 0.12rem 0.14rem;
+  border-radius: 7.5px;
+  padding: 0.18rem 0.18rem 0.21rem;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.12)),
     linear-gradient(180deg, #f0dfbf 0%, #c79b60 100%);
@@ -907,9 +935,9 @@ html.dark .playbook-folder-drawer-tab-handle::after {
 
 .folder-playbooks-desk-calculator-screen {
   display: block;
-  height: 0.28rem;
+  height: 0.42rem;
   border: 1px solid rgba(82, 59, 33, 0.48);
-  border-radius: 2px;
+  border-radius: 3px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.54), rgba(255, 255, 255, 0.1)),
     #cfdaa8;
@@ -918,13 +946,13 @@ html.dark .playbook-folder-drawer-tab-handle::after {
 .folder-playbooks-desk-calculator-keys {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 2px;
+  gap: 3px;
 }
 
 .folder-playbooks-desk-calculator-key {
   display: block;
-  height: 0.2rem;
-  border-radius: 2px;
+  height: 0.3rem;
+  border-radius: 3px;
   border: 1px solid rgba(96, 66, 35, 0.45);
   background: #f7eddc;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
@@ -932,15 +960,15 @@ html.dark .playbook-folder-drawer-tab-handle::after {
 
 .folder-playbooks-desk-pen {
   display: inline-block;
-  width: 1.58rem;
-  height: 0.18rem;
+  width: 2.37rem;
+  height: 0.27rem;
   border-radius: 999px;
   border: 1px solid rgba(83, 55, 31, 0.6);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.08)),
     linear-gradient(180deg, #f6cb72 0%, #cf8428 100%);
   box-shadow: 0 3px 6px -6px rgba(44, 25, 11, 0.86);
-  transform: translateY(-0.08rem) rotate(-22deg);
+  transform: translateY(-0.12rem) rotate(-22deg);
 }
 
 .folder-playbooks-desk-sticky {
@@ -948,13 +976,13 @@ html.dark .playbook-folder-drawer-tab-handle::after {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.56rem;
-  height: 1.45rem;
+  width: 2.34rem;
+  height: 2.175rem;
   border: 1px solid rgba(120, 96, 40, 0.5);
-  border-radius: 3px;
-  font-size: 0.4rem;
+  border-radius: 4.5px;
+  font-size: 0.6rem;
   font-weight: 800;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: #75511d;
   background:
@@ -971,8 +999,8 @@ html.dark .playbook-folder-drawer-tab-handle::after {
   position: absolute;
   right: -1px;
   top: -1px;
-  width: 0.36rem;
-  height: 0.36rem;
+  width: 0.54rem;
+  height: 0.54rem;
   border-left: 1px solid rgba(181, 154, 86, 0.52);
   border-bottom: 1px solid rgba(181, 154, 86, 0.52);
   background: rgba(255, 246, 190, 0.88);
@@ -981,24 +1009,26 @@ html.dark .playbook-folder-drawer-tab-handle::after {
 
 .folder-playbooks-desk-bottom-accessories {
   position: absolute;
-  left: 5%;
+  left: 50%;
   bottom: 5%;
   z-index: 3;
   display: inline-flex;
   align-items: flex-end;
-  gap: 0.72rem;
+  gap: 1.08rem;
   pointer-events: none;
   opacity: 0.95;
+  transform: translateX(-50%);
+  transform-origin: center bottom;
   filter: drop-shadow(0 5px 6px rgba(53, 32, 16, 0.32));
 }
 
 .folder-playbooks-desk-keyboard {
   position: relative;
   display: inline-block;
-  width: 8.4rem;
-  height: 2.2rem;
+  width: 12.6rem;
+  height: 3.3rem;
   border: 1px solid rgba(92, 62, 34, 0.72);
-  border-radius: 4px;
+  border-radius: 6px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.14)),
     linear-gradient(180deg, #f4e0bf 0%, #d2ab74 62%, #b1804d 100%);
@@ -1011,22 +1041,22 @@ html.dark .playbook-folder-drawer-tab-handle::after {
 .folder-playbooks-desk-keyboard::before {
   content: '';
   position: absolute;
-  left: 0.36rem;
-  right: 0.36rem;
-  top: 0.3rem;
-  bottom: 0.48rem;
+  left: 0.54rem;
+  right: 0.54rem;
+  top: 0.45rem;
+  bottom: 0.72rem;
   border-radius: 2px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0)),
     repeating-linear-gradient(
       90deg,
-      rgba(111, 76, 43, 0.9) 0 0.28rem,
-      rgba(246, 231, 205, 0.86) 0.28rem 0.36rem
+      rgba(111, 76, 43, 0.9) 0 0.42rem,
+      rgba(246, 231, 205, 0.86) 0.42rem 0.54rem
     ),
     repeating-linear-gradient(
       180deg,
-      rgba(111, 76, 43, 0.9) 0 0.23rem,
-      rgba(246, 231, 205, 0.86) 0.23rem 0.31rem
+      rgba(111, 76, 43, 0.9) 0 0.345rem,
+      rgba(246, 231, 205, 0.86) 0.345rem 0.465rem
     );
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
@@ -1035,11 +1065,11 @@ html.dark .playbook-folder-drawer-tab-handle::after {
   content: '';
   position: absolute;
   left: 50%;
-  bottom: 0.16rem;
-  width: 2.95rem;
-  height: 0.24rem;
+  bottom: 0.24rem;
+  width: 4.425rem;
+  height: 0.36rem;
   transform: translateX(-50%);
-  border-radius: 3px;
+  border-radius: 4px;
   border: 1px solid rgba(88, 59, 31, 0.4);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.44), rgba(255, 255, 255, 0.08)),
@@ -1049,9 +1079,9 @@ html.dark .playbook-folder-drawer-tab-handle::after {
 .folder-playbooks-desk-mouse {
   position: relative;
   display: inline-block;
-  width: 1.14rem;
-  height: 1.55rem;
-  transform: translateX(0.16rem) rotate(-9deg);
+  width: 1.71rem;
+  height: 2.325rem;
+  transform: translateX(0.24rem) rotate(-9deg);
   transform-origin: center bottom;
   border: 1px solid rgba(93, 64, 38, 0.72);
   border-radius: 9999px;
@@ -1067,9 +1097,9 @@ html.dark .playbook-folder-drawer-tab-handle::after {
   content: '';
   position: absolute;
   left: 50%;
-  top: 0.22rem;
+  top: 0.33rem;
   width: 1px;
-  height: 0.6rem;
+  height: 0.9rem;
   transform: translateX(-50%);
   background: rgba(90, 61, 34, 0.62);
 }
@@ -1078,9 +1108,9 @@ html.dark .playbook-folder-drawer-tab-handle::after {
   content: '';
   position: absolute;
   left: 50%;
-  top: 0.29rem;
-  width: 0.18rem;
-  height: 0.18rem;
+  top: 0.435rem;
+  width: 0.27rem;
+  height: 0.27rem;
   transform: translateX(-50%);
   border-radius: 9999px;
   background: rgba(94, 63, 35, 0.78);
@@ -1344,6 +1374,25 @@ html.dark .playbook-folder-drawer-tab-handle::after {
   overflow: visible;
 }
 
+.folder-playbooks-desk-owner-signature {
+  margin-top: 0.2rem;
+  margin-right: 0.08rem;
+  margin-left: auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 0.82rem;
+  line-height: 1;
+  letter-spacing: 0.015em;
+  font-family: 'Patrick Hand', 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive;
+  font-weight: 700;
+  color: #1f63c8;
+  text-shadow: 0.25px 0 rgba(20, 71, 146, 0.45);
+  transform: rotate(-2.2deg);
+}
+
 .folder-playbooks-desk-card::before,
 .folder-playbooks-desk-card::after {
   content: '';
@@ -1502,13 +1551,13 @@ html.dark .folder-playbooks-desk-keyboard::before {
     linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0)),
     repeating-linear-gradient(
       90deg,
-      rgba(221, 190, 148, 0.88) 0 0.28rem,
-      rgba(72, 51, 30, 0.9) 0.28rem 0.36rem
+      rgba(221, 190, 148, 0.88) 0 0.42rem,
+      rgba(72, 51, 30, 0.9) 0.42rem 0.54rem
     ),
     repeating-linear-gradient(
       180deg,
-      rgba(221, 190, 148, 0.88) 0 0.23rem,
-      rgba(72, 51, 30, 0.9) 0.23rem 0.31rem
+      rgba(221, 190, 148, 0.88) 0 0.345rem,
+      rgba(72, 51, 30, 0.9) 0.345rem 0.465rem
     );
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
@@ -1559,10 +1608,10 @@ html.dark .folder-playbooks-desk-mouse::after {
   }
 
   .folder-playbooks-desk-bottom-accessories {
-    left: 5%;
+    left: 50%;
     bottom: 5%;
-    transform: scale(0.84);
-    transform-origin: left bottom;
+    transform: translateX(-50%) scale(0.84);
+    transform-origin: center bottom;
   }
 
   .folder-playbooks-desk-scroll {
@@ -1711,6 +1760,11 @@ html.dark .folder-playbooks-desk-card::after {
   box-shadow: 0 14px 16px -16px rgba(0, 0, 0, 0.78);
 }
 
+html.dark .folder-playbooks-desk-owner-signature {
+  color: #78b0ff;
+  text-shadow: 0.25px 0 rgba(146, 190, 255, 0.4);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .playbook-folder-drawer,
   .playbook-folder-drawer-panel,
@@ -1811,6 +1865,11 @@ html.dark .folder-playbooks-desk-card::after {
   .paper-playbook-date-note {
     max-width: min(100%, 14rem);
     font-size: 0.92rem;
+  }
+
+  .paper-playbook-owner-signature {
+    max-width: min(100%, 16rem);
+    font-size: 0.95rem;
   }
 
   .paper-playbook-fold {

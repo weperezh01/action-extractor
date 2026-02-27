@@ -38,6 +38,18 @@ function toClientPost(post: DbCommunityPost) {
       email: post.user_email,
       following: post.following_author,
     },
+    attachments: post.attachments.map((attachment) => ({
+      id: attachment.id,
+      attachmentType: attachment.attachment_type,
+      storageProvider: attachment.storage_provider,
+      url: attachment.url,
+      thumbnailUrl: attachment.thumbnail_url,
+      title: attachment.title,
+      mimeType: attachment.mime_type,
+      metadataJson: attachment.metadata_json,
+      createdAt: attachment.created_at,
+      updatedAt: attachment.updated_at,
+    })),
     createdAt: post.created_at,
     updatedAt: post.updated_at,
   }
@@ -72,4 +84,3 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'No se pudo cargar el feed Explore.' }, { status: 500 })
   }
 }
-

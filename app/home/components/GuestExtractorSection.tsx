@@ -164,7 +164,7 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
   const activeExtraction = activeIndex !== null ? (extractions[activeIndex] ?? null) : null
   if (activeExtraction) lastActiveRef.current = activeExtraction
   const displayExtraction = activeExtraction ?? lastActiveRef.current
-  const guestPlaybookFolderLabel = 'Playbooks sueltos'
+  const guestPlaybookFolderLabel = 'General'
 
   // extractor (form) visible ↔ result visible are mutually exclusive
   const showExtractor = activeIndex === null

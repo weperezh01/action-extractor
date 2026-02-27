@@ -473,7 +473,14 @@ export function ResultPanel({
   const coverFolderLabel =
     typeof bookFolderLabel === 'string' && bookFolderLabel.trim().length > 0
       ? bookFolderLabel.trim()
-      : 'Playbooks sueltos'
+      : 'General'
+  const playbookOwnerSignature = useMemo(() => {
+    const ownerName = result.ownerName?.trim()
+    if (ownerName) return ownerName
+    const ownerEmail = result.ownerEmail?.trim()
+    if (ownerEmail) return ownerEmail
+    return 'Propietario'
+  }, [result.ownerEmail, result.ownerName])
   const isShareableVisibility = isShareVisibilityShareable(shareVisibility)
   const isOwnerAccess = accessRole === 'owner'
   const canEditTaskContent = accessRole === 'owner' || accessRole === 'editor'
@@ -2548,7 +2555,6 @@ export function ResultPanel({
                     className="bg-transparent pr-1 outline-none"
                     aria-label="Asignar carpeta"
                   >
-                    <option value="">Playbooks sueltos</option>
                     {folders.map((folder) => (
                       <option key={folder.id} value={folder.id}>
                         {folder.name}
@@ -4566,6 +4572,15 @@ export function ResultPanel({
               &ldquo;{result.proTip}&rdquo;
             </p>
           </div>
+        </div>
+
+        <div className="mx-6 mb-5 mt-1 flex justify-end">
+          <p
+            title={`Dueño: ${playbookOwnerSignature}`}
+            className="paper-playbook-owner-signature"
+          >
+            {playbookOwnerSignature}
+          </p>
         </div>
 
       </div>

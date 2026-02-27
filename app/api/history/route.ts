@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
+  assignUnfolderedExtractionsToGeneralForUser,
   deleteExtractionByIdForUser,
   deleteExtractionsByUser,
   listExtractionsByUser,
@@ -25,6 +26,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
   }
 
+  const defaultGeneralFolderId = await assignUnfolderedExtractionsToGeneralForUser(user.id)
+
   const rows = await listExtractionsByUser(user.id, 50)
   const history = rows.map((row) => ({
     id: row.id,
@@ -47,7 +50,7 @@ export async function GET(req: NextRequest) {
     createdAt: row.created_at,
     sourceType: row.source_type ?? 'youtube',
     sourceLabel: row.source_label ?? null,
-    folderId: row.folder_id ?? null,
+    folderId: row.folder_id ?? defaultGeneralFolderId,
   }))
 
   return NextResponse.json({ history })

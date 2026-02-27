@@ -170,6 +170,9 @@ const SHARED_REQUEST_TIMEOUT_MS = 10000
 const SHARED_RESOURCES_BACKGROUND_REFRESH_MS = 30000
 const SHARED_RESOURCES_DRAWER_REFRESH_MS = 10000
 const SHARED_FOLDER_CLIENT_ID_PREFIX = 'ae-shared-folder'
+const COMMUNITY_DRAWER_SWIPE_THRESHOLD_PX = 56
+const COMMUNITY_DRAWER_EDGE_ACTIVATION_PX = 28
+const DESK_SIDE_TABS_MIN_WIDTH_PX = 1728
 
 function resolvePlaybookPhaseKey(playbookId: string | null | undefined) {
   const normalizedId = typeof playbookId === 'string' ? playbookId.trim() : ''
@@ -196,6 +199,11 @@ function normalizeSearchText(value: string | null | undefined) {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
+}
+
+function parseApiErrorMessage(payload: unknown, fallback: string) {
+  const message = (payload as { error?: unknown } | null)?.error
+  return typeof message === 'string' && message.trim() ? message : fallback
 }
 
 function normalizeSharedOwnerScope(value: string | null | undefined) {
@@ -251,6 +259,11 @@ type ResolvedDeskPlaybook =
       historyItem?: undefined
       sharedItem: SharedExtractionItem
     }
+
+interface PublicPlaybookDetailResponse {
+  item?: ExtractResult
+  error?: unknown
+}
 
 interface FolderShareMemberItem {
   folderId: string
@@ -368,7 +381,7 @@ function ActionExtractor() {
   const [folderShareMembersLoading, setFolderShareMembersLoading] = useState(false)
   const [folderShareMutationLoading, setFolderShareMutationLoading] = useState(false)
   const [folderShareEmailDraft, setFolderShareEmailDraft] = useState('')
-  const [sharedWithMeLoading, setSharedWithMeLoading] = useState(false)
+  const [, setSharedWithMeLoading] = useState(false)
   const [resultAccessRole, setResultAccessRole] = useState<ExtractionAccessRole>('owner')
   const [circleMembers, setCircleMembers] = useState<ExtractionMember[]>([])
   const [circleMembersLoading, setCircleMembersLoading] = useState(false)
@@ -384,12 +397,20 @@ function ActionExtractor() {
   const [activeFolderIds, setActiveFolderIds] = useState<string[]>([])
   const { folders, loadFolders, resetFolders, createFolder, deleteFolder } = useFolders()
   const [isFolderDockOpen, setIsFolderDockOpen] = useState(false)
+  const [isCommunityDrawerOpen, setIsCommunityDrawerOpen] = useState(false)
+  const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState(false)
   const [historyView, setHistoryView] = useState<'list' | 'feed'>('list')
   const [theme, setTheme] = useState<Theme>('light')
   const [reauthRequired, setReauthRequired] = useState(false)
   const extractorSectionRef = useRef<HTMLElement | null>(null)
   const resultAnchorRef = useRef<HTMLDivElement | null>(null)
   const historyAnchorRef = useRef<HTMLDivElement | null>(null)
+  const communityDrawerEdgeTouchStartXRef = useRef<number | null>(null)
+  const communityDrawerHandleGestureRef = useRef<{
+    startX: number
+    startOpen: boolean
+  } | null>(null)
+  const communityDrawerSuppressClickRef = useRef(false)
   const themeStorageKey = getThemeStorageKey()
   const normalizedFolderShareEmailDraft = folderShareEmailDraft.trim().toLowerCase()
   const isFolderShareEmailDraftValid =
@@ -915,7 +936,10 @@ function ActionExtractor() {
   }, [resetFolders, resetHistory, setAuthError, setAuthMode, setAuthNotice, setEmail, setUser, user])
 
   useEffect(() => {
-    if (!user) return
+    if (!user) {
+      setIsCommunityDrawerOpen(false)
+      return
+    }
     setReauthRequired(false)
   }, [user])
 
@@ -1025,6 +1049,86 @@ function ActionExtractor() {
   }, [closeFolderShareModal, folderShareTargetId])
 
   useEffect(() => {
+    const handleTouchStart = (event: TouchEvent) => {
+      if (isCommunityDrawerOpen) {
+        communityDrawerEdgeTouchStartXRef.current = null
+        return
+      }
+      const touch = event.touches[0]
+      if (!touch) {
+        communityDrawerEdgeTouchStartXRef.current = null
+        return
+      }
+      if (touch.clientX > COMMUNITY_DRAWER_EDGE_ACTIVATION_PX) {
+        communityDrawerEdgeTouchStartXRef.current = null
+        return
+      }
+      communityDrawerEdgeTouchStartXRef.current = touch.clientX
+    }
+
+    const handleTouchMove = (event: TouchEvent) => {
+      const startX = communityDrawerEdgeTouchStartXRef.current
+      if (startX === null) return
+      const touch = event.touches[0]
+      if (!touch) return
+      if (touch.clientX - startX >= COMMUNITY_DRAWER_SWIPE_THRESHOLD_PX) {
+        setIsCommunityDrawerOpen(true)
+        communityDrawerEdgeTouchStartXRef.current = null
+      }
+    }
+
+    const resetTouchTracking = () => {
+      communityDrawerEdgeTouchStartXRef.current = null
+    }
+
+    window.addEventListener('touchstart', handleTouchStart, { passive: true })
+    window.addEventListener('touchmove', handleTouchMove, { passive: true })
+    window.addEventListener('touchend', resetTouchTracking, { passive: true })
+    window.addEventListener('touchcancel', resetTouchTracking, { passive: true })
+
+    return () => {
+      window.removeEventListener('touchstart', handleTouchStart)
+      window.removeEventListener('touchmove', handleTouchMove)
+      window.removeEventListener('touchend', resetTouchTracking)
+      window.removeEventListener('touchcancel', resetTouchTracking)
+    }
+  }, [isCommunityDrawerOpen])
+
+  useEffect(() => {
+    if (!isCommunityDrawerOpen && !isHistoryDrawerOpen) return
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsCommunityDrawerOpen(false)
+        setIsHistoryDrawerOpen(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeydown)
+    return () => {
+      window.removeEventListener('keydown', handleKeydown)
+    }
+  }, [isCommunityDrawerOpen, isHistoryDrawerOpen])
+
+  useEffect(() => {
+    if (historyView === 'list') return
+    setIsHistoryDrawerOpen(false)
+  }, [historyView])
+
+  useEffect(() => {
+    const closeDrawerOnWideViewport = () => {
+      if (window.innerWidth >= DESK_SIDE_TABS_MIN_WIDTH_PX) {
+        setIsHistoryDrawerOpen(false)
+      }
+    }
+
+    closeDrawerOnWideViewport()
+    window.addEventListener('resize', closeDrawerOnWideViewport)
+    return () => {
+      window.removeEventListener('resize', closeDrawerOnWideViewport)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!shouldScrollToResult || isProcessing || !result) return
 
     const anchor = resultAnchorRef.current
@@ -1051,12 +1155,20 @@ function ActionExtractor() {
   }, [pendingStackedScrollPlaybookId, stackedResultIds])
 
   const handleScrollToHistory = useCallback(() => {
+    if (historyView === 'list') {
+      if (window.innerWidth < DESK_SIDE_TABS_MIN_WIDTH_PX) {
+        setIsHistoryDrawerOpen(true)
+      } else if (resultAnchorRef.current) {
+        slowScrollToElement(resultAnchorRef.current, 1200)
+      }
+      return
+    }
     const anchor = historyAnchorRef.current
     if (!anchor) return
     window.requestAnimationFrame(() => {
       slowScrollToElement(anchor, 1500)
     })
-  }, [])
+  }, [historyView])
 
   const handleScrollToExtractor = useCallback(() => {
     const anchor = extractorSectionRef.current
@@ -1845,7 +1957,9 @@ function ActionExtractor() {
           body: JSON.stringify({ folderId }),
         })
         if (res.status === 401) { handleUnauthorized(); return }
-        const data = (await res.json().catch(() => null)) as { error?: unknown } | null
+        const data = (await res.json().catch(() => null)) as
+          | { folderId?: unknown; error?: unknown }
+          | null
         if (!res.ok) {
           setError(
             typeof data?.error === 'string' && data.error.trim()
@@ -1854,11 +1968,17 @@ function ActionExtractor() {
           )
           return
         }
+        const persistedFolderId =
+          typeof data?.folderId === 'string' && data.folderId.trim()
+            ? data.folderId.trim()
+            : folderId
         setError(null)
         setHistory((prev) =>
-          prev.map((item) => (item.id === extractionId ? { ...item, folderId } : item))
+          prev.map((item) => (item.id === extractionId ? { ...item, folderId: persistedFolderId } : item))
         )
-        setResult((prev) => (prev && prev.id === extractionId ? { ...prev, folderId } : prev))
+        setResult((prev) =>
+          prev && prev.id === extractionId ? { ...prev, folderId: persistedFolderId } : prev
+        )
       } catch {
         setError('Error de conexión al asignar carpeta.')
       }
@@ -2169,8 +2289,10 @@ function ActionExtractor() {
       sourceType: item.sourceType,
       sourceLabel: item.sourceLabel ?? null,
       accessRole: 'owner',
+      ownerName: user?.name ?? null,
+      ownerEmail: user?.email ?? null,
     }
-  }, [])
+  }, [user?.email, user?.name])
 
   const mapSharedItemToResult = useCallback((item: SharedExtractionItem): ExtractResult => {
     const mode = normalizeExtractionMode(item.mode)
@@ -2239,6 +2361,48 @@ function ActionExtractor() {
     setStreamPreview('')
     setShouldScrollToResult(true)
   }
+
+  const openPublicPlaybookFromSearch = useCallback(async (playbookIdRaw: string) => {
+    const playbookId = playbookIdRaw.trim()
+    if (!playbookId) return
+
+    const res = await fetch(`/api/public-playbooks/${encodeURIComponent(playbookId)}`, {
+      cache: 'no-store',
+    })
+    const data = (await res.json().catch(() => null)) as PublicPlaybookDetailResponse | null
+    if (!res.ok) {
+      throw new Error(parseApiErrorMessage(data, 'No se pudo abrir el playbook público.'))
+    }
+
+    const item = data?.item
+    if (!item) {
+      throw new Error('Respuesta inesperada del servidor al abrir el playbook público.')
+    }
+
+    const mode = normalizeExtractionMode(item.mode)
+    const accessRole = item.accessRole === 'owner' || item.accessRole === 'editor' ? item.accessRole : 'viewer'
+    setUrl(item.url ?? '')
+    setUploadedFile(null)
+    setExtractionMode(mode)
+    setResult({
+      ...item,
+      mode,
+      objective: typeof item.objective === 'string' ? item.objective : '',
+      phases: normalizePlaybookPhases(item.phases),
+    })
+    setStackedResultIds([])
+    setPendingStackedScrollPlaybookId(null)
+    setResultAccessRole(accessRole)
+    setCircleMembers([])
+    setIsResultBookClosed(false)
+    setActivePhasesByPlaybookId({})
+    setError(null)
+    setShareCopied(false)
+    setShareVisibilityLoading(false)
+    setStreamStatus(null)
+    setStreamPreview('')
+    setShouldScrollToResult(true)
+  }, [])
 
   const resolveHistoryPlaybookByIdentifier = useCallback((identifierRaw: string): HistoryItem | null => {
     const identifier = identifierRaw.trim()
@@ -2596,6 +2760,8 @@ function ActionExtractor() {
         subtitle: item.url ?? item.sourceLabel ?? null,
         createdAt: item.createdAt,
         source: 'mine' as const,
+        ownerName: user?.name ?? null,
+        ownerEmail: user?.email ?? null,
       })),
       ...sharedWithMe.map((item) => ({
         id: item.id,
@@ -2604,9 +2770,11 @@ function ActionExtractor() {
         subtitle: item.url ?? item.sourceLabel ?? null,
         createdAt: item.createdAt,
         source: 'shared' as const,
+        ownerName: item.ownerName ?? null,
+        ownerEmail: item.ownerEmail ?? null,
       })),
     ],
-    [history, sharedWithMe]
+    [history, sharedWithMe, user?.email, user?.name]
   )
   const stackedDeskPlaybooks = useMemo(
     () =>
@@ -2654,8 +2822,8 @@ function ActionExtractor() {
   }, [folderShareTargetId, folders])
   const getFolderLabelById = useCallback(
     (folderId: string | null | undefined) => {
-      if (!folderId) return 'Playbooks sueltos'
-      return allFolders.find((folder) => folder.id === folderId)?.name ?? 'Playbooks sueltos'
+      if (!folderId) return 'General'
+      return allFolders.find((folder) => folder.id === folderId)?.name ?? 'General'
     },
     [allFolders]
   )
@@ -2737,6 +2905,81 @@ function ActionExtractor() {
   const openGlobalPlaybookHit = (hit: GlobalPlaybookSearchHit) => {
     openDeskPlaybookByIdentifier(hit.id, hit.source)
     setGlobalPlaybookQuery('')
+  }
+
+  const closeCommunityDrawer = useCallback(() => {
+    setIsCommunityDrawerOpen(false)
+  }, [])
+
+  const closeHistoryDrawer = useCallback(() => {
+    setIsHistoryDrawerOpen(false)
+  }, [])
+
+  const finishCommunityDrawerHandleGesture = useCallback((clientX: number) => {
+    const gesture = communityDrawerHandleGestureRef.current
+    if (!gesture) return
+
+    const deltaX = clientX - gesture.startX
+    if (Math.abs(deltaX) >= 8) {
+      communityDrawerSuppressClickRef.current = true
+    }
+
+    if (!gesture.startOpen && deltaX >= COMMUNITY_DRAWER_SWIPE_THRESHOLD_PX) {
+      setIsCommunityDrawerOpen(true)
+    } else if (gesture.startOpen && deltaX <= -COMMUNITY_DRAWER_SWIPE_THRESHOLD_PX) {
+      setIsCommunityDrawerOpen(false)
+    }
+
+    communityDrawerHandleGestureRef.current = null
+  }, [])
+
+  const handleCommunityDrawerHandlePointerDown = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return
+      event.currentTarget.setPointerCapture(event.pointerId)
+      communityDrawerHandleGestureRef.current = {
+        startX: event.clientX,
+        startOpen: isCommunityDrawerOpen,
+      }
+    },
+    [isCommunityDrawerOpen]
+  )
+
+  const handleCommunityDrawerHandlePointerUp = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+      finishCommunityDrawerHandleGesture(event.clientX)
+    },
+    [finishCommunityDrawerHandleGesture]
+  )
+
+  const handleCommunityDrawerHandlePointerCancel = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+      communityDrawerHandleGestureRef.current = null
+    },
+    []
+  )
+
+  const toggleCommunityDrawer = useCallback(() => {
+    if (communityDrawerSuppressClickRef.current) {
+      communityDrawerSuppressClickRef.current = false
+      return
+    }
+    setIsCommunityDrawerOpen((previous) => !previous)
+  }, [])
+
+  const toggleHistoryDrawer = useCallback(() => {
+    setIsHistoryDrawerOpen((previous) => !previous)
+  }, [])
+
+  const handleSelectHistoryItemFromDrawer = (item: HistoryItem) => {
+    openHistoryItem(item)
+    setIsHistoryDrawerOpen(false)
   }
 
   return (
@@ -2885,6 +3128,155 @@ function ActionExtractor() {
           </div>
         ) : (
           <>
+            <div
+              className={`fixed bottom-4 left-0 top-[4.65rem] z-[45] w-[min(24rem,90vw)] transition-transform duration-300 ease-out md:top-[5.15rem] ${
+                isCommunityDrawerOpen
+                  ? 'pointer-events-auto translate-x-0'
+                  : 'pointer-events-none -translate-x-full md:translate-x-[calc(-100%+56px)]'
+              }`}
+            >
+              <div
+                id="community-drawer-panel"
+                className="h-full overflow-hidden rounded-r-2xl border border-slate-200 bg-white/95 shadow-2xl shadow-slate-950/20 backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/95"
+              >
+                <CommunityPanel
+                  currentExtractionId={result?.id ?? null}
+                  onError={setError}
+                  onNotice={setNotice}
+                  className="mt-0 h-full min-h-0 overflow-y-auto rounded-none border-0 bg-transparent p-3 shadow-none"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={toggleCommunityDrawer}
+                onPointerDown={handleCommunityDrawerHandlePointerDown}
+                onPointerUp={handleCommunityDrawerHandlePointerUp}
+                onPointerCancel={handleCommunityDrawerHandlePointerCancel}
+                className="pointer-events-auto absolute left-full top-1/2 z-10 -translate-y-1/2 rounded-r-2xl border border-l-0 border-slate-300 bg-white px-2 py-3 shadow-lg shadow-slate-900/15 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:hover:bg-slate-800"
+                aria-label={isCommunityDrawerOpen ? 'Ocultar comunidad' : 'Mostrar comunidad'}
+                aria-expanded={isCommunityDrawerOpen}
+                aria-controls="community-drawer-panel"
+              >
+                <span className="sr-only">Panel de comunidad</span>
+                <span className="flex h-2.5 w-4 items-center justify-between" aria-hidden="true">
+                  <span className="h-1.5 w-1.5 rounded-full bg-slate-500 dark:bg-slate-300" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-slate-500 dark:bg-slate-300" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-slate-500 dark:bg-slate-300" />
+                </span>
+                <span
+                  aria-hidden="true"
+                  className="mt-1 block text-[10px] font-extrabold uppercase tracking-[0.2em] text-slate-700 [writing-mode:vertical-rl] dark:text-slate-200"
+                >
+                  Comunidad
+                </span>
+              </button>
+            </div>
+
+            {isCommunityDrawerOpen && (
+              <button
+                type="button"
+                aria-label="Cerrar panel de comunidad"
+                onClick={closeCommunityDrawer}
+                className="fixed inset-0 z-[34] bg-slate-950/20 backdrop-blur-[1px]"
+              />
+            )}
+
+            {historyView === 'list' && history.length > 0 && (
+              <div
+                className={`fixed bottom-4 right-0 top-[4.65rem] z-[44] w-[min(26rem,92vw)] transition-transform duration-300 ease-out md:top-[5.15rem] min-[1728px]:hidden ${
+                  isHistoryDrawerOpen
+                    ? 'pointer-events-auto translate-x-0'
+                    : 'pointer-events-none translate-x-full md:translate-x-[calc(100%-56px)]'
+                }`}
+              >
+                <div
+                  id="history-drawer-panel"
+                  className="h-full overflow-hidden rounded-l-2xl border border-slate-200 bg-white/95 shadow-2xl shadow-slate-950/20 backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/95"
+                >
+                  <div className="h-full min-h-0 overflow-y-auto p-3">
+                    <HistoryPanel
+                      history={history}
+                      filteredHistory={filteredHistoryForActiveFolders}
+                      historyLoading={historyLoading}
+                      folders={folders}
+                      activeFolderIds={activeFolderIds}
+                      onAssignFolder={handleAssignFolder}
+                      historyQuery={historyQuery}
+                      pdfExportLoading={isExportingPdf}
+                      historyShareLoadingItemId={historyShareLoadingItemId}
+                      historyShareCopiedItemId={historyShareCopiedItemId}
+                      notionConfigured={notionConfigured}
+                      notionConnected={notionConnected}
+                      notionLoading={notionLoading}
+                      notionExportLoading={notionExportLoading}
+                      trelloConfigured={trelloConfigured}
+                      trelloConnected={trelloConnected}
+                      trelloLoading={trelloLoading}
+                      trelloExportLoading={trelloExportLoading}
+                      todoistConfigured={todoistConfigured}
+                      todoistConnected={todoistConnected}
+                      todoistLoading={todoistLoading}
+                      todoistExportLoading={todoistExportLoading}
+                      googleDocsConfigured={googleDocsConfigured}
+                      googleDocsConnected={googleDocsConnected}
+                      googleDocsLoading={googleDocsLoading}
+                      googleDocsExportLoading={googleDocsExportLoading}
+                      deletingHistoryItemId={deletingHistoryItemId}
+                      clearingHistory={clearingHistory}
+                      onHistoryQueryChange={setHistoryQuery}
+                      onRefresh={() => void loadHistory()}
+                      onSelectItem={handleSelectHistoryItemFromDrawer}
+                      onDownloadPdf={(item) => handleDownloadPdf(item)}
+                      onCopyShareLink={handleCopyShareLinkFromHistory}
+                      onCopyMarkdown={handleCopyMarkdown}
+                      onExportToNotion={(item) => handleExportToNotion(item.id)}
+                      onConnectNotion={handleConnectNotion}
+                      onExportToTrello={(item) => handleExportToTrello(item.id)}
+                      onConnectTrello={handleConnectTrello}
+                      onExportToTodoist={(item) => handleExportToTodoist(item.id)}
+                      onConnectTodoist={handleConnectTodoist}
+                      onExportToGoogleDocs={(item) => handleExportToGoogleDocs(item.id)}
+                      onConnectGoogleDocs={handleConnectGoogleDocs}
+                      onDeleteItem={handleDeleteHistoryItem}
+                      onClearHistory={() => void handleClearHistory()}
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={toggleHistoryDrawer}
+                  className="pointer-events-auto absolute right-full top-1/2 z-10 -translate-y-1/2 rounded-l-2xl border border-r-0 border-slate-300 bg-white px-2 py-3 shadow-lg shadow-slate-900/15 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:hover:bg-slate-800"
+                  aria-label={isHistoryDrawerOpen ? 'Ocultar historial' : 'Mostrar historial'}
+                  aria-expanded={isHistoryDrawerOpen}
+                  aria-controls="history-drawer-panel"
+                >
+                  <span className="sr-only">Panel de historial</span>
+                  <span className="flex h-2.5 w-4 items-center justify-between" aria-hidden="true">
+                    <span className="h-1.5 w-1.5 rounded-full bg-slate-500 dark:bg-slate-300" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-slate-500 dark:bg-slate-300" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-slate-500 dark:bg-slate-300" />
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className="mt-1 block text-[10px] font-extrabold uppercase tracking-[0.2em] text-slate-700 [writing-mode:vertical-rl] dark:text-slate-200"
+                  >
+                    Historial
+                  </span>
+                </button>
+              </div>
+            )}
+
+            {isHistoryDrawerOpen && historyView === 'list' && (
+              <button
+                type="button"
+                aria-label="Cerrar panel de historial"
+                onClick={closeHistoryDrawer}
+                className="fixed inset-0 z-[33] bg-slate-950/20 backdrop-blur-[1px] min-[1728px]:hidden"
+              />
+            )}
+
             <section
               ref={extractorSectionRef}
               className="flex min-h-[calc(100svh-7rem)] flex-col justify-center"
@@ -2938,6 +3330,7 @@ function ActionExtractor() {
                       void loadHistory()
                     }}
                     onManualToggle={setIsManualFormOpen}
+                    onOpenPublicPlaybook={openPublicPlaybookFromSearch}
                   />
                 </div>
 
@@ -3399,7 +3792,7 @@ function ActionExtractor() {
                       <span aria-hidden="true" className="paper-playbook-fold" />
                       <div aria-hidden="true" className="paper-playbook-cover translate-y-0 opacity-100">
                         <p className="paper-playbook-cover-kicker">Carpeta activa</p>
-                        <p className="paper-playbook-cover-title">Playbooks sueltos</p>
+                        <p className="paper-playbook-cover-title">General</p>
                       </div>
                     </div>
                   </div>
@@ -3418,78 +3811,7 @@ function ActionExtractor() {
                   />
                 </div>
               )}
-
-              {historyView === 'list' && (
-                <div className="absolute top-0 bottom-6 right-[calc(100%+0.75rem)] left-[calc(50%-50vw+1rem)] hidden min-[1728px]:block">
-                  <CommunityPanel
-                    currentExtractionId={result?.id ?? null}
-                    onError={setError}
-                    onNotice={setNotice}
-                    className="mt-0 h-full min-h-0 overflow-y-auto"
-                  />
-                </div>
-              )}
             </div>
-
-            <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    Compartidos conmigo
-                  </p>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">
-                    Playbooks de círculo donde tienes acceso como viewer o editor.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void refreshSharedResources()}
-                  disabled={sharedWithMeLoading}
-                  className="inline-flex h-8 items-center rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
-                >
-                  {sharedWithMeLoading ? 'Actualizando...' : 'Actualizar'}
-                </button>
-              </div>
-
-              {sharedWithMeLoading ? (
-                <p className="text-sm text-slate-500 dark:text-slate-400">Cargando compartidos...</p>
-              ) : sharedWithMe.length === 0 ? (
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Aún no tienes playbooks compartidos en círculo.
-                </p>
-              ) : (
-                <ul className="space-y-2">
-                  {sharedWithMe.map((item) => (
-                    <li key={item.id}>
-                      <button
-                        type="button"
-                        onClick={() => openDeskPlaybookByIdentifier(item.id, 'shared')}
-                        className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-left transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/40 dark:hover:bg-slate-800"
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
-                            {item.videoTitle || item.sourceLabel || item.objective || 'Sin título'}
-                          </p>
-                          <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                            Owner: {item.ownerName?.trim() || item.ownerEmail || 'Sin datos'}
-                          </p>
-                        </div>
-                        <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700 dark:border-sky-700 dark:bg-sky-900/25 dark:text-sky-300">
-                          {item.accessRole === 'editor' ? 'Editor' : 'Viewer'}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-
-            <CommunityPanel
-              currentExtractionId={result?.id ?? null}
-              onError={setError}
-              onNotice={setNotice}
-              className={historyView === 'list' ? 'min-[1728px]:hidden' : undefined}
-            />
 
             <div ref={historyAnchorRef} className="scroll-mt-24 pt-6 md:pt-10">
               {historyView === 'feed' && history.length > 0 ? (
@@ -3558,56 +3880,7 @@ function ActionExtractor() {
                     ))}
                   </div>
                 </div>
-              ) : (
-                <div className="min-[1728px]:hidden">
-                  <HistoryPanel
-                    history={history}
-                    filteredHistory={filteredHistoryForActiveFolders}
-                    historyLoading={historyLoading}
-                    folders={folders}
-                    activeFolderIds={activeFolderIds}
-                    onAssignFolder={handleAssignFolder}
-                    historyQuery={historyQuery}
-                    pdfExportLoading={isExportingPdf}
-                    historyShareLoadingItemId={historyShareLoadingItemId}
-                    historyShareCopiedItemId={historyShareCopiedItemId}
-                    notionConfigured={notionConfigured}
-                    notionConnected={notionConnected}
-                    notionLoading={notionLoading}
-                    notionExportLoading={notionExportLoading}
-                    trelloConfigured={trelloConfigured}
-                    trelloConnected={trelloConnected}
-                    trelloLoading={trelloLoading}
-                    trelloExportLoading={trelloExportLoading}
-                    todoistConfigured={todoistConfigured}
-                    todoistConnected={todoistConnected}
-                    todoistLoading={todoistLoading}
-                    todoistExportLoading={todoistExportLoading}
-                    googleDocsConfigured={googleDocsConfigured}
-                    googleDocsConnected={googleDocsConnected}
-                    googleDocsLoading={googleDocsLoading}
-                    googleDocsExportLoading={googleDocsExportLoading}
-                    deletingHistoryItemId={deletingHistoryItemId}
-                    clearingHistory={clearingHistory}
-                    onHistoryQueryChange={setHistoryQuery}
-                    onRefresh={() => void loadHistory()}
-                    onSelectItem={openHistoryItem}
-                    onDownloadPdf={(item) => handleDownloadPdf(item)}
-                    onCopyShareLink={handleCopyShareLinkFromHistory}
-                    onCopyMarkdown={handleCopyMarkdown}
-                    onExportToNotion={(item) => handleExportToNotion(item.id)}
-                    onConnectNotion={handleConnectNotion}
-                    onExportToTrello={(item) => handleExportToTrello(item.id)}
-                    onConnectTrello={handleConnectTrello}
-                    onExportToTodoist={(item) => handleExportToTodoist(item.id)}
-                    onConnectTodoist={handleConnectTodoist}
-                    onExportToGoogleDocs={(item) => handleExportToGoogleDocs(item.id)}
-                    onConnectGoogleDocs={handleConnectGoogleDocs}
-                    onDeleteItem={handleDeleteHistoryItem}
-                    onClearHistory={() => void handleClearHistory()}
-                  />
-                </div>
-              )}
+              ) : null}
             </div>
 
             <button
