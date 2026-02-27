@@ -469,15 +469,25 @@ export function FolderDock({
       selectedFolderSystemKey !== 'shared-with-me'
   )
   const selectedFolderIdSet = useMemo(() => new Set(selectedFolderIds), [selectedFolderIds])
+  const isSharedWithMeSelected = useMemo(
+    () => selectedFolderIds.some((id) => resolveSystemExtractionFolderKey(id) === 'shared-with-me'),
+    [selectedFolderIds]
+  )
   const hasDeskSelection = selectedFolderIds.length > 0
   const playbooksInDeskSelection = useMemo(
     () =>
       hasDeskSelection
-        ? playbooks.filter(
-            (playbook) => playbook.folderId != null && selectedFolderIdSet.has(playbook.folderId)
-          )
+        ? playbooks.filter((playbook) => {
+            if (playbook.folderId != null && selectedFolderIdSet.has(playbook.folderId)) {
+              return true
+            }
+            if (isSharedWithMeSelected && playbook.source === 'shared') {
+              return true
+            }
+            return false
+          })
         : [],
-    [hasDeskSelection, playbooks, selectedFolderIdSet]
+    [hasDeskSelection, isSharedWithMeSelected, playbooks, selectedFolderIdSet]
   )
   const createTargetId = canCreateInSelectedFolder && selectedFolder ? selectedFolder.id : null
   const createButtonLabel =
