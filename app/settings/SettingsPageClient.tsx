@@ -139,6 +139,12 @@ export default function SettingsPageClient() {
   const [planSnapshot, setPlanSnapshot] = useState<PlanSnapshot | null>(null)
   const [openingPortal, setOpeningPortal] = useState(false)
 
+  const [notifPrefs, setNotifPrefs] = useState<{
+    notifyTaskStatusChange: boolean
+    notifyNewComment: boolean
+  } | null>(null)
+  const [savingNotif, setSavingNotif] = useState(false)
+
   const loadAccount = useCallback(
     async (showLoader: boolean) => {
       if (showLoader) {
@@ -217,6 +223,37 @@ export default function SettingsPageClient() {
       })
       .catch(() => undefined)
   }, [])
+
+  useEffect(() => {
+    fetch('/api/account/notifications', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { notifyTaskStatusChange: boolean; notifyNewComment: boolean } | null) => {
+        if (data) setNotifPrefs(data)
+      })
+      .catch(() => undefined)
+  }, [])
+
+  const handleToggleNotif = async (key: 'notifyTaskStatusChange' | 'notifyNewComment') => {
+    if (!notifPrefs || savingNotif) return
+    const next = { ...notifPrefs, [key]: !notifPrefs[key] }
+    setNotifPrefs(next)
+    setSavingNotif(true)
+    try {
+      const res = await fetch('/api/account/notifications', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [key]: next[key] }),
+      })
+      if (!res.ok) {
+        // Revert on error
+        setNotifPrefs(notifPrefs)
+      }
+    } catch {
+      setNotifPrefs(notifPrefs)
+    } finally {
+      setSavingNotif(false)
+    }
+  }
 
   const rateLimitPercent = useMemo(() => {
     const limit = account?.rateLimit.limit ?? 0
@@ -636,6 +673,68 @@ export default function SettingsPageClient() {
               Descargar CSV
             </a>
           </div>
+        </section>
+
+        {/* Notificaciones por Email */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="mb-4">
+            <h2 className="text-base font-semibold">Notificaciones por Email</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Recibe alertas cuando colaboradores actualicen tus playbooks compartidos.
+            </p>
+          </div>
+
+          {notifPrefs ? (
+            <div className="space-y-3">
+              {(
+                [
+                  {
+                    key: 'notifyTaskStatusChange' as const,
+                    label: 'Cambios de estado en tareas',
+                    description: 'Cuando alguien mueve una tarea de tu playbook a otra columna del Kanban.',
+                  },
+                  {
+                    key: 'notifyNewComment' as const,
+                    label: 'Nuevos comentarios en tareas',
+                    description: 'Cuando alguien comenta en una tarea de tu playbook o en una que sigues.',
+                  },
+                ] as const
+              ).map(({ key, label, description }) => (
+                <label
+                  key={key}
+                  className="flex items-start gap-3 cursor-pointer rounded-xl border border-slate-100 p-3 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/40 transition-colors"
+                >
+                  <div className="mt-0.5 flex-shrink-0">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={notifPrefs[key]}
+                      onClick={() => void handleToggleNotif(key)}
+                      disabled={savingNotif}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none disabled:opacity-60 ${
+                        notifPrefs[key] ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-slate-600'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${
+                          notifPrefs[key] ? 'translate-x-4' : 'translate-x-0.5'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-slate-800 dark:text-slate-100">{label}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{description}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 py-4 text-sm text-slate-400 dark:text-slate-500">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-500" />
+              Cargando preferencias...
+            </div>
+          )}
         </section>
 
         {/* Consumo de IA */}

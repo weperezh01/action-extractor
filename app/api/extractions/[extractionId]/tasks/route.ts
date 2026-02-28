@@ -11,6 +11,7 @@ import {
   type ExtractionTaskEventType,
   type ExtractionTaskStatus,
 } from '@/lib/db'
+import { notifyTaskStatusChange } from '@/lib/email-notifications'
 import { normalizePlaybookPhases } from '@/lib/playbook-tree'
 import {
   addGuestTaskEvent,
@@ -468,6 +469,15 @@ export async function POST(
           eventType: 'note',
           content: `Estado actualizado: ${currentTask.status} -> ${updatedTask.status}`,
           metadataJson: JSON.stringify({ automatic: true, kind: 'status_change' }),
+        })
+        // Notificar en background (no bloquea la respuesta)
+        void notifyTaskStatusChange({
+          extractionId,
+          taskId,
+          actorUserId: user.id,
+          actorName: user.name ?? user.email,
+          previousStatus: currentTask.status,
+          newStatus: updatedTask.status,
         })
       }
 

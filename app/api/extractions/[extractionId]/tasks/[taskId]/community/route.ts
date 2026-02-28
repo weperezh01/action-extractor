@@ -13,6 +13,7 @@ import {
   toggleExtractionTaskFollowForUser,
   toggleExtractionTaskLikeForUser,
 } from '@/lib/db'
+import { notifyNewComment } from '@/lib/email-notifications'
 import {
   addGuestTaskComment,
   deleteGuestTaskComment,
@@ -383,6 +384,15 @@ export async function POST(
       if (!created) {
         return NextResponse.json({ error: 'No se pudo guardar el comentario.' }, { status: 404 })
       }
+
+      // Notificar en background (no bloquea la respuesta)
+      void notifyNewComment({
+        extractionId,
+        taskId,
+        actorUserId: user.id,
+        actorName: user.name ?? user.email,
+        commentContent: content,
+      })
 
       publishTaskCommunityRefreshEvent({
         extractionId,

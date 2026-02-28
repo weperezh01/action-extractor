@@ -19,6 +19,8 @@ import {
   Globe,
   GripVertical,
   ImageIcon,
+  KanbanSquare,
+  LayoutList,
   Link2,
   Loader2,
   Maximize2,
@@ -594,6 +596,7 @@ export function ResultPanel({
   const reextractProcessingRef = useRef(false)
   const rightControlsRef = useRef<HTMLDivElement | null>(null)
   const [interactiveTasks, setInteractiveTasks] = useState<InteractiveTask[]>([])
+  const [taskView, setTaskView] = useState<'list' | 'kanban'>('list')
   const [tasksLoading, setTasksLoading] = useState(false)
   const [tasksError, setTasksError] = useState<string | null>(null)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
@@ -3368,16 +3371,48 @@ export function ResultPanel({
                 Define y organiza la estructura accionable del contenido.
               </p>
             </div>
-            {result.id && !isStructureEditing && canEditStructure && (
-              <button
-                type="button"
-                onClick={handleStartStructureEditing}
-                className="inline-flex h-9 items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
-              >
-                <Pencil size={14} />
-                Editar contenido
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {!isStructureEditing && interactiveTasks.length > 0 && (
+                <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-900">
+                  <button
+                    type="button"
+                    onClick={() => setTaskView('list')}
+                    title="Vista lista"
+                    className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
+                      taskView === 'list'
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <LayoutList size={13} />
+                    <span className="hidden sm:inline">Lista</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskView('kanban')}
+                    title="Vista Kanban"
+                    className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
+                      taskView === 'kanban'
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <KanbanSquare size={13} />
+                    <span className="hidden sm:inline">Kanban</span>
+                  </button>
+                </div>
+              )}
+              {result.id && !isStructureEditing && canEditStructure && (
+                <button
+                  type="button"
+                  onClick={handleStartStructureEditing}
+                  className="inline-flex h-9 items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
+                >
+                  <Pencil size={14} />
+                  Editar contenido
+                </button>
+              )}
+            </div>
           </div>
 
           {isStructureEditing && (
@@ -3536,7 +3571,80 @@ export function ResultPanel({
             </div>
           )}
 
-          {!isStructureEditing &&
+          {!isStructureEditing && taskView === 'kanban' && interactiveTasks.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {TASK_STATUS_OPTIONS.map((col) => {
+                const colTasks = interactiveTasks.filter((t) => t.status === col.value)
+                return (
+                  <div
+                    key={col.value}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      const taskId = e.dataTransfer.getData('kanban-task-id')
+                      const task = interactiveTasks.find((t) => t.id === taskId)
+                      if (task && task.status !== col.value) {
+                        void handleTaskStatusChange(task, col.value)
+                      }
+                    }}
+                    className="flex flex-col rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/40 min-h-[160px]"
+                  >
+                    <div className="flex items-center justify-between px-3 py-2 rounded-t-xl border-b border-slate-200 dark:border-slate-700">
+                      <span className={`text-[11px] font-bold uppercase tracking-wider ${
+                        col.value === 'pending' ? 'text-slate-500 dark:text-slate-400' :
+                        col.value === 'in_progress' ? 'text-sky-600 dark:text-sky-400' :
+                        col.value === 'blocked' ? 'text-rose-600 dark:text-rose-400' :
+                        'text-emerald-600 dark:text-emerald-400'
+                      }`}>{col.label}</span>
+                      <span className="ml-2 rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                        {colTasks.length}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-2 p-2 flex-1">
+                      {colTasks.map((task) => {
+                        const isTaskMutating = taskMutationLoadingId === task.id
+                        return (
+                          <div
+                            key={task.id}
+                            draggable={canEditTaskContent && !isTaskMutating}
+                            onDragStart={(e) => {
+                              e.dataTransfer.setData('kanban-task-id', task.id)
+                              e.dataTransfer.effectAllowed = 'move'
+                            }}
+                            className={`rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-sm transition-all dark:border-slate-700 dark:bg-slate-900 ${
+                              canEditTaskContent && !isTaskMutating
+                                ? 'cursor-grab active:cursor-grabbing hover:shadow-md hover:border-indigo-200 dark:hover:border-indigo-700'
+                                : 'cursor-default'
+                            } ${isTaskMutating ? 'opacity-50' : ''}`}
+                          >
+                            <p className="font-medium text-slate-700 dark:text-slate-200 line-clamp-3 leading-snug">
+                              {task.itemText}
+                            </p>
+                            <p className="mt-1.5 text-[10px] text-slate-400 dark:text-slate-500">
+                              Fase {task.phaseId} · {task.phaseTitle}
+                            </p>
+                            {isTaskMutating && (
+                              <div className="mt-1 flex items-center gap-1 text-[10px] text-slate-400">
+                                <Loader2 size={10} className="animate-spin" />
+                                Actualizando...
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                      {colTasks.length === 0 && (
+                        <div className="flex flex-1 items-center justify-center py-6 text-[11px] text-slate-400 dark:text-slate-600">
+                          Sin tareas
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {!isStructureEditing && taskView === 'list' &&
             result.phases.map((phase: Phase) => {
               const isPhaseExpanded = activePhase === phase.id
 

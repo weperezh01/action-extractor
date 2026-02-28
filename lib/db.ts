@@ -1532,9 +1532,17 @@ const INIT_SQL = `
   );
   CREATE INDEX IF NOT EXISTS idx_tag_assignments_tag ON extraction_tag_assignments(tag_id);
   CREATE INDEX IF NOT EXISTS idx_tag_assignments_extraction ON extraction_tag_assignments(extraction_id);
+
+  CREATE TABLE IF NOT EXISTS notification_preferences (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    notify_task_status_change BOOLEAN NOT NULL DEFAULT TRUE,
+    notify_new_comment BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
 `
 
-const DB_INIT_SIGNATURE = '2026-03-01-tags-v1'
+const DB_INIT_SIGNATURE = '2026-03-01-notif-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -7748,4 +7756,126 @@ export async function consumeGuestExtractionRateLimit(guestId: string): Promise<
   )
   const used = Number(rows[0]?.request_count ?? 4)
   return { allowed: used <= 3, used }
+}
+
+// ─── Notification Preferences ─────────────────────────────────────────────────
+
+export interface NotificationPreferences {
+  notifyTaskStatusChange: boolean
+  notifyNewComment: boolean
+}
+
+export async function getNotificationPreferences(userId: string): Promise<NotificationPreferences> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<{
+    notify_task_status_change: boolean
+    notify_new_comment: boolean
+  }>(
+    `SELECT notify_task_status_change, notify_new_comment
+     FROM notification_preferences WHERE user_id = $1`,
+    [userId]
+  )
+  if (rows.length === 0) {
+    return { notifyTaskStatusChange: true, notifyNewComment: true }
+  }
+  return {
+    notifyTaskStatusChange: rows[0].notify_task_status_change,
+    notifyNewComment: rows[0].notify_new_comment,
+  }
+}
+
+export async function upsertNotificationPreferences(
+  userId: string,
+  prefs: Partial<NotificationPreferences>
+): Promise<NotificationPreferences> {
+  await getDbReadyPromise()
+  const current = await getNotificationPreferences(userId)
+  const next = {
+    notifyTaskStatusChange: prefs.notifyTaskStatusChange ?? current.notifyTaskStatusChange,
+    notifyNewComment: prefs.notifyNewComment ?? current.notifyNewComment,
+  }
+  await pool.query(
+    `INSERT INTO notification_preferences (user_id, notify_task_status_change, notify_new_comment)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id) DO UPDATE SET
+       notify_task_status_change = $2,
+       notify_new_comment = $3,
+       updated_at = NOW()`,
+    [userId, next.notifyTaskStatusChange, next.notifyNewComment]
+  )
+  return next
+}
+
+export interface ExtractionNotificationContext {
+  ownerUserId: string
+  ownerEmail: string
+  ownerName: string
+  extractionTitle: string
+}
+
+export async function getExtractionNotificationContext(
+  extractionId: string,
+  taskId: string
+): Promise<{ extraction: ExtractionNotificationContext | null; taskText: string | null }> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<{
+    owner_user_id: string
+    owner_email: string
+    owner_name: string | null
+    video_title: string | null
+    source_label: string | null
+    objective: string | null
+    task_text: string | null
+  }>(
+    `SELECT
+       e.user_id AS owner_user_id,
+       u.email AS owner_email,
+       u.name AS owner_name,
+       e.video_title,
+       e.source_label,
+       e.objective,
+       t.item_text AS task_text
+     FROM extractions e
+     JOIN users u ON u.id = e.user_id
+     LEFT JOIN extraction_tasks t ON t.id = $2 AND t.extraction_id = e.id
+     WHERE e.id = $1`,
+    [extractionId, taskId]
+  )
+  if (rows.length === 0) return { extraction: null, taskText: null }
+  const row = rows[0]
+  const extractionTitle = row.video_title ?? row.source_label ?? row.objective ?? 'Sin título'
+  return {
+    extraction: {
+      ownerUserId: row.owner_user_id,
+      ownerEmail: row.owner_email,
+      ownerName: row.owner_name ?? '',
+      extractionTitle,
+    },
+    taskText: row.task_text,
+  }
+}
+
+export interface TaskFollowerInfo {
+  userId: string
+  email: string
+  name: string
+}
+
+export async function getTaskFollowersForNotification(
+  taskId: string,
+  excludeUserId: string
+): Promise<TaskFollowerInfo[]> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<{
+    user_id: string
+    email: string
+    name: string | null
+  }>(
+    `SELECT f.user_id, u.email, u.name
+     FROM extraction_task_follows f
+     JOIN users u ON u.id = f.user_id
+     WHERE f.task_id = $1 AND f.user_id != $2`,
+    [taskId, excludeUserId]
+  )
+  return rows.map((r) => ({ userId: r.user_id, email: r.email, name: r.name ?? '' }))
 }
