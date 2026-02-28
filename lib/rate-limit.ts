@@ -4,6 +4,7 @@ import {
   consumeGuestExtractionRateLimit,
   getCommunityActionRateLimitUsageByUser,
   getExtractionRateLimitUsageByUser,
+  getUserPlanRateLimit,
 } from '@/lib/db'
 
 const DEFAULT_EXTRACTIONS_PER_HOUR = 12
@@ -50,7 +51,7 @@ export function resolveExtractionRateLimitPerHour() {
 }
 
 export async function consumeUserExtractionRateLimit(userId: string): Promise<UserExtractionRateLimitResult> {
-  const limit = resolveExtractionRateLimitPerHour()
+  const limit = await getUserPlanRateLimit(userId)
   const usage = await consumeExtractionRateLimitByUser({ userId, limit })
 
   const resetAtMs = new Date(usage.reset_at).getTime()
@@ -71,7 +72,7 @@ export async function consumeUserExtractionRateLimit(userId: string): Promise<Us
 export async function getUserExtractionRateLimitSnapshot(
   userId: string
 ): Promise<UserExtractionRateLimitResult> {
-  const limit = resolveExtractionRateLimitPerHour()
+  const limit = await getUserPlanRateLimit(userId)
   const usage = await getExtractionRateLimitUsageByUser({ userId, limit })
 
   const resetAtMs = new Date(usage.reset_at).getTime()

@@ -223,6 +223,9 @@ export async function POST(req: NextRequest) {
     const activeExtractionId = normalizeExtractionId(
       (body as { activeExtractionId?: unknown })?.activeExtractionId
     )
+    const conversationId = normalizeExtractionId(
+      (body as { conversationId?: unknown })?.conversationId
+    )
     const extractionRows = await listExtractionsByUser(user.id, MAX_CONTEXT_EXTRACTIONS)
 
     if (extractionRows.length === 0) {
@@ -232,11 +235,13 @@ export async function POST(req: NextRequest) {
         userId: user.id,
         role: 'user',
         content: question,
+        conversationId: conversationId || undefined,
       }).catch(() => undefined)
       void createChatMessageForUser({
         userId: user.id,
         role: 'assistant',
         content: emptyAnswer,
+        conversationId: conversationId || undefined,
       }).catch(() => undefined)
 
       return NextResponse.json({
@@ -298,6 +303,7 @@ export async function POST(req: NextRequest) {
 
     const persistedMessages = await listChatMessagesForUser({
       userId: user.id,
+      conversationId: conversationId || undefined,
       limit: MAX_CONVERSATION_MESSAGES - 1,
     })
 
@@ -392,6 +398,7 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       role: 'user',
       content: question,
+      conversationId: conversationId || undefined,
       metadataJson: JSON.stringify({
         activeExtractionId: activeExtractionId || null,
       }),
@@ -401,6 +408,7 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       role: 'assistant',
       content: answer,
+      conversationId: conversationId || undefined,
       metadataJson: JSON.stringify({
         references,
       }),

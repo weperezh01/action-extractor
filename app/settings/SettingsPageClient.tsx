@@ -23,6 +23,40 @@ interface AccountPayload {
   rateLimit: RateLimitSnapshot
 }
 
+interface PlanSnapshot {
+  plan: string
+  extractionsPerHour: number
+  status: string
+  currentPeriodEnd: string | null
+  hasStripeCustomer: boolean
+}
+
+interface AiUsageTotals {
+  calls: number
+  totalTokens: number
+  costUsd: number
+}
+
+interface AiUseTypeEntry {
+  useType: string
+  label: string
+  calls: number
+  costUsd: number
+}
+
+interface AiDailyStat {
+  date: string
+  calls: number
+  tokens: number
+  costUsd: number
+}
+
+interface AiUsagePayload {
+  totals: AiUsageTotals
+  byUseType: AiUseTypeEntry[]
+  daily: AiDailyStat[]
+}
+
 function formatDateTime(iso: string) {
   const parsed = new Date(iso)
   if (Number.isNaN(parsed.getTime())) return iso
@@ -31,6 +65,49 @@ function formatDateTime(iso: string) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(parsed)
+}
+
+function AiDailyBarChart({ data }: { data: AiDailyStat[] }) {
+  // Build a full 30-day array filling missing days with 0
+  const days = 30
+  const today = new Date()
+  const fullDays: { date: string; calls: number }[] = []
+  const dataMap = new Map(data.map((d) => [d.date, d]))
+
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today)
+    d.setUTCDate(d.getUTCDate() - i)
+    const dateStr = d.toISOString().slice(0, 10)
+    const entry = dataMap.get(dateStr)
+    fullDays.push({ date: dateStr, calls: entry?.calls ?? 0 })
+  }
+
+  const maxCalls = Math.max(1, ...fullDays.map((d) => d.calls))
+
+  return (
+    <div className="flex items-end gap-0.5 h-16">
+      {fullDays.map((day) => {
+        const heightPct = Math.max(4, Math.round((day.calls / maxCalls) * 100))
+        const shortDate = day.date.slice(5) // MM-DD
+        return (
+          <div
+            key={day.date}
+            className="group relative flex-1"
+            title={`${shortDate}: ${day.calls} llamadas`}
+          >
+            <div
+              className={`w-full rounded-sm transition-colors ${
+                day.calls > 0
+                  ? 'bg-indigo-400 group-hover:bg-indigo-500 dark:bg-indigo-500 dark:group-hover:bg-indigo-400'
+                  : 'bg-slate-100 dark:bg-slate-800'
+              }`}
+              style={{ height: `${heightPct}%` }}
+            />
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 export default function SettingsPageClient() {
@@ -55,6 +132,12 @@ export default function SettingsPageClient() {
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
   const [deletePassword, setDeletePassword] = useState('')
   const [deletingAccount, setDeletingAccount] = useState(false)
+
+  const [aiUsage, setAiUsage] = useState<AiUsagePayload | null>(null)
+  const [aiUsageLoading, setAiUsageLoading] = useState(false)
+
+  const [planSnapshot, setPlanSnapshot] = useState<PlanSnapshot | null>(null)
+  const [openingPortal, setOpeningPortal] = useState(false)
 
   const loadAccount = useCallback(
     async (showLoader: boolean) => {
@@ -105,6 +188,35 @@ export default function SettingsPageClient() {
   useEffect(() => {
     void loadAccount(true)
   }, [loadAccount])
+
+  const loadAiUsage = useCallback(async () => {
+    if (aiUsageLoading) return
+    setAiUsageLoading(true)
+    try {
+      const res = await fetch('/api/account/usage', { cache: 'no-store' })
+      if (!res.ok) return
+      const data = (await res.json().catch(() => null)) as AiUsagePayload | null
+      if (data) setAiUsage(data)
+    } catch {
+      // ignore — section just won't show data
+    } finally {
+      setAiUsageLoading(false)
+    }
+  }, [aiUsageLoading])
+
+  useEffect(() => {
+    void loadAiUsage()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/account/plan', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: PlanSnapshot | null) => {
+        if (data) setPlanSnapshot(data)
+      })
+      .catch(() => undefined)
+  }, [])
 
   const rateLimitPercent = useMemo(() => {
     const limit = account?.rateLimit.limit ?? 0
@@ -296,6 +408,34 @@ export default function SettingsPageClient() {
     }
   }
 
+  const handleManageBilling = async () => {
+    setOpeningPortal(true)
+    try {
+      const res = await fetch('/api/stripe/portal', { method: 'POST' })
+      const data = (await res.json().catch(() => null)) as { url?: string } | null
+      if (res.ok && data?.url) {
+        window.location.href = data.url
+      }
+    } catch {
+      // ignore
+    } finally {
+      setOpeningPortal(false)
+    }
+  }
+
+  function formatPlanDate(iso: string | null) {
+    if (!iso) return ''
+    return new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium' }).format(new Date(iso))
+  }
+
+  const planLabel = planSnapshot ? planSnapshot.plan.charAt(0).toUpperCase() + planSnapshot.plan.slice(1) : 'Free'
+  const planBadgeClass =
+    planSnapshot?.plan === 'business'
+      ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300'
+      : planSnapshot?.plan === 'pro'
+      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
+      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+
   if (loading) {
     return (
       <main className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 p-6 md:p-10">
@@ -393,6 +533,52 @@ export default function SettingsPageClient() {
           </form>
         </section>
 
+        {/* Plan Actual */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <h2 className="text-base font-semibold">Plan Actual</h2>
+            <Link
+              href="/pricing"
+              className="text-sm text-indigo-600 hover:text-indigo-700 dark:text-indigo-400"
+            >
+              Ver planes →
+            </Link>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <span className={`rounded-full px-3 py-1 text-sm font-semibold ${planBadgeClass}`}>
+              {planLabel}
+            </span>
+            <span className="text-sm text-slate-600 dark:text-slate-300">
+              {planSnapshot?.extractionsPerHour ?? 12} extracciones / hora
+            </span>
+            {planSnapshot?.currentPeriodEnd && planSnapshot.plan !== 'free' && (
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                · Renueva el {formatPlanDate(planSnapshot.currentPeriodEnd)}
+              </span>
+            )}
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Link
+              href="/pricing"
+              className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 inline-flex items-center"
+            >
+              Cambiar plan
+            </Link>
+            {planSnapshot?.hasStripeCustomer && planSnapshot.plan !== 'free' && (
+              <button
+                type="button"
+                onClick={() => void handleManageBilling()}
+                disabled={openingPortal}
+                className="h-9 px-4 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                {openingPortal ? 'Abriendo...' : 'Gestionar facturación'}
+              </button>
+            )}
+          </div>
+        </section>
+
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
             <h2 className="text-base font-semibold">Consumo Actual</h2>
@@ -427,6 +613,125 @@ export default function SettingsPageClient() {
               El límite se reinicia: {formatDateTime(account.rateLimit.resetAt)}
             </p>
           </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <h2 className="text-base font-semibold mb-1">Exportar Historial</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
+            Descarga todos tus playbooks en formato JSON o CSV.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <a
+              href="/api/account/export?format=json"
+              download
+              className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              Descargar JSON
+            </a>
+            <a
+              href="/api/account/export?format=csv"
+              download
+              className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              Descargar CSV
+            </a>
+          </div>
+        </section>
+
+        {/* Consumo de IA */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-5">
+            <div>
+              <h2 className="text-base font-semibold">Consumo de IA</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Tokens y costo estimado de todas tus llamadas a IA.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadAiUsage()}
+              disabled={aiUsageLoading}
+              className="h-9 px-3 rounded-lg border border-slate-300 bg-white text-sm hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:hover:bg-slate-800"
+            >
+              {aiUsageLoading ? 'Cargando...' : 'Actualizar'}
+            </button>
+          </div>
+
+          {aiUsageLoading && !aiUsage && (
+            <div className="flex items-center gap-2 py-6 text-sm text-slate-400 dark:text-slate-500">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-500" />
+              Cargando datos de consumo...
+            </div>
+          )}
+
+          {aiUsage && (
+            <div className="space-y-6">
+              {/* KPI cards */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-800/60">
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Llamadas totales</p>
+                  <p className="mt-1 text-2xl font-bold text-slate-800 dark:text-slate-100">
+                    {aiUsage.totals.calls.toLocaleString('es-MX')}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-800/60">
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Tokens usados</p>
+                  <p className="mt-1 text-2xl font-bold text-slate-800 dark:text-slate-100">
+                    {aiUsage.totals.totalTokens >= 1000
+                      ? `${(aiUsage.totals.totalTokens / 1000).toFixed(1)}k`
+                      : aiUsage.totals.totalTokens.toLocaleString('es-MX')}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-800/60">
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Costo estimado</p>
+                  <p className="mt-1 text-2xl font-bold text-slate-800 dark:text-slate-100">
+                    ${aiUsage.totals.costUsd < 0.01 && aiUsage.totals.costUsd > 0
+                      ? aiUsage.totals.costUsd.toFixed(4)
+                      : aiUsage.totals.costUsd.toFixed(2)}
+                  </p>
+                  <p className="text-[10px] text-slate-400 dark:text-slate-500">USD</p>
+                </div>
+              </div>
+
+              {/* Bar chart — últimos 30 días */}
+              {aiUsage.daily.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-3">
+                    Llamadas — últimos 30 días
+                  </p>
+                  <AiDailyBarChart data={aiUsage.daily} />
+                </div>
+              )}
+
+              {/* Breakdown por tipo */}
+              {aiUsage.byUseType.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2">
+                    Por tipo de uso
+                  </p>
+                  <ul className="space-y-2">
+                    {aiUsage.byUseType.map((entry) => (
+                      <li key={entry.useType} className="flex items-center justify-between text-sm">
+                        <span className="text-slate-600 dark:text-slate-300">{entry.label}</span>
+                        <span className="font-semibold text-slate-800 dark:text-slate-100">
+                          {entry.calls.toLocaleString('es-MX')} llamadas
+                          <span className="ml-2 text-xs font-normal text-slate-400 dark:text-slate-500">
+                            (${Number(entry.costUsd).toFixed(4)} USD)
+                          </span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {aiUsage.totals.calls === 0 && (
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Aún no hay registros de uso de IA.
+                </p>
+              )}
+            </div>
+          )}
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">

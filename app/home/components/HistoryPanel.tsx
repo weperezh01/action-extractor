@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlignLeft, ChevronDown, Copy, Download, FileText, Folder, Globe, History, PenLine, Play, Search, Share2, Trash2 } from 'lucide-react'
+import { AlignLeft, ChevronDown, Copy, Download, FileText, Folder, Globe, History, PenLine, Play, RotateCcw, Search, Share2, Star, Trash2 } from 'lucide-react'
 import type { FolderItem } from '@/app/home/components/FolderDock'
 import { FOLDER_COLORS } from '@/app/home/components/FolderDock'
 import Image from 'next/image'
-import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
+import { EXTRACTION_MODE_OPTIONS, getExtractionModeLabel, normalizeExtractionMode, type ExtractionMode } from '@/lib/extraction-modes'
 import { getShareVisibilityLabel, isShareVisibilityShareable } from '@/app/home/lib/share-visibility'
 import { formatHistoryDate } from '@/app/home/lib/utils'
 import { resolveSystemExtractionFolderKey } from '@/lib/extraction-folders'
@@ -70,6 +70,8 @@ interface HistoryPanelProps {
   onConnectGoogleDocs: () => void
   onDeleteItem: (item: HistoryItem) => void
   onClearHistory: () => void
+  onStarItem?: (item: HistoryItem, starred: boolean) => void
+  onReExtractMode?: (item: HistoryItem, mode: ExtractionMode) => void
 }
 
 export function HistoryPanel({
@@ -122,6 +124,8 @@ export function HistoryPanel({
   onConnectGoogleDocs,
   onDeleteItem,
   onClearHistory,
+  onStarItem,
+  onReExtractMode,
 }: HistoryPanelProps) {
   const generalFolderId = folders.find((folder) => resolveSystemExtractionFolderKey(folder.id) === 'general')?.id ?? null
   const hasHistory = history.length > 0
@@ -147,6 +151,7 @@ export function HistoryPanel({
     return () => clearTimeout(t)
   }, [panelTitle])
 
+  const [starredOnly, setStarredOnly] = useState(false)
   const quickButtonClass =
     'inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs font-semibold transition-colors disabled:cursor-wait disabled:opacity-60'
   const [expandedActionsItemId, setExpandedActionsItemId] = useState<string | null>(null)
@@ -247,17 +252,31 @@ export function HistoryPanel({
       </div>
 
       <div className="px-5 py-3 border-b border-slate-100 bg-slate-50/60 dark:bg-slate-800/40 dark:border-slate-800">
-        <div className="relative">
-          <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
-            <Search size={15} />
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
+              <Search size={15} />
+            </div>
+            <input
+              type="text"
+              value={historyQuery}
+              onChange={(event) => onHistoryQueryChange(event.target.value)}
+              placeholder="Buscar por título, objetivo, URL o fecha..."
+              className="w-full h-10 pl-9 pr-3 rounded-lg border border-slate-200 bg-white text-sm text-slate-700 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-200 dark:placeholder:text-slate-500"
+            />
           </div>
-          <input
-            type="text"
-            value={historyQuery}
-            onChange={(event) => onHistoryQueryChange(event.target.value)}
-            placeholder="Buscar por título, objetivo, URL o fecha..."
-            className="w-full h-10 pl-9 pr-3 rounded-lg border border-slate-200 bg-white text-sm text-slate-700 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-200 dark:placeholder:text-slate-500"
-          />
+          <button
+            type="button"
+            onClick={() => setStarredOnly((v) => !v)}
+            title={starredOnly ? 'Ver todos' : 'Solo favoritos'}
+            className={`inline-flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border transition-colors ${
+              starredOnly
+                ? 'border-amber-300 bg-amber-50 text-amber-600 dark:border-amber-600 dark:bg-amber-900/30 dark:text-amber-300'
+                : 'border-slate-200 bg-white text-slate-400 hover:border-amber-200 hover:text-amber-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-500 dark:hover:border-amber-600 dark:hover:text-amber-400'
+            }`}
+          >
+            <Star size={15} fill={starredOnly ? 'currentColor' : 'none'} />
+          </button>
         </div>
       </div>
 
@@ -274,7 +293,7 @@ export function HistoryPanel({
       )}
 
       <div className="divide-y divide-slate-100 dark:divide-slate-800">
-        {filteredHistory.map((item) => {
+        {filteredHistory.filter((item) => !starredOnly || item.isStarred).map((item) => {
           const isDeleting = deletingHistoryItemId === item.id
           const isActionsExpanded = expandedActionsItemId === item.id
 
@@ -413,6 +432,22 @@ export function HistoryPanel({
                         </div>
                       )}
                     </div>
+                  )}
+
+                  {/* Star button */}
+                  {onStarItem && (
+                    <button
+                      type="button"
+                      onClick={() => onStarItem(item, !item.isStarred)}
+                      title={item.isStarred ? 'Quitar de favoritos' : 'Añadir a favoritos'}
+                      className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-colors ${
+                        item.isStarred
+                          ? 'border-amber-300 bg-amber-50 text-amber-500 hover:bg-amber-100 dark:border-amber-600 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
+                          : 'border-slate-200 bg-white text-slate-300 hover:border-amber-200 hover:text-amber-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-600 dark:hover:border-amber-600 dark:hover:text-amber-400'
+                      }`}
+                    >
+                      <Star size={13} fill={item.isStarred ? 'currentColor' : 'none'} />
+                    </button>
                   )}
 
                   {/* Actions button */}
@@ -582,6 +617,28 @@ export function HistoryPanel({
                         </button>
                       </div>
                     </div>
+
+                    {onReExtractMode && (
+                      <div className="mt-3 border-t border-slate-200 pt-3 dark:border-slate-700">
+                        <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                          Re-extraer como
+                        </p>
+                        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                          {EXTRACTION_MODE_OPTIONS.filter((opt) => opt.value !== normalizeExtractionMode(item.mode)).map((opt) => (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              onClick={() => triggerItemAction(item.id, () => onReExtractMode(item, opt.value))}
+                              className={`${quickButtonClass} border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-950/30 dark:text-violet-300 dark:hover:bg-violet-950/50`}
+                              title={opt.description}
+                            >
+                              <RotateCcw size={11} />
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     <div className="mt-3 border-t border-slate-200 pt-3 dark:border-slate-700">
                       <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">

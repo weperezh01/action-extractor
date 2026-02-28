@@ -63,8 +63,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
   }
 
+  const conversationId = req.nextUrl.searchParams.get('conversationId')?.trim() || undefined
+
   const messages = await listChatMessagesForUser({
     userId: user.id,
+    conversationId,
     limit: 80,
   })
 
@@ -88,6 +91,7 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
   }
 
-  const deletedCount = await clearChatMessagesForUser(user.id)
+  const conversationId = req.nextUrl.searchParams.get('conversationId')?.trim() || undefined
+  const deletedCount = await clearChatMessagesForUser(user.id, conversationId)
   return NextResponse.json({ ok: true, deletedCount })
 }

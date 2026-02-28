@@ -750,6 +750,12 @@ export default function AdminPage() {
           </div>
           <div className="flex items-center gap-2">
             <Link
+              href="/admin/plans"
+              className="px-3 py-2 text-sm rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300 dark:hover:bg-indigo-950/60"
+            >
+              Gestionar planes
+            </Link>
+            <Link
               href="/admin/users"
               className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
             >

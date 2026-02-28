@@ -40,6 +40,7 @@ export interface ExtractResult {
   sourceType?: SourceType
   sourceLabel?: string | null
   folderId?: string | null
+  isStarred?: boolean
 }
 
 export interface HistoryItem extends ExtractResult {

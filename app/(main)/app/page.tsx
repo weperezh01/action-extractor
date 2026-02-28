@@ -7,8 +7,10 @@ import { useSearchParams } from 'next/navigation'
 import {
   AlertCircle,
   ArrowUp,
+  BarChart2,
   Brain,
   History,
+  Layers,
   LayoutList,
   LogOut,
   Moon,
@@ -30,12 +32,14 @@ import {
   type ExtractionOutputLanguage,
 } from '@/lib/output-language'
 import { ExtractionForm } from '@/app/home/components/ExtractionForm'
+import { BatchExtractPanel } from '@/app/home/components/BatchExtractPanel'
 import { AuthAccessPanel } from '@/app/home/components/AuthAccessPanel'
 import { CommunityPanel } from '@/app/home/components/CommunityPanel'
 import { GoogleIcon } from '@/app/home/components/GoogleIcon'
 import { ExtractionFeedCard } from '@/app/home/components/ExtractionFeedCard'
 import { HistoryPanel } from '@/app/home/components/HistoryPanel'
 import { KnowledgeChat } from '@/app/home/components/KnowledgeChat'
+import { KeyboardShortcutsModal } from '@/app/home/components/KeyboardShortcutsModal'
 import { ResultPanel } from '@/app/home/components/ResultPanel'
 import { PlaybookSideTabs } from '@/app/home/components/PlaybookSideTabs'
 import { WorkspaceControlsDock } from '@/app/home/components/WorkspaceControlsDock'
@@ -50,6 +54,7 @@ import { useFolders } from '@/app/home/hooks/useFolders'
 import { useAuth } from '@/app/home/hooks/useAuth'
 import { useHistory } from '@/app/home/hooks/useHistory'
 import { useIntegrations } from '@/app/home/hooks/useIntegrations'
+import { useKeyboardShortcuts } from '@/lib/hooks/useKeyboardShortcuts'
 import { isSystemExtractionFolderId } from '@/lib/extraction-folders'
 import {
   applyTheme,
@@ -402,6 +407,10 @@ function ActionExtractor() {
   const [historyView, setHistoryView] = useState<'list' | 'feed'>('list')
   const [theme, setTheme] = useState<Theme>('light')
   const [reauthRequired, setReauthRequired] = useState(false)
+  const [rateLimitUsed, setRateLimitUsed] = useState<number | null>(null)
+  const [rateLimitTotal, setRateLimitTotal] = useState<number | null>(null)
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false)
+  const [isBatchMode, setIsBatchMode] = useState(false)
   const extractorSectionRef = useRef<HTMLElement | null>(null)
   const resultAnchorRef = useRef<HTMLDivElement | null>(null)
   const historyAnchorRef = useRef<HTMLDivElement | null>(null)
@@ -1572,6 +1581,9 @@ function ActionExtractor() {
               : 'Extracción nueva: consumió 1 cupo del límite por hora.'
           )
           streamHadResult = true
+          if (!fromCache) {
+            setRateLimitUsed((prev) => prev !== null ? prev + 1 : null)
+          }
           void loadHistory()
         }
         return
@@ -2149,6 +2161,7 @@ function ActionExtractor() {
         executive_summary: 'resumen-ejecutivo',
         business_ideas: 'ideas-de-negocio',
         key_quotes: 'frases-clave',
+        concept_map: 'mapa-conceptual',
       }
 
       const { jsPDF } = await import('jspdf')
@@ -2288,6 +2301,7 @@ function ActionExtractor() {
       metadata: item.metadata,
       sourceType: item.sourceType,
       sourceLabel: item.sourceLabel ?? null,
+      isStarred: item.isStarred ?? false,
       accessRole: 'owner',
       ownerName: user?.name ?? null,
       ownerEmail: user?.email ?? null,
@@ -2982,6 +2996,74 @@ function ActionExtractor() {
     setIsHistoryDrawerOpen(false)
   }
 
+  // Rate limit fetch — runs once after user logs in
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await fetch('/api/account/rate-limit', { cache: 'no-store' })
+        if (res.ok && !cancelled) {
+          const data = (await res.json()) as { used?: number; limit?: number }
+          if (typeof data.used === 'number') setRateLimitUsed(data.used)
+          if (typeof data.limit === 'number') setRateLimitTotal(data.limit)
+        }
+      } catch {
+        // non-critical, ignore
+      }
+    })()
+    return () => { cancelled = true }
+  }, [user])
+
+  const handleStarResult = useCallback(async (starred: boolean) => {
+    if (!result?.id) return
+    const extractionId = result.id
+    try {
+      const res = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/star`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ starred }),
+      })
+      if (!res.ok) return
+      setResult((prev) => prev ? { ...prev, isStarred: starred } : prev)
+      setHistory((prev) =>
+        prev.map((item) => (item.id === extractionId ? { ...item, isStarred: starred } : item))
+      )
+    } catch {
+      // non-critical
+    }
+  }, [result?.id, setHistory])
+
+  const handleStarHistoryItem = useCallback(async (item: HistoryItem, starred: boolean) => {
+    const extractionId = item.id
+    try {
+      const res = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/star`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ starred }),
+      })
+      if (!res.ok) return
+      setHistory((prev) =>
+        prev.map((h) => (h.id === extractionId ? { ...h, isStarred: starred } : h))
+      )
+      if (result?.id === extractionId) {
+        setResult((prev) => prev ? { ...prev, isStarred: starred } : prev)
+      }
+    } catch {
+      // non-critical
+    }
+  }, [result?.id, setHistory])
+
+  useKeyboardShortcuts({
+    onExtract: () => void handleExtract({}),
+    onModeChange: setExtractionMode,
+    onDownloadPdf: () => void handleDownloadPdf(),
+    onCopyMarkdown: () => void handleCopyMarkdown(),
+    onShowHelp: () => setShowShortcutsHelp(true),
+    isProcessing,
+    hasResult: result !== null,
+  })
+
   return (
     <div className="min-h-screen bg-white text-zinc-900 dark:bg-black dark:text-zinc-100">
       <nav className="sticky top-0 z-10 flex items-center justify-between border-b border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur md:px-6 md:py-4 dark:border-white/10 dark:bg-black/90">
@@ -3037,6 +3119,41 @@ function ActionExtractor() {
                 {user.name ?? user.email}
               </span>
 
+              {/* Rate limit badge — shows remaining extractions */}
+              {rateLimitTotal !== null && rateLimitUsed !== null && (
+                <span
+                  title={`${rateLimitTotal - rateLimitUsed} extracciones disponibles de ${rateLimitTotal} por hora`}
+                  className={`hidden items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold sm:flex ${
+                    rateLimitTotal - rateLimitUsed <= 2
+                      ? 'border-rose-200 bg-rose-50 text-rose-600 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300'
+                      : rateLimitTotal - rateLimitUsed <= 5
+                        ? 'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-300'
+                        : 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300'
+                  }`}
+                >
+                  {rateLimitTotal - rateLimitUsed} / {rateLimitTotal}
+                </span>
+              )}
+
+              {/* Pricing */}
+              <Link
+                href="/pricing"
+                className="hidden sm:inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 bg-transparent px-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 md:h-10 md:px-3 dark:border-white/15 dark:text-zinc-200 dark:hover:bg-white/5"
+                title="Planes y precios"
+              >
+                Planes
+              </Link>
+
+              {/* Mi ROI dashboard */}
+              <Link
+                href="/dashboard"
+                className="hidden sm:inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 bg-transparent px-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 md:h-10 md:px-3 dark:border-white/15 dark:text-zinc-200 dark:hover:bg-white/5"
+                title="Mi dashboard de ROI"
+              >
+                <BarChart2 size={16} />
+                <span className="hidden sm:inline">Mi ROI</span>
+              </Link>
+
               {/* Settings — icon only on mobile, icon+text on sm+ */}
               <Link
                 href="/settings"
@@ -3046,6 +3163,17 @@ function ActionExtractor() {
                 <Settings2 size={16} />
                 <span className="hidden sm:inline">Configuración</span>
               </Link>
+
+              {/* Keyboard shortcuts hint */}
+              <button
+                type="button"
+                onClick={() => setShowShortcutsHelp(true)}
+                title="Atajos de teclado (?)"
+                aria-label="Mostrar atajos de teclado"
+                className="hidden h-9 w-9 items-center justify-center rounded-lg border border-zinc-300 bg-transparent text-sm font-bold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 md:inline-flex md:h-10 md:w-10 dark:border-white/15 dark:text-zinc-300 dark:hover:bg-white/5 dark:hover:text-zinc-100"
+              >
+                ?
+              </button>
 
               {/* Logout — icon only on mobile, icon+text on sm+ */}
               <button
@@ -3240,6 +3368,15 @@ function ActionExtractor() {
                       onConnectGoogleDocs={handleConnectGoogleDocs}
                       onDeleteItem={handleDeleteHistoryItem}
                       onClearHistory={() => void handleClearHistory()}
+                      onStarItem={(item, starred) => void handleStarHistoryItem(item, starred)}
+                      onReExtractMode={(item, mode) => {
+                        const itemUrl = item.url ?? ''
+                        setUrl(itemUrl)
+                        setExtractionMode(mode)
+                        setIsHistoryDrawerOpen(false)
+                        handleScrollToExtractor()
+                        void handleExtract({ url: itemUrl, mode })
+                      }}
                     />
                   </div>
                 </div>
@@ -3288,12 +3425,36 @@ function ActionExtractor() {
                       Roi Action Extractor
                     </p>
                   </div>
-                  <div className="mb-4 flex justify-center">
+                  <div className="mb-4 flex items-center justify-center gap-3">
                     <div className="inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-bold uppercase tracking-wider text-indigo-700">
                       <Brain size={12} />
                       Historial Personal Activo
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsBatchMode((prev) => !prev)}
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-wider transition-colors ${
+                        isBatchMode
+                          ? 'border-violet-200 bg-violet-100 text-violet-700 dark:border-violet-800 dark:bg-violet-900/30 dark:text-violet-300'
+                          : 'border-slate-200 bg-white text-slate-500 hover:border-violet-200 hover:bg-violet-50 hover:text-violet-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
+                      }`}
+                      title="Extraer múltiples URLs a la vez"
+                    >
+                      <Layers size={11} />
+                      {isBatchMode ? 'Modo Lote' : 'Lote'}
+                    </button>
                   </div>
+
+                  {isBatchMode ? (
+                    <BatchExtractPanel
+                      extractionMode={extractionMode}
+                      outputLanguage={outputLanguage}
+                      folders={folders}
+                      onComplete={() => {
+                        void loadHistory()
+                      }}
+                    />
+                  ) : (
                   <ExtractionForm
                     url={url}
                     isProcessing={isProcessing}
@@ -3332,6 +3493,7 @@ function ActionExtractor() {
                     onManualToggle={setIsManualFormOpen}
                     onOpenPublicPlaybook={openPublicPlaybookFromSearch}
                   />
+                  )}
                 </div>
 
                 <WorkspaceControlsDock
@@ -3693,6 +3855,7 @@ function ActionExtractor() {
                           mode,
                         })
                       }}
+                      onStarResult={(starred) => void handleStarResult(starred)}
                     />
 
                     {stackedDeskPlaybooks.map((item) => {
@@ -4141,6 +4304,11 @@ function ActionExtractor() {
         )}
 
       </main>
+
+      <KeyboardShortcutsModal
+        open={showShortcutsHelp}
+        onClose={() => setShowShortcutsHelp(false)}
+      />
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlignLeft,
   AlertTriangle,
@@ -21,7 +21,9 @@ import {
   ImageIcon,
   Link2,
   Loader2,
+  Maximize2,
   MessageSquare,
+  Minimize2,
   MoreHorizontal,
   Music2,
   Pencil,
@@ -30,6 +32,7 @@ import {
   Plus,
   Save,
   Share2,
+  Star,
   ThumbsUp,
   Trash2,
   Upload,
@@ -148,6 +151,7 @@ interface ResultPanelProps {
   onAddMember?: (input: { email: string; role: 'editor' | 'viewer' }) => Promise<boolean>
   onRemoveMember?: (memberUserId: string) => Promise<boolean>
   onOpenPlaybookReference?: (playbookIdentifier: string) => void
+  onStarResult?: (starred: boolean) => void
 }
 
 type PlaybookCloseStage = 'idle' | 'folding' | 'cover'
@@ -441,6 +445,7 @@ export function ResultPanel({
   onAddMember,
   onRemoveMember,
   onOpenPlaybookReference,
+  onStarResult,
 }: ResultPanelProps) {
   const resolvedMode = normalizeExtractionMode(result.mode ?? extractionMode)
   const sourceUrl = (result.url ?? url).trim()
@@ -510,6 +515,34 @@ export function ResultPanel({
       resolvedMode,
     ]
   )
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [copiedPhaseId, setCopiedPhaseId] = useState<number | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+
+  const handleToggleFullscreen = useCallback(() => {
+    const el = panelRef.current ?? document.documentElement
+    if (!document.fullscreenElement) {
+      void el.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => undefined)
+    } else {
+      void document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(() => undefined)
+    }
+  }, [])
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement))
+    document.addEventListener('fullscreenchange', onChange)
+    return () => document.removeEventListener('fullscreenchange', onChange)
+  }, [])
+
+  const handleCopyPhase = useCallback((phase: Phase) => {
+    const items = flattenItemsAsText(phase.items)
+    const lines = [`## ${phase.title}`, '', ...items.map((t) => `- ${t}`)]
+    void navigator.clipboard.writeText(lines.join('\n')).then(() => {
+      setCopiedPhaseId(phase.id)
+      window.setTimeout(() => setCopiedPhaseId((p) => (p === phase.id ? null : p)), 2000)
+    })
+  }, [])
+
   const [isActionsExpanded, setIsActionsExpanded] = useState(false)
   const [collapseAfterAsyncAction, setCollapseAfterAsyncAction] = useState(false)
   const asyncActionLoadingRef = useRef(false)
@@ -2453,7 +2486,8 @@ export function ResultPanel({
 
   return (
     <div
-      className="animate-fade-slide relative"
+      ref={panelRef}
+      className={`animate-fade-slide relative${isFullscreen ? ' overflow-y-auto h-screen bg-slate-50 dark:bg-slate-950 p-4 md:p-8' : ''}`}
       style={{
         transition: 'transform 0.55s ease',
         transform:
@@ -2511,17 +2545,43 @@ export function ResultPanel({
                 <Zap size={14} /> Modo: {getExtractionModeLabel(resolvedMode)}
               </div>
             </div>
-            {onClose && isBookOpen && (
+            <div className="flex items-center gap-2">
+              {result.id && onStarResult && (
+                <button
+                  type="button"
+                  onClick={() => onStarResult(!result.isStarred)}
+                  aria-label={result.isStarred ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    result.isStarred
+                      ? 'border-amber-300 bg-amber-50 text-amber-600 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/25 dark:text-amber-300'
+                      : 'border-slate-200 bg-white text-slate-400 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-500 dark:hover:text-amber-400'
+                  }`}
+                >
+                  <Star size={13} fill={result.isStarred ? 'currentColor' : 'none'} />
+                  {result.isStarred ? 'Favorito' : 'Guardar'}
+                </button>
+              )}
               <button
                 type="button"
-                onClick={handleClose}
-                aria-label="Cerrar playbook"
+                onClick={handleToggleFullscreen}
+                aria-label={isFullscreen ? 'Salir de pantalla completa' : 'Ver en pantalla completa'}
                 className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
               >
-                <X size={13} />
-                Cerrar
+                {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                {isFullscreen ? 'Reducir' : 'Ampliar'}
               </button>
-            )}
+              {onClose && isBookOpen && (
+                <button
+                  type="button"
+                  onClick={handleClose}
+                  aria-label="Cerrar playbook"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                >
+                  <X size={13} />
+                  Cerrar
+                </button>
+              )}
+            </div>
           </div>
           <p className="mx-auto mt-10 mb-3 max-w-3xl text-center text-xl font-bold leading-tight text-slate-700 dark:text-slate-100">
             {sourceDisplayTitle}
@@ -4551,6 +4611,19 @@ export function ResultPanel({
                               )
                             })}
                           </ul>
+                          <div className="mt-3 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyPhase(phase)}
+                              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
+                            >
+                              {copiedPhaseId === phase.id ? (
+                                <><Check size={11} className="text-emerald-500" /> Copiado</>
+                              ) : (
+                                <><Copy size={11} /> Copiar fase</>
+                              )}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>

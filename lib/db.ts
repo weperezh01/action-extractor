@@ -45,6 +45,7 @@ export interface DbExtraction {
   source_type: string
   source_label: string | null
   folder_id: string | null
+  is_starred: boolean
 }
 
 export interface DbExtractionFolder {
@@ -336,6 +337,8 @@ export interface DbChatConversation {
   id: string
   user_id: string
   title: string
+  context_type: string
+  context_id: string | null
   created_at: string
   updated_at: string
 }
@@ -461,6 +464,7 @@ interface DbExtractionRow {
   source_type?: string | null
   source_label?: string | null
   folder_id?: string | null
+  is_starred?: boolean | null
 }
 
 interface DbExtractionFolderRow {
@@ -707,6 +711,8 @@ interface DbChatConversationRow {
   id: string
   user_id: string
   title: string
+  context_type: string
+  context_id: string | null
   created_at: Date | string
   updated_at: Date | string
 }
@@ -1032,8 +1038,10 @@ const INIT_SQL = `
 
   CREATE TABLE IF NOT EXISTS chat_conversations (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title TEXT NOT NULL DEFAULT 'Asistente de Contenidos',
+    context_type TEXT NOT NULL DEFAULT 'global',
+    context_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
@@ -1103,6 +1111,9 @@ const INIT_SQL = `
   ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT 'Asistente de Contenidos';
   ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE chat_conversations DROP CONSTRAINT IF EXISTS chat_conversations_user_id_key;
+  ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS context_type TEXT NOT NULL DEFAULT 'global';
+  ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS context_id TEXT;
   ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
   ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS content TEXT NOT NULL DEFAULT '';
   ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS metadata_json TEXT NOT NULL DEFAULT '{}';
@@ -1167,7 +1178,8 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_extraction_task_views_task_id ON extraction_task_views(task_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_task_views_extraction_id ON extraction_task_views(extraction_id);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_extraction_task_views_task_user_unique ON extraction_task_views(task_id, user_id);
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_conversations_user_id ON chat_conversations(user_id);
+  DROP INDEX IF EXISTS idx_chat_conversations_user_id;
+  CREATE INDEX IF NOT EXISTS idx_chat_conversations_user ON chat_conversations(user_id, updated_at DESC);
   CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_created ON chat_messages(conversation_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_chat_messages_user_created ON chat_messages(user_id, created_at);
 
@@ -1199,6 +1211,7 @@ const INIT_SQL = `
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'youtube';
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_label TEXT;
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS folder_id TEXT;
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS is_starred BOOLEAN NOT NULL DEFAULT FALSE;
 
   CREATE TABLE IF NOT EXISTS extraction_folders (
     id TEXT PRIMARY KEY,
@@ -1434,9 +1447,66 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_community_post_comments_user_id ON community_post_comments(user_id);
   CREATE INDEX IF NOT EXISTS idx_community_post_views_post_id ON community_post_views(post_id);
   CREATE INDEX IF NOT EXISTS idx_community_post_views_user_id ON community_post_views(user_id);
+
+  -- Stripe monetization
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_users_stripe_customer_id
+    ON users(stripe_customer_id) WHERE stripe_customer_id IS NOT NULL;
+
+  CREATE TABLE IF NOT EXISTS user_plans (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plan TEXT NOT NULL DEFAULT 'free',
+    extractions_per_hour INTEGER NOT NULL DEFAULT 12,
+    stripe_subscription_id TEXT,
+    stripe_price_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    current_period_start TIMESTAMPTZ,
+    current_period_end TIMESTAMPTZ,
+    canceled_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_user_plans_user_active
+    ON user_plans(user_id) WHERE status = 'active';
+  CREATE INDEX IF NOT EXISTS idx_user_plans_stripe_sub
+    ON user_plans(stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL;
+
+  CREATE TABLE IF NOT EXISTS stripe_events (
+    id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    processed BOOLEAN NOT NULL DEFAULT FALSE,
+    raw_json TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_events(event_type);
+
+  -- Plan catalog (admin-managed)
+  CREATE TABLE IF NOT EXISTS plans (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    price_monthly_usd NUMERIC(10,2) NOT NULL DEFAULT 0,
+    stripe_price_id TEXT,
+    extractions_per_hour INTEGER NOT NULL DEFAULT 12,
+    features_json TEXT NOT NULL DEFAULT '{}',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    display_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  -- Seed initial plans (ON CONFLICT = idempotent, won't overwrite admin edits)
+  INSERT INTO plans (id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour, features_json, is_active, display_order)
+  VALUES
+    ('plan_free',     'free',     'Free',     0,  NULL, 12,  '{"batch_extraction":false,"export_integrations":true,"folders":true,"knowledge_chat":true,"concept_map_mode":true,"priority_support":false,"api_access":false}', true, 0),
+    ('plan_pro',      'pro',      'Pro',      15, NULL, 60,  '{"batch_extraction":true,"export_integrations":true,"folders":true,"knowledge_chat":true,"concept_map_mode":true,"priority_support":true,"api_access":false}',  true, 1),
+    ('plan_business', 'business', 'Business', 49, NULL, 200, '{"batch_extraction":true,"export_integrations":true,"folders":true,"knowledge_chat":true,"concept_map_mode":true,"priority_support":true,"api_access":true}',   true, 2)
+  ON CONFLICT (id) DO NOTHING;
 `
 
-const DB_INIT_SIGNATURE = '2026-02-25-playbook-tree-v1'
+const DB_INIT_SIGNATURE = '2026-02-28-plans-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -1593,6 +1663,7 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
     source_type: row.source_type ?? 'youtube',
     source_label: row.source_label ?? null,
     folder_id: row.folder_id ?? null,
+    is_starred: row.is_starred === true,
   }
 }
 
@@ -1933,6 +2004,8 @@ function mapChatConversationRow(row: DbChatConversationRow): DbChatConversation 
     id: row.id,
     user_id: row.user_id,
     title: row.title,
+    context_type: row.context_type ?? 'global',
+    context_id: row.context_id ?? null,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   }
@@ -2334,6 +2407,27 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
     [userId, limit]
   )
   return rows.map(mapExtractionRow)
+}
+
+export async function setExtractionStarredForUser(input: {
+  id: string
+  userId: string
+  starred: boolean
+}): Promise<DbExtraction | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionRow>(
+    `
+      UPDATE extractions
+      SET is_starred = $3
+      WHERE id = $1 AND user_id = $2
+      RETURNING
+        id, user_id, url, video_id, video_title, thumbnail_url,
+        extraction_mode, objective, phases_json, pro_tip, metadata_json,
+        share_visibility, created_at, source_type, source_label, folder_id, is_starred
+    `,
+    [input.id, input.userId, input.starred]
+  )
+  return rows[0] ? mapExtractionRow(rows[0]) : null
 }
 
 export async function assignUnfolderedExtractionsToGeneralForUser(userId: string) {
@@ -3419,23 +3513,26 @@ export async function updateExtractionFolderForUser(input: {
 export async function findOrCreateChatConversationForUser(userId: string) {
   await ensureDbReady()
 
+  // Find the most recent global conversation for this user
+  const { rows: existing } = await pool.query<DbChatConversationRow>(
+    `
+      SELECT id, user_id, title, context_type, context_id, created_at, updated_at
+      FROM chat_conversations
+      WHERE user_id = $1 AND context_type = 'global'
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `,
+    [userId]
+  )
+
+  if (existing[0]) return mapChatConversationRow(existing[0])
+
+  // Create a new global conversation if none exists
   const { rows } = await pool.query<DbChatConversationRow>(
     `
-      INSERT INTO chat_conversations (
-        id,
-        user_id,
-        title
-      )
-      VALUES ($1, $2, 'Asistente de Contenidos')
-      ON CONFLICT (user_id)
-      DO UPDATE SET
-        updated_at = NOW()
-      RETURNING
-        id,
-        user_id,
-        title,
-        created_at,
-        updated_at
+      INSERT INTO chat_conversations (id, user_id, title, context_type)
+      VALUES ($1, $2, 'Asistente de Contenidos', 'global')
+      RETURNING id, user_id, title, context_type, context_id, created_at, updated_at
     `,
     [randomUUID(), userId]
   )
@@ -3443,38 +3540,99 @@ export async function findOrCreateChatConversationForUser(userId: string) {
   return rows[0] ? mapChatConversationRow(rows[0]) : null
 }
 
-export async function listChatMessagesForUser(input: { userId: string; limit?: number }) {
+export async function listChatConversationsForUser(userId: string, limit = 30) {
+  await ensureDbReady()
+  const safeLimit = Math.min(100, Math.max(1, Math.trunc(limit)))
+  const { rows } = await pool.query<DbChatConversationRow>(
+    `
+      SELECT id, user_id, title, context_type, context_id, created_at, updated_at
+      FROM chat_conversations
+      WHERE user_id = $1
+      ORDER BY updated_at DESC
+      LIMIT $2
+    `,
+    [userId, safeLimit]
+  )
+  return rows.map(mapChatConversationRow)
+}
+
+export async function createChatConversationForUser(input: {
+  userId: string
+  title?: string
+  contextType?: string
+  contextId?: string
+}) {
+  await ensureDbReady()
+  const title = input.title?.trim() || 'Nueva conversación'
+  const contextType = input.contextType?.trim() || 'global'
+  const contextId = input.contextId?.trim() || null
+
+  const { rows } = await pool.query<DbChatConversationRow>(
+    `
+      INSERT INTO chat_conversations (id, user_id, title, context_type, context_id)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, user_id, title, context_type, context_id, created_at, updated_at
+    `,
+    [randomUUID(), input.userId, title, contextType, contextId]
+  )
+  return rows[0] ? mapChatConversationRow(rows[0]) : null
+}
+
+export async function renameChatConversationForUser(input: {
+  userId: string
+  conversationId: string
+  title: string
+}) {
+  await ensureDbReady()
+  const title = input.title.trim()
+  if (!title) return null
+  const { rows } = await pool.query<DbChatConversationRow>(
+    `
+      UPDATE chat_conversations
+      SET title = $3, updated_at = NOW()
+      WHERE id = $1 AND user_id = $2
+      RETURNING id, user_id, title, context_type, context_id, created_at, updated_at
+    `,
+    [input.conversationId, input.userId, title]
+  )
+  return rows[0] ? mapChatConversationRow(rows[0]) : null
+}
+
+export async function deleteChatConversationForUser(input: {
+  userId: string
+  conversationId: string
+}) {
+  await ensureDbReady()
+  const result = await pool.query(
+    `DELETE FROM chat_conversations WHERE id = $1 AND user_id = $2`,
+    [input.conversationId, input.userId]
+  )
+  return (result.rowCount ?? 0) > 0
+}
+
+export async function listChatMessagesForUser(input: {
+  userId: string
+  conversationId?: string
+  limit?: number
+}) {
   await ensureDbReady()
   const limit = Number.isFinite(input.limit)
     ? Math.min(200, Math.max(1, Math.trunc(input.limit ?? 60)))
     : 60
 
-  const conversation = await findOrCreateChatConversationForUser(input.userId)
-  if (!conversation) {
-    return [] as DbChatMessage[]
+  let conversationId = input.conversationId?.trim() || ''
+  if (!conversationId) {
+    const conversation = await findOrCreateChatConversationForUser(input.userId)
+    if (!conversation) return [] as DbChatMessage[]
+    conversationId = conversation.id
   }
 
   const { rows } = await pool.query<DbChatMessageRow>(
     `
-      SELECT
-        m.id,
-        m.conversation_id,
-        m.user_id,
-        m.role,
-        m.content,
-        m.metadata_json,
-        m.created_at,
-        m.updated_at
+      SELECT m.id, m.conversation_id, m.user_id, m.role, m.content,
+             m.metadata_json, m.created_at, m.updated_at
       FROM (
-        SELECT
-          id,
-          conversation_id,
-          user_id,
-          role,
-          content,
-          metadata_json,
-          created_at,
-          updated_at
+        SELECT id, conversation_id, user_id, role, content, metadata_json, created_at, updated_at
         FROM chat_messages
         WHERE conversation_id = $1 AND user_id = $2
         ORDER BY created_at DESC
@@ -3482,7 +3640,7 @@ export async function listChatMessagesForUser(input: { userId: string; limit?: n
       ) AS m
       ORDER BY m.created_at ASC
     `,
-    [conversation.id, input.userId, limit]
+    [conversationId, input.userId, limit]
   )
 
   return rows.map(mapChatMessageRow)
@@ -3493,13 +3651,18 @@ export async function createChatMessageForUser(input: {
   role: ChatMessageRole
   content: string
   metadataJson?: string
+  conversationId?: string
 }) {
   await ensureDbReady()
   const content = input.content.trim()
   if (!content) return null
 
-  const conversation = await findOrCreateChatConversationForUser(input.userId)
-  if (!conversation) return null
+  let resolvedConversationId = input.conversationId?.trim() || ''
+  if (!resolvedConversationId) {
+    const conversation = await findOrCreateChatConversationForUser(input.userId)
+    if (!conversation) return null
+    resolvedConversationId = conversation.id
+  }
 
   const { rows } = await pool.query<DbChatMessageRow>(
     `
@@ -3524,7 +3687,7 @@ export async function createChatMessageForUser(input: {
     `,
     [
       randomUUID(),
-      conversation.id,
+      resolvedConversationId,
       input.userId,
       input.role,
       content,
@@ -3538,30 +3701,33 @@ export async function createChatMessageForUser(input: {
       SET updated_at = NOW()
       WHERE id = $1
     `,
-    [conversation.id]
+    [resolvedConversationId]
   )
 
   return rows[0] ? mapChatMessageRow(rows[0]) : null
 }
 
-export async function clearChatMessagesForUser(userId: string) {
+export async function clearChatMessagesForUser(userId: string, conversationId?: string) {
   await ensureDbReady()
-  const result = await pool.query(
-    `
-      DELETE FROM chat_messages
-      WHERE user_id = $1
-    `,
-    [userId]
-  )
+  const resolvedId = conversationId?.trim() || ''
 
-  await pool.query(
-    `
-      UPDATE chat_conversations
-      SET updated_at = NOW()
-      WHERE user_id = $1
-    `,
-    [userId]
-  )
+  let result
+  if (resolvedId) {
+    result = await pool.query(
+      `DELETE FROM chat_messages WHERE user_id = $1 AND conversation_id = $2`,
+      [userId, resolvedId]
+    )
+    await pool.query(
+      `UPDATE chat_conversations SET updated_at = NOW() WHERE id = $1`,
+      [resolvedId]
+    )
+  } else {
+    result = await pool.query(`DELETE FROM chat_messages WHERE user_id = $1`, [userId])
+    await pool.query(
+      `UPDATE chat_conversations SET updated_at = NOW() WHERE user_id = $1`,
+      [userId]
+    )
+  }
 
   return result.rowCount ?? 0
 }
@@ -6796,6 +6962,51 @@ export async function getAdminUserAiCostDetail(userId: string): Promise<AdminUse
   }
 }
 
+export interface UserAiDailyStat {
+  date: string   // YYYY-MM-DD
+  calls: number
+  tokens: number
+  costUsd: number
+}
+
+export async function getUserAiDailyUsage(userId: string, days = 30): Promise<UserAiDailyStat[]> {
+  await ensureDbReady()
+  const safeDays = Math.min(90, Math.max(7, Math.trunc(days)))
+  const { rows } = await pool.query<{
+    day: Date | string
+    calls: number | string
+    input_tokens: number | string
+    output_tokens: number | string
+    cost_usd: string | number
+  }>(
+    `
+      SELECT
+        DATE(created_at AT TIME ZONE 'UTC') AS day,
+        COUNT(*)::int AS calls,
+        COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+        COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+        COALESCE(SUM(cost_usd), 0) AS cost_usd
+      FROM ai_usage_log
+      WHERE user_id = $1
+        AND created_at >= NOW() - ($2 * INTERVAL '1 day')
+      GROUP BY day
+      ORDER BY day ASC
+    `,
+    [userId, safeDays]
+  )
+  return rows.map((row) => ({
+    date:
+      typeof row.day === 'string'
+        ? row.day.slice(0, 10)
+        : row.day instanceof Date
+          ? row.day.toISOString().slice(0, 10)
+          : String(row.day).slice(0, 10),
+    calls: parseDbInteger(row.calls),
+    tokens: Number(row.input_tokens ?? 0) + Number(row.output_tokens ?? 0),
+    costUsd: Number(row.cost_usd ?? 0),
+  }))
+}
+
 export interface AdminUserMonthStat {
   month: string          // 'YYYY-MM'
   month_label: string    // 'Feb 2026'
@@ -6964,6 +7175,455 @@ export async function getAdminAiCostStats(periodDays = 30): Promise<AdminAiCostS
     })),
   }
 }
+
+// ── Plan Catalog (admin-managed) ─────────────────────────────────────────────
+
+export interface DbPlan {
+  id: string
+  name: string
+  display_name: string
+  price_monthly_usd: number
+  stripe_price_id: string | null
+  extractions_per_hour: number
+  features_json: string
+  is_active: boolean
+  display_order: number
+  created_at: string
+  updated_at: string
+}
+
+interface DbPlanRow {
+  id: string
+  name: string
+  display_name: string
+  price_monthly_usd: string | number
+  stripe_price_id: string | null
+  extractions_per_hour: string | number
+  features_json: string
+  is_active: boolean
+  display_order: string | number
+  created_at: Date | string
+  updated_at: Date | string
+}
+
+function mapPlanRow(row: DbPlanRow): DbPlan {
+  return {
+    id: row.id,
+    name: row.name,
+    display_name: row.display_name,
+    price_monthly_usd: Number(row.price_monthly_usd),
+    stripe_price_id: row.stripe_price_id ?? null,
+    extractions_per_hour: parseDbInteger(row.extractions_per_hour),
+    features_json: row.features_json,
+    is_active: Boolean(row.is_active),
+    display_order: parseDbInteger(row.display_order),
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  }
+}
+
+export async function listPlans(): Promise<DbPlan[]> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbPlanRow>(
+    `SELECT id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
+            features_json, is_active, display_order, created_at, updated_at
+     FROM plans
+     ORDER BY display_order ASC, created_at ASC`
+  )
+  return rows.map(mapPlanRow)
+}
+
+export async function getPlanByName(name: string): Promise<DbPlan | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbPlanRow>(
+    `SELECT id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
+            features_json, is_active, display_order, created_at, updated_at
+     FROM plans WHERE name = $1 LIMIT 1`,
+    [name]
+  )
+  return rows[0] ? mapPlanRow(rows[0]) : null
+}
+
+export async function createPlan(input: {
+  name: string
+  displayName: string
+  priceMonthlyUsd: number
+  stripePriceId: string | null
+  extractionsPerHour: number
+  featuresJson: string
+  isActive: boolean
+  displayOrder: number
+}): Promise<DbPlan> {
+  await ensureDbReady()
+  const id = `plan_${randomUUID().replace(/-/g, '').slice(0, 12)}`
+  const { rows } = await pool.query<DbPlanRow>(
+    `INSERT INTO plans
+       (id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
+        features_json, is_active, display_order)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
+               features_json, is_active, display_order, created_at, updated_at`,
+    [
+      id,
+      input.name.toLowerCase().trim(),
+      input.displayName.trim(),
+      input.priceMonthlyUsd,
+      input.stripePriceId || null,
+      input.extractionsPerHour,
+      input.featuresJson,
+      input.isActive,
+      input.displayOrder,
+    ]
+  )
+  return mapPlanRow(rows[0])
+}
+
+export async function updatePlan(
+  id: string,
+  input: Partial<{
+    name: string
+    displayName: string
+    priceMonthlyUsd: number
+    stripePriceId: string | null
+    extractionsPerHour: number
+    featuresJson: string
+    isActive: boolean
+    displayOrder: number
+  }>
+): Promise<DbPlan | null> {
+  await ensureDbReady()
+
+  const setClauses: string[] = ['updated_at = NOW()']
+  const values: unknown[] = []
+  let idx = 1
+
+  if (input.name !== undefined) { setClauses.push(`name = $${idx++}`); values.push(input.name.toLowerCase().trim()) }
+  if (input.displayName !== undefined) { setClauses.push(`display_name = $${idx++}`); values.push(input.displayName.trim()) }
+  if (input.priceMonthlyUsd !== undefined) { setClauses.push(`price_monthly_usd = $${idx++}`); values.push(input.priceMonthlyUsd) }
+  if ('stripePriceId' in input) { setClauses.push(`stripe_price_id = $${idx++}`); values.push(input.stripePriceId || null) }
+  if (input.extractionsPerHour !== undefined) { setClauses.push(`extractions_per_hour = $${idx++}`); values.push(input.extractionsPerHour) }
+  if (input.featuresJson !== undefined) { setClauses.push(`features_json = $${idx++}`); values.push(input.featuresJson) }
+  if (input.isActive !== undefined) { setClauses.push(`is_active = $${idx++}`); values.push(input.isActive) }
+  if (input.displayOrder !== undefined) { setClauses.push(`display_order = $${idx++}`); values.push(input.displayOrder) }
+
+  if (values.length === 0) return getPlanByName(id) // nothing to update
+
+  values.push(id)
+  const { rows } = await pool.query<DbPlanRow>(
+    `UPDATE plans SET ${setClauses.join(', ')}
+     WHERE id = $${idx}
+     RETURNING id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
+               features_json, is_active, display_order, created_at, updated_at`,
+    values
+  )
+  return rows[0] ? mapPlanRow(rows[0]) : null
+}
+
+export async function deletePlan(id: string): Promise<void> {
+  await ensureDbReady()
+  await pool.query(`DELETE FROM plans WHERE id = $1`, [id])
+}
+
+// ── Stripe / User Plans ─────────────────────────────────────────────────────
+
+export interface DbUserPlan {
+  id: string
+  user_id: string
+  plan: string
+  extractions_per_hour: number
+  stripe_subscription_id: string | null
+  stripe_price_id: string | null
+  status: string
+  current_period_start: string | null
+  current_period_end: string | null
+  canceled_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+interface DbUserPlanRow {
+  id: string
+  user_id: string
+  plan: string
+  extractions_per_hour: number | string
+  stripe_subscription_id: string | null
+  stripe_price_id: string | null
+  status: string
+  current_period_start: Date | string | null
+  current_period_end: Date | string | null
+  canceled_at: Date | string | null
+  created_at: Date | string
+  updated_at: Date | string
+}
+
+function mapUserPlanRow(row: DbUserPlanRow): DbUserPlan {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    plan: row.plan,
+    extractions_per_hour: parseDbInteger(row.extractions_per_hour),
+    stripe_subscription_id: row.stripe_subscription_id ?? null,
+    stripe_price_id: row.stripe_price_id ?? null,
+    status: row.status,
+    current_period_start: row.current_period_start ? toIso(row.current_period_start) : null,
+    current_period_end: row.current_period_end ? toIso(row.current_period_end) : null,
+    canceled_at: row.canceled_at ? toIso(row.canceled_at) : null,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  }
+}
+
+export async function getUserActivePlan(userId: string): Promise<DbUserPlan | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbUserPlanRow>(
+    `SELECT id, user_id, plan, extractions_per_hour, stripe_subscription_id, stripe_price_id,
+            status, current_period_start, current_period_end, canceled_at, created_at, updated_at
+     FROM user_plans
+     WHERE user_id = $1 AND status = 'active'
+     LIMIT 1`,
+    [userId]
+  )
+  return rows[0] ? mapUserPlanRow(rows[0]) : null
+}
+
+export async function getUserPlanRateLimit(userId: string): Promise<number> {
+  const plan = await getUserActivePlan(userId)
+  if (!plan) {
+    // Fall back to env-based limit (same logic as resolveExtractionRateLimitPerHour)
+    const raw = process.env.ACTION_EXTRACTOR_EXTRACTIONS_PER_HOUR
+    if (!raw) return 12
+    const parsed = Number.parseInt(raw, 10)
+    return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 500) : 12
+  }
+  return plan.extractions_per_hour
+}
+
+export async function upsertUserActivePlan(input: {
+  userId: string
+  plan: string
+  extractionsPerHour: number
+  subscriptionId: string
+  priceId: string
+  periodStart: Date | null
+  periodEnd: Date | null
+}): Promise<void> {
+  await ensureDbReady()
+  const id = randomUUID()
+  await pool.query(
+    `INSERT INTO user_plans
+       (id, user_id, plan, extractions_per_hour, stripe_subscription_id, stripe_price_id,
+        status, current_period_start, current_period_end, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, NOW())
+     ON CONFLICT (user_id) WHERE status = 'active'
+     DO UPDATE SET
+       plan = EXCLUDED.plan,
+       extractions_per_hour = EXCLUDED.extractions_per_hour,
+       stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+       stripe_price_id = EXCLUDED.stripe_price_id,
+       current_period_start = EXCLUDED.current_period_start,
+       current_period_end = EXCLUDED.current_period_end,
+       updated_at = NOW()`,
+    [
+      id,
+      input.userId,
+      input.plan,
+      input.extractionsPerHour,
+      input.subscriptionId,
+      input.priceId,
+      input.periodStart ? input.periodStart.toISOString() : null,
+      input.periodEnd ? input.periodEnd.toISOString() : null,
+    ]
+  )
+}
+
+export async function deactivateUserPlan(userId: string, subscriptionId: string): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `UPDATE user_plans
+     SET status = 'canceled', canceled_at = NOW(), updated_at = NOW()
+     WHERE user_id = $1 AND stripe_subscription_id = $2 AND status = 'active'`,
+    [userId, subscriptionId]
+  )
+}
+
+export async function setUserStripeCustomerId(userId: string, stripeCustomerId: string): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `UPDATE users SET stripe_customer_id = $2, updated_at = NOW() WHERE id = $1`,
+    [userId, stripeCustomerId]
+  )
+}
+
+export async function getUserByStripeCustomerId(stripeCustomerId: string): Promise<DbUser | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbUserRow>(
+    `SELECT id, name, email, password_hash, email_verified_at, blocked_at, created_at, updated_at
+     FROM users
+     WHERE stripe_customer_id = $1
+     LIMIT 1`,
+    [stripeCustomerId]
+  )
+  return rows[0] ? mapUserRow(rows[0]) : null
+}
+
+export async function getUserStripeCustomerId(userId: string): Promise<string | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ stripe_customer_id: string | null }>(
+    `SELECT stripe_customer_id FROM users WHERE id = $1 LIMIT 1`,
+    [userId]
+  )
+  return rows[0]?.stripe_customer_id ?? null
+}
+
+export async function logStripeEvent(
+  id: string,
+  eventType: string,
+  userId: string | null,
+  rawJson: string
+): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `INSERT INTO stripe_events (id, event_type, user_id, raw_json)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (id) DO NOTHING`,
+    [id, eventType, userId, rawJson]
+  )
+}
+
+// ── Dashboard stats ────────────────────────────────────────────────────────
+
+export async function getUserDashboardStats(userId: string): Promise<{
+  extractions: {
+    total: number
+    thisWeek: number
+    thisMonth: number
+    starred: number
+    byMode: Record<string, number>
+    bySourceType: Record<string, number>
+  }
+  tasks: { total: number; completed: number }
+  savedMinutes: number
+  activity: { date: string; count: number }[]
+  streak: { current: number; longest: number }
+}> {
+  await ensureDbReady()
+
+  const [aggRows, modeRows, sourceRows, taskRows, savedRows, activityRows] = await Promise.all([
+    // Q1 — Extraction aggregates
+    pool.query<{
+      total: number
+      this_week: number
+      this_month: number
+      starred: number
+    }>(
+      `SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days')::int  AS this_week,
+        COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days')::int AS this_month,
+        COUNT(*) FILTER (WHERE is_starred = true)::int AS starred
+       FROM extractions WHERE user_id = $1`,
+      [userId]
+    ),
+    // Q2 — Breakdown by mode
+    pool.query<{ extraction_mode: string; cnt: number }>(
+      `SELECT extraction_mode, COUNT(*)::int AS cnt
+       FROM extractions WHERE user_id = $1
+       GROUP BY extraction_mode`,
+      [userId]
+    ),
+    // Q3 — Breakdown by source type
+    pool.query<{ source_type: string; cnt: number }>(
+      `SELECT COALESCE(source_type, 'youtube') AS source_type, COUNT(*)::int AS cnt
+       FROM extractions WHERE user_id = $1
+       GROUP BY COALESCE(source_type, 'youtube')`,
+      [userId]
+    ),
+    // Q4 — Tasks
+    pool.query<{ total: number; completed: number }>(
+      `SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE status = 'completed' OR checked = true)::int AS completed
+       FROM extraction_tasks WHERE user_id = $1`,
+      [userId]
+    ),
+    // Q5 — Time saved
+    pool.query<{ total_minutes: number }>(
+      `SELECT COALESCE(SUM(
+        COALESCE((regexp_match(metadata_json::json->>'savedTime', '(\\d+)h'))[1]::int * 60, 0) +
+        COALESCE((regexp_match(metadata_json::json->>'savedTime', '(\\d+)m'))[1]::int, 0)
+       ), 0)::int AS total_minutes
+       FROM extractions WHERE user_id = $1`,
+      [userId]
+    ),
+    // Q6 — Activity heatmap (last 365 days)
+    pool.query<{ day: string; cnt: number }>(
+      `SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, COUNT(*)::int AS cnt
+       FROM extractions
+       WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '365 days'
+       GROUP BY TO_CHAR(created_at, 'YYYY-MM-DD')
+       ORDER BY day`,
+      [userId]
+    ),
+  ])
+
+  const agg = aggRows.rows[0] ?? { total: 0, this_week: 0, this_month: 0, starred: 0 }
+  const byMode: Record<string, number> = {}
+  for (const row of modeRows.rows) byMode[row.extraction_mode] = Number(row.cnt)
+  const bySourceType: Record<string, number> = {}
+  for (const row of sourceRows.rows) bySourceType[row.source_type] = Number(row.cnt)
+  const taskAgg = taskRows.rows[0] ?? { total: 0, completed: 0 }
+  const savedMinutes = Number(savedRows.rows[0]?.total_minutes ?? 0)
+  const activity = activityRows.rows.map((r) => ({ date: r.day, count: Number(r.cnt) }))
+
+  // Compute streaks from activity data
+  const activityMap = new Map(activity.map((a) => [a.date, a.count]))
+  const today = new Date()
+
+  // Current streak: consecutive days from today backwards
+  let current = 0
+  for (let i = 0; i < 365; i++) {
+    const d = new Date(today)
+    d.setDate(d.getDate() - i)
+    const dateStr = d.toISOString().slice(0, 10)
+    if ((activityMap.get(dateStr) ?? 0) > 0) {
+      current++
+    } else {
+      break
+    }
+  }
+
+  // Longest streak: scan oldest-to-newest
+  let longest = current
+  let run = 0
+  for (let i = 364; i >= 0; i--) {
+    const d = new Date(today)
+    d.setDate(d.getDate() - i)
+    const dateStr = d.toISOString().slice(0, 10)
+    if ((activityMap.get(dateStr) ?? 0) > 0) {
+      run++
+      if (run > longest) longest = run
+    } else {
+      run = 0
+    }
+  }
+
+  return {
+    extractions: {
+      total: Number(agg.total),
+      thisWeek: Number(agg.this_week),
+      thisMonth: Number(agg.this_month),
+      starred: Number(agg.starred),
+      byMode,
+      bySourceType,
+    },
+    tasks: { total: Number(taskAgg.total), completed: Number(taskAgg.completed) },
+    savedMinutes,
+    activity,
+    streak: { current, longest },
+  }
+}
+
+// ── Guest rate limit (existing, unchanged) ─────────────────────────────────
 
 export async function consumeGuestExtractionRateLimit(guestId: string): Promise<{
   allowed: boolean

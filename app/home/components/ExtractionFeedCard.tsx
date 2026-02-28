@@ -344,6 +344,7 @@ export function ExtractionFeedCard({
         executive_summary: 'resumen-ejecutivo',
         business_ideas: 'ideas-de-negocio',
         key_quotes: 'frases-clave',
+        concept_map: 'mapa-conceptual',
       }
 
       const { jsPDF } = await import('jspdf')

@@ -557,6 +557,7 @@ export function ExtractionForm({
             ) : (
               <input
                 type="text"
+                data-extraction-input="true"
                 placeholder={
                   isSearchMode
                     ? 'Busca playbooks públicos por título, objetivo o autor...'

@@ -34,6 +34,7 @@ const MODE_PROMPT_VERSION: Record<ExtractionMode, string> = {
   executive_summary: EXTRACTION_PROMPT_VERSION,
   business_ideas: EXTRACTION_PROMPT_VERSION,
   key_quotes: EXTRACTION_PROMPT_VERSION,
+  concept_map: EXTRACTION_PROMPT_VERSION,
 }
 
 export function getExtractionPromptVersion(
@@ -108,6 +109,21 @@ REGLAS GLOBALES:
 - Cada frase debe incluir interpretación práctica concreta.`
 }
 
+function buildConceptMapSystemPrompt(language: ResolvedExtractionOutputLanguage) {
+  return `Actúa como un Experto en Síntesis del Conocimiento. Tu objetivo es mapear las ideas, conceptos y relaciones presentes en el contenido.
+
+OBJETIVO:
+- Construir un árbol jerárquico de conceptos: desde la idea central hasta sus ramas y subconceptos.
+
+REGLAS GLOBALES:
+- ${buildLanguageResponseRule(language)}
+- Cada nodo debe ser una idea concisa (máximo 15 palabras).
+- Las relaciones entre conceptos deben ser explícitas en los ítems de cada sección.
+- Prioriza conceptos únicos y relaciones no obvias.
+- Incluye de 4 a 6 ramas principales (fases) con 3 a 5 subconceptos cada una.
+- ${buildDifficultyRule(language)}`
+}
+
 export function buildExtractionSystemPrompt(
   mode: ExtractionMode,
   outputLanguage: ResolvedExtractionOutputLanguage
@@ -119,6 +135,8 @@ export function buildExtractionSystemPrompt(
       return buildBusinessIdeasSystemPrompt(outputLanguage)
     case 'key_quotes':
       return buildKeyQuotesSystemPrompt(outputLanguage)
+    case 'concept_map':
+      return buildConceptMapSystemPrompt(outputLanguage)
     case 'action_plan':
     default:
       return buildActionPlanSystemPrompt(outputLanguage)
@@ -286,6 +304,48 @@ TRANSCRIPCIÓN:
 ${transcript}`
 }
 
+function buildConceptMapUserPrompt(
+  transcript: string,
+  outputLanguage: ResolvedExtractionOutputLanguage
+) {
+  const languageLabel = outputLanguage === 'en' ? 'English' : 'Español'
+  return `MODO SOLICITADO: Mapa Conceptual
+IDIOMA DE SALIDA: ${languageLabel}
+
+Analiza la transcripción y construye un mapa conceptual jerárquico.
+
+REGLAS DE SALIDA OBLIGATORIAS:
+- Genera entre 4 y 6 ramas principales (fases/conceptos padre).
+- Cada rama debe tener entre 3 y 5 subconceptos (ítems).
+- Los ítems describen el subconcepto y su relación con la rama padre.
+- El objetivo resume la idea central del contenido (máximo 2 líneas).
+- El proTip debe ser el concepto más contraintuitivo o menos conocido.
+
+Responde ÚNICAMENTE con un JSON válido con esta estructura exacta (sin markdown, sin texto adicional):
+
+{
+  "objective": "Concepto central del contenido en máximo 2 líneas",
+  "phases": [
+    {
+      "id": 1,
+      "title": "Concepto 1: Nombre del nodo raíz",
+      "items": [
+        "Subconcepto 1.1: descripción y relación con el padre",
+        "Subconcepto 1.2: descripción y relación con el padre"
+      ]
+    }
+  ],
+  "proTip": "El concepto más sorprendente o menos obvio del contenido",
+  "metadata": {
+    "difficulty": "Media",
+    "readingTime": "3 min"
+  }
+}
+
+TRANSCRIPCIÓN:
+${transcript}`
+}
+
 export function buildExtractionUserPrompt(
   transcript: string,
   mode: ExtractionMode,
@@ -298,6 +358,8 @@ export function buildExtractionUserPrompt(
       return buildBusinessIdeasUserPrompt(transcript, outputLanguage)
     case 'key_quotes':
       return buildKeyQuotesUserPrompt(transcript, outputLanguage)
+    case 'concept_map':
+      return buildConceptMapUserPrompt(transcript, outputLanguage)
     case 'action_plan':
     default:
       return buildActionPlanUserPrompt(transcript, mode, outputLanguage)

@@ -3,6 +3,7 @@ export type ExtractionMode =
   | 'executive_summary'
   | 'business_ideas'
   | 'key_quotes'
+  | 'concept_map'
 
 export interface ExtractionModeOption {
   value: ExtractionMode
@@ -32,6 +33,11 @@ export const EXTRACTION_MODE_OPTIONS: readonly ExtractionModeOption[] = [
     value: 'key_quotes',
     label: 'Frases Clave',
     description: 'Citas textuales con contexto práctico',
+  },
+  {
+    value: 'concept_map',
+    label: 'Mapa Conceptual',
+    description: 'Árbol de ideas y conceptos clave',
   },
 ]
 

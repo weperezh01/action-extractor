@@ -285,6 +285,10 @@ export function FolderDock({
   onFocusOpenDeskPlaybook,
   onCloseOpenDeskPlaybook,
 }: FolderDockProps) {
+  const [visiblePanels, setVisiblePanels] = useState<{ folders: boolean; desk: boolean }>({
+    folders: true,
+    desk: true,
+  })
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set())
   const [isCreating, setIsCreating] = useState(false)
   const [creatingParentId, setCreatingParentId] = useState<string | null>(null)
@@ -522,6 +526,23 @@ export function FolderDock({
   useEffect(() => {
     setDeskSearch('')
   }, [deskSelectionKey])
+
+  const togglePanelVisibility = (panel: 'folders' | 'desk') => {
+    setVisiblePanels((previous) => {
+      const next = {
+        ...previous,
+        [panel]: !previous[panel],
+      }
+      if (!next.folders && !next.desk) {
+        return previous
+      }
+      return next
+    })
+  }
+
+  const showFoldersPanel = visiblePanels.folders
+  const showDeskPanel = visiblePanels.desk
+  const showBothPanels = showFoldersPanel && showDeskPanel
 
   const activeFolderPaths = selectedFolderIds
     .map((id) => (folderById.has(id) ? buildFolderPathLabel(id, folderById) : null))
@@ -780,8 +801,43 @@ export function FolderDock({
         </p>
       )}
       <div className="rounded-xl border border-[#d7c6a7]/70 bg-[linear-gradient(180deg,#fffdfa_0%,#f7efdf_100%)] p-2 shadow-[0_10px_22px_-20px_rgba(74,52,26,0.65)] dark:border-[#5d4f3f]/80 dark:bg-[linear-gradient(180deg,#26211c_0%,#2f271f_100%)]">
-        <div className="grid gap-2 lg:grid-cols-[minmax(14.5rem,max-content)_minmax(0,1fr)]">
-          <div className="min-w-0">
+        <div className="mb-2 flex flex-wrap items-center gap-1.5 px-1">
+          <button
+            type="button"
+            onClick={() => togglePanelVisibility('folders')}
+            aria-pressed={showFoldersPanel}
+            className={`inline-flex items-center rounded-md border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors ${
+              showFoldersPanel
+                ? 'border-[#b79260] bg-[linear-gradient(180deg,#fff5df_0%,#eecf9a_100%)] text-[#5a4324] shadow-[0_8px_14px_-12px_rgba(78,55,28,0.82)] dark:border-[#8a6a45] dark:bg-[linear-gradient(180deg,#4a3929_0%,#5b452f_100%)] dark:text-[#ecd8b9]'
+                : 'border-[#ceb994] bg-[linear-gradient(180deg,#fffefb_0%,#f5ead4_100%)] text-[#8a714f] hover:border-[#b69363] hover:text-[#654b2b] dark:border-[#64533f] dark:bg-[linear-gradient(180deg,#2f271f_0%,#372d23_100%)] dark:text-[#bca689] dark:hover:border-[#816545] dark:hover:text-[#e0cfb3]'
+            }`}
+          >
+            Carpetas
+          </button>
+          <button
+            type="button"
+            onClick={() => togglePanelVisibility('desk')}
+            aria-pressed={showDeskPanel}
+            className={`inline-flex items-center rounded-md border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors ${
+              showDeskPanel
+                ? 'border-[#b79260] bg-[linear-gradient(180deg,#fff5df_0%,#eecf9a_100%)] text-[#5a4324] shadow-[0_8px_14px_-12px_rgba(78,55,28,0.82)] dark:border-[#8a6a45] dark:bg-[linear-gradient(180deg,#4a3929_0%,#5b452f_100%)] dark:text-[#ecd8b9]'
+                : 'border-[#ceb994] bg-[linear-gradient(180deg,#fffefb_0%,#f5ead4_100%)] text-[#8a714f] hover:border-[#b69363] hover:text-[#654b2b] dark:border-[#64533f] dark:bg-[linear-gradient(180deg,#2f271f_0%,#372d23_100%)] dark:text-[#bca689] dark:hover:border-[#816545] dark:hover:text-[#e0cfb3]'
+            }`}
+          >
+            Escritorio
+          </button>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#8f7552] dark:text-[#b7a287]">
+            Vista: {showBothPanels ? 'Ambos' : showFoldersPanel ? 'Carpetas' : 'Escritorio'}
+          </span>
+        </div>
+
+        <div
+          className={`grid gap-2 ${
+            showBothPanels ? 'lg:grid-cols-[minmax(14.5rem,max-content)_minmax(0,1fr)]' : 'grid-cols-[minmax(0,1fr)]'
+          }`}
+        >
+          {showFoldersPanel && (
+            <div className="min-w-0">
             <div className="mb-2 flex items-center gap-2 px-1">
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#8d714e] dark:text-[#c8b292]">
                 Carpetas
@@ -839,8 +895,10 @@ export function FolderDock({
               )}
             </div>
           </div>
+          )}
 
-          <aside className="folder-playbooks-desk min-w-0 rounded-lg p-2">
+          {showDeskPanel && (
+            <aside className="folder-playbooks-desk min-w-0 rounded-lg p-2">
             <span aria-hidden="true" className="folder-playbooks-desk-stamp">
               Escritorio
             </span>
@@ -1043,6 +1101,7 @@ export function FolderDock({
               <span className="folder-playbooks-desk-mouse" />
             </span>
           </aside>
+          )}
         </div>
       </div>
     </div>

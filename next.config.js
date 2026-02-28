@@ -32,9 +32,6 @@ const { withSentryConfig } = require('@sentry/nextjs')
 const nextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
-  experimental: {
-    instrumentationHook: true,
-  },
   images: {
     remotePatterns: [
       {
@@ -69,7 +66,7 @@ const nextConfig = {
   },
 }
 
-module.exports = withSentryConfig(nextConfig, {
+const sentryConfig = withSentryConfig(nextConfig, {
   silent: true,
   telemetry: false,
   webpack: {
@@ -78,3 +75,5 @@ module.exports = withSentryConfig(nextConfig, {
     },
   },
 })
+
+module.exports = isDevelopment ? nextConfig : sentryConfig

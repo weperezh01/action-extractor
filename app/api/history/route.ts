@@ -51,6 +51,7 @@ export async function GET(req: NextRequest) {
     sourceType: row.source_type ?? 'youtube',
     sourceLabel: row.source_label ?? null,
     folderId: row.folder_id ?? defaultGeneralFolderId,
+    isStarred: row.is_starred === true,
   }))
 
   return NextResponse.json({ history })
