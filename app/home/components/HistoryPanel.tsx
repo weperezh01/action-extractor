@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlignLeft, ChevronDown, Copy, Download, FileText, Folder, Globe, History, PenLine, Play, RotateCcw, Search, Share2, Star, Trash2 } from 'lucide-react'
+import { AlignLeft, ChevronDown, Copy, Download, FileText, Folder, Globe, History, PenLine, Play, RotateCcw, Search, Share2, Star, Tag, Trash2 } from 'lucide-react'
 import type { FolderItem } from '@/app/home/components/FolderDock'
+import type { ExtractionTag } from '@/app/home/lib/types'
 import { FOLDER_COLORS } from '@/app/home/components/FolderDock'
 import Image from 'next/image'
 import { EXTRACTION_MODE_OPTIONS, getExtractionModeLabel, normalizeExtractionMode, type ExtractionMode } from '@/lib/extraction-modes'
@@ -72,6 +73,9 @@ interface HistoryPanelProps {
   onClearHistory: () => void
   onStarItem?: (item: HistoryItem, starred: boolean) => void
   onReExtractMode?: (item: HistoryItem, mode: ExtractionMode) => void
+  allTags?: ExtractionTag[]
+  activeTagIds?: string[]
+  onToggleTagFilter?: (tagId: string) => void
 }
 
 export function HistoryPanel({
@@ -126,6 +130,9 @@ export function HistoryPanel({
   onClearHistory,
   onStarItem,
   onReExtractMode,
+  allTags = [],
+  activeTagIds = [],
+  onToggleTagFilter,
 }: HistoryPanelProps) {
   const generalFolderId = folders.find((folder) => resolveSystemExtractionFolderKey(folder.id) === 'general')?.id ?? null
   const hasHistory = history.length > 0
@@ -280,6 +287,30 @@ export function HistoryPanel({
         </div>
       </div>
 
+      {/* Tag filter chips */}
+      {allTags.length > 0 && onToggleTagFilter && (
+        <div className="flex flex-wrap gap-1.5 px-5 py-2 border-b border-slate-100 bg-slate-50/40 dark:bg-slate-800/25 dark:border-slate-800">
+          <Tag size={12} className="mt-0.5 shrink-0 text-slate-400 dark:text-slate-500" />
+          {allTags.map((tag) => {
+            const active = activeTagIds.includes(tag.id)
+            return (
+              <button
+                key={tag.id}
+                type="button"
+                onClick={() => onToggleTagFilter(tag.id)}
+                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors ${
+                  active
+                    ? 'border-indigo-300 bg-indigo-100 text-indigo-700 dark:border-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300'
+                    : 'border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:border-indigo-600 dark:hover:text-indigo-300'
+                }`}
+              >
+                #{tag.name}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       {history.length === 0 && !historyLoading && (
         <p className="px-5 py-6 text-sm text-slate-500 dark:text-slate-400">
           Aún no tienes extracciones guardadas.
@@ -372,6 +403,14 @@ export function HistoryPanel({
                         #{item.orderNumber}
                       </span>
                     )}
+                    {(item.tags ?? []).map((tag) => (
+                      <span
+                        key={tag.id}
+                        className="inline-flex items-center gap-0.5 rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-600 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300"
+                      >
+                        #{tag.name}
+                      </span>
+                    ))}
                     <span
                       title={item.id}
                       className="max-w-[14rem] truncate rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 font-mono text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 md:max-w-[18rem]"

@@ -52,6 +52,7 @@ export async function GET(req: NextRequest) {
     sourceLabel: row.source_label ?? null,
     folderId: row.folder_id ?? defaultGeneralFolderId,
     isStarred: row.is_starred === true,
+    tags: row.tags ?? [],
   }))
 
   return NextResponse.json({ history })

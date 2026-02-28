@@ -72,6 +72,7 @@ import type {
   ExtractResult,
   ExtractionAccessRole,
   ExtractionMember,
+  ExtractionTag,
   HistoryItem,
   Phase,
   ShareVisibility,
@@ -411,6 +412,8 @@ function ActionExtractor() {
   const [rateLimitTotal, setRateLimitTotal] = useState<number | null>(null)
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false)
   const [isBatchMode, setIsBatchMode] = useState(false)
+  const [allTags, setAllTags] = useState<ExtractionTag[]>([])
+  const [activeTagIds, setActiveTagIds] = useState<string[]>([])
   const extractorSectionRef = useRef<HTMLElement | null>(null)
   const resultAnchorRef = useRef<HTMLDivElement | null>(null)
   const historyAnchorRef = useRef<HTMLDivElement | null>(null)
@@ -865,9 +868,63 @@ function ActionExtractor() {
     resetExtractionUiState()
   }, [resetExtractionUiState, resetFolders, resetHistory])
 
+  const loadTags = useCallback(async () => {
+    try {
+      const res = await fetch('/api/tags', { cache: 'no-store' })
+      if (!res.ok) return
+      const data = (await res.json()) as { tags: ExtractionTag[] }
+      setAllTags(data.tags ?? [])
+    } catch { /* noop */ }
+  }, [])
+
   const handleAuthenticated = useCallback(async () => {
-    await Promise.all([loadHistory(), loadFolders(), refreshSharedResources()])
-  }, [loadFolders, loadHistory, refreshSharedResources])
+    await Promise.all([loadHistory(), loadFolders(), refreshSharedResources(), loadTags()])
+  }, [loadFolders, loadHistory, loadTags, refreshSharedResources])
+
+  // ── Tag handlers ────────────────────────────────────────────────────────
+  const handleAddTagToResult = useCallback(async (name: string, color: string) => {
+    if (!result?.id) return
+    // 1. Upsert tag
+    const tagRes = await fetch('/api/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, color }),
+    })
+    if (!tagRes.ok) return
+    const { tag } = (await tagRes.json()) as { tag: ExtractionTag }
+    // 2. Assign to extraction
+    await fetch(`/api/extractions/${result.id}/tags`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tagId: tag.id }),
+    })
+    // 3. Refresh tags list + result tags
+    await Promise.all([loadTags(), loadHistory()])
+    setResult((prev) =>
+      prev
+        ? { ...prev, tags: [...(prev.tags ?? []).filter((t) => t.id !== tag.id), tag] }
+        : prev
+    )
+  }, [result?.id, loadTags, loadHistory])
+
+  const handleRemoveTagFromResult = useCallback(async (tagId: string) => {
+    if (!result?.id) return
+    await fetch(`/api/extractions/${result.id}/tags`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tagId }),
+    })
+    await loadHistory()
+    setResult((prev) =>
+      prev ? { ...prev, tags: (prev.tags ?? []).filter((t) => t.id !== tagId) } : prev
+    )
+  }, [result?.id, loadHistory])
+
+  const handleToggleTagFilter = useCallback((tagId: string) => {
+    setActiveTagIds((prev) =>
+      prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]
+    )
+  }, [])
 
   const {
     sessionLoading,
@@ -2750,9 +2807,17 @@ function ActionExtractor() {
     setNotice(`Historial limpiado correctamente${deletedCount}.`)
   }, [clearAllHistory, handleUnauthorized, history.length])
 
-  const filteredHistoryForActiveFolders = activeFolderIds.length > 0
-    ? filteredHistory.filter((item) => item.folderId != null && activeFolderIds.includes(item.folderId))
-    : filteredHistory
+  const filteredHistoryForActiveFolders = (() => {
+    let items = activeFolderIds.length > 0
+      ? filteredHistory.filter((item) => item.folderId != null && activeFolderIds.includes(item.folderId))
+      : filteredHistory
+    if (activeTagIds.length > 0) {
+      items = items.filter((item) =>
+        activeTagIds.every((tid) => (item.tags ?? []).some((t) => t.id === tid))
+      )
+    }
+    return items
+  })()
   const allFolders = useMemo<FolderItem[]>(() => {
     const byId = new Map<string, FolderItem>()
     for (const folder of folders) {
@@ -3377,6 +3442,9 @@ function ActionExtractor() {
                         handleScrollToExtractor()
                         void handleExtract({ url: itemUrl, mode })
                       }}
+                      allTags={allTags}
+                      activeTagIds={activeTagIds}
+                      onToggleTagFilter={handleToggleTagFilter}
                     />
                   </div>
                 </div>
@@ -3856,6 +3924,9 @@ function ActionExtractor() {
                         })
                       }}
                       onStarResult={(starred) => void handleStarResult(starred)}
+                      allTags={allTags}
+                      onAddTag={handleAddTagToResult}
+                      onRemoveTag={handleRemoveTagFromResult}
                     />
 
                     {stackedDeskPlaybooks.map((item) => {

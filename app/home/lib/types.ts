@@ -19,6 +19,12 @@ export interface ExtractMetadata {
   savedTime: string
 }
 
+export interface ExtractionTag {
+  id: string
+  name: string
+  color: string
+}
+
 export interface ExtractResult {
   id?: string
   orderNumber?: number
@@ -41,6 +47,7 @@ export interface ExtractResult {
   sourceLabel?: string | null
   folderId?: string | null
   isStarred?: boolean
+  tags?: ExtractionTag[]
 }
 
 export interface HistoryItem extends ExtractResult {

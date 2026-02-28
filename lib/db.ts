@@ -27,6 +27,12 @@ interface DbSessionWithUser {
   user_blocked_at: string | null
 }
 
+export interface DbExtractionTag {
+  id: string
+  name: string
+  color: string
+}
+
 export interface DbExtraction {
   id: string
   user_id: string
@@ -46,6 +52,7 @@ export interface DbExtraction {
   source_label: string | null
   folder_id: string | null
   is_starred: boolean
+  tags: DbExtractionTag[]
 }
 
 export interface DbExtractionFolder {
@@ -465,6 +472,7 @@ interface DbExtractionRow {
   source_label?: string | null
   folder_id?: string | null
   is_starred?: boolean | null
+  tags_json?: string | null
 }
 
 interface DbExtractionFolderRow {
@@ -1504,9 +1512,29 @@ const INIT_SQL = `
     ('plan_pro',      'pro',      'Pro',      15, NULL, 60,  '{"batch_extraction":true,"export_integrations":true,"folders":true,"knowledge_chat":true,"concept_map_mode":true,"priority_support":true,"api_access":false}',  true, 1),
     ('plan_business', 'business', 'Business', 49, NULL, 200, '{"batch_extraction":true,"export_integrations":true,"folders":true,"knowledge_chat":true,"concept_map_mode":true,"priority_support":true,"api_access":true}',   true, 2)
   ON CONFLICT (id) DO NOTHING;
+
+  -- ── Tags ───────────────────────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS extraction_tags (
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    color      TEXT NOT NULL DEFAULT 'indigo',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, name)
+  );
+  CREATE INDEX IF NOT EXISTS idx_extraction_tags_user ON extraction_tags(user_id);
+
+  CREATE TABLE IF NOT EXISTS extraction_tag_assignments (
+    extraction_id TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+    tag_id        TEXT NOT NULL REFERENCES extraction_tags(id) ON DELETE CASCADE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (extraction_id, tag_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_tag_assignments_tag ON extraction_tag_assignments(tag_id);
+  CREATE INDEX IF NOT EXISTS idx_tag_assignments_extraction ON extraction_tag_assignments(extraction_id);
 `
 
-const DB_INIT_SIGNATURE = '2026-02-28-plans-v1'
+const DB_INIT_SIGNATURE = '2026-03-01-tags-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -1664,6 +1692,14 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
     source_label: row.source_label ?? null,
     folder_id: row.folder_id ?? null,
     is_starred: row.is_starred === true,
+    tags: (() => {
+      try {
+        const parsed = row.tags_json ? JSON.parse(row.tags_json) : []
+        return Array.isArray(parsed) ? (parsed as DbExtractionTag[]) : []
+      } catch {
+        return []
+      }
+    })(),
   }
 }
 
@@ -2378,7 +2414,17 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
         ranked.source_type,
         ranked.source_label,
         ranked.folder_id,
-        ranked.order_number
+        ranked.order_number,
+        ranked.is_starred,
+        (
+          SELECT COALESCE(
+            jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'color', t.color) ORDER BY t.name),
+            '[]'::jsonb
+          )
+          FROM extraction_tag_assignments eta
+          JOIN extraction_tags t ON t.id = eta.tag_id
+          WHERE eta.extraction_id = ranked.id
+        )::text AS tags_json
       FROM (
         SELECT
           id,
@@ -2397,6 +2443,7 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
           source_type,
           source_label,
           folder_id,
+          is_starred,
           ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC)::int AS order_number
         FROM extractions
         WHERE user_id = $1
@@ -7487,6 +7534,65 @@ export async function logStripeEvent(
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (id) DO NOTHING`,
     [id, eventType, userId, rawJson]
+  )
+}
+
+// ── Tags ───────────────────────────────────────────────────────────────────
+
+export async function listUserTags(userId: string): Promise<DbExtractionTag[]> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTag>(
+    `SELECT id, name, color FROM extraction_tags WHERE user_id = $1 ORDER BY name`,
+    [userId]
+  )
+  return rows
+}
+
+export async function createOrGetTag(
+  userId: string,
+  name: string,
+  color: string
+): Promise<DbExtractionTag> {
+  await ensureDbReady()
+  const id = randomUUID()
+  const { rows } = await pool.query<DbExtractionTag>(
+    `INSERT INTO extraction_tags (id, user_id, name, color)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id, name) DO UPDATE SET color = EXCLUDED.color
+     RETURNING id, name, color`,
+    [id, userId, name.trim().toLowerCase(), color]
+  )
+  return rows[0]
+}
+
+export async function deleteUserTag(userId: string, tagId: string): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `DELETE FROM extraction_tags WHERE id = $1 AND user_id = $2`,
+    [tagId, userId]
+  )
+}
+
+export async function assignTagToExtraction(
+  extractionId: string,
+  tagId: string
+): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `INSERT INTO extraction_tag_assignments (extraction_id, tag_id)
+     VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+    [extractionId, tagId]
+  )
+}
+
+export async function removeTagFromExtraction(
+  extractionId: string,
+  tagId: string
+): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `DELETE FROM extraction_tag_assignments WHERE extraction_id = $1 AND tag_id = $2`,
+    [extractionId, tagId]
   )
 }
 

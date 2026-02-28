@@ -152,6 +152,9 @@ interface ResultPanelProps {
   onRemoveMember?: (memberUserId: string) => Promise<boolean>
   onOpenPlaybookReference?: (playbookIdentifier: string) => void
   onStarResult?: (starred: boolean) => void
+  allTags?: import('@/app/home/lib/types').ExtractionTag[]
+  onAddTag?: (name: string, color: string) => Promise<void>
+  onRemoveTag?: (tagId: string) => Promise<void>
 }
 
 type PlaybookCloseStage = 'idle' | 'folding' | 'cover'
@@ -446,6 +449,9 @@ export function ResultPanel({
   onRemoveMember,
   onOpenPlaybookReference,
   onStarResult,
+  allTags = [],
+  onAddTag,
+  onRemoveTag,
 }: ResultPanelProps) {
   const resolvedMode = normalizeExtractionMode(result.mode ?? extractionMode)
   const sourceUrl = (result.url ?? url).trim()
@@ -518,6 +524,43 @@ export function ResultPanel({
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [copiedPhaseId, setCopiedPhaseId] = useState<number | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
+
+  // ── Tags ──────────────────────────────────────────────────────────────────
+  const [tagInput, setTagInput] = useState('')
+  const [tagLoading, setTagLoading] = useState(false)
+  const [showTagDropdown, setShowTagDropdown] = useState(false)
+  const tagInputRef = useRef<HTMLInputElement>(null)
+
+  const resultTags = result.tags ?? []
+  const resultTagIds = new Set(resultTags.map((t) => t.id))
+
+  const filteredTagSuggestions = allTags.filter(
+    (t) => !resultTagIds.has(t.id) && t.name.includes(tagInput.toLowerCase().trim())
+  )
+
+  const handleTagKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter' || !tagInput.trim() || tagLoading || !onAddTag) return
+    e.preventDefault()
+    const name = tagInput.trim().toLowerCase()
+    setTagLoading(true)
+    setTagInput('')
+    setShowTagDropdown(false)
+    try { await onAddTag(name, 'indigo') } finally { setTagLoading(false) }
+  }
+
+  const handlePickSuggestion = async (tag: import('@/app/home/lib/types').ExtractionTag) => {
+    if (tagLoading || !onAddTag) return
+    setTagLoading(true)
+    setShowTagDropdown(false)
+    setTagInput('')
+    try { await onAddTag(tag.name, tag.color) } finally { setTagLoading(false) }
+  }
+
+  const handleRemoveTag = async (tagId: string) => {
+    if (tagLoading || !onRemoveTag) return
+    setTagLoading(true)
+    try { await onRemoveTag(tagId) } finally { setTagLoading(false) }
+  }
 
   const handleToggleFullscreen = useCallback(() => {
     const el = panelRef.current ?? document.documentElement
@@ -2634,6 +2677,63 @@ export function ResultPanel({
               )}
             </div>
           </div>
+
+          {/* ── Tag chips ─────────────────────────────────────────────────── */}
+          {result.id && (onAddTag || resultTags.length > 0) && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {resultTags.map((tag) => (
+                <span
+                  key={tag.id}
+                  className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300"
+                >
+                  #{tag.name}
+                  {onRemoveTag && (
+                    <button
+                      type="button"
+                      onClick={() => void handleRemoveTag(tag.id)}
+                      disabled={tagLoading}
+                      aria-label={`Eliminar tag ${tag.name}`}
+                      className="ml-0.5 rounded-full p-0.5 opacity-60 transition-opacity hover:opacity-100 disabled:cursor-not-allowed"
+                    >
+                      <X size={9} />
+                    </button>
+                  )}
+                </span>
+              ))}
+              {onAddTag && (
+                <div className="relative">
+                  <input
+                    ref={tagInputRef}
+                    type="text"
+                    value={tagInput}
+                    onChange={(e) => { setTagInput(e.target.value); setShowTagDropdown(true) }}
+                    onKeyDown={(e) => void handleTagKeyDown(e)}
+                    onFocus={() => setShowTagDropdown(true)}
+                    onBlur={() => setTimeout(() => setShowTagDropdown(false), 150)}
+                    placeholder="+ tag"
+                    disabled={tagLoading}
+                    className="h-6 w-20 rounded-full border border-dashed border-slate-300 bg-transparent px-2 text-[11px] text-slate-500 outline-none placeholder:text-slate-300 focus:border-indigo-400 focus:text-slate-700 disabled:opacity-50 dark:border-slate-600 dark:text-slate-400 dark:focus:border-indigo-500"
+                  />
+                  {showTagDropdown && filteredTagSuggestions.length > 0 && (
+                    <div className="absolute left-0 top-full z-30 mt-1 min-w-[140px] rounded-xl border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+                      {filteredTagSuggestions.slice(0, 6).map((tag) => (
+                        <button
+                          key={tag.id}
+                          type="button"
+                          onMouseDown={(e) => { e.preventDefault(); void handlePickSuggestion(tag) }}
+                          className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
+                        >
+                          <span className="inline-block h-2 w-2 rounded-full bg-indigo-400" />
+                          #{tag.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
             <div className="flex min-w-0 flex-1 flex-col gap-4 md:flex-row">
               {/* Thumbnail — edit or display */}
