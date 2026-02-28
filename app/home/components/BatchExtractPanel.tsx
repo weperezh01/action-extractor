@@ -1,14 +1,29 @@
 'use client'
 
 import { useCallback, useState } from 'react'
-import { AlertCircle, CheckCircle, Clock, Layers, Loader2, Play, Plus, RotateCcw, X } from 'lucide-react'
+import {
+  AlertCircle,
+  CheckCircle,
+  ChevronDown,
+  Clock,
+  FolderPlus,
+  Layers,
+  ListVideo,
+  Loader2,
+  Play,
+  Plus,
+  RotateCcw,
+  X,
+} from 'lucide-react'
 import type { ExtractionMode } from '@/lib/extraction-modes'
 import { EXTRACTION_MODE_OPTIONS, normalizeExtractionMode } from '@/lib/extraction-modes'
 import type { ExtractionOutputLanguage } from '@/lib/output-language'
 import type { FolderItem } from '@/app/home/components/FolderDock'
 import { isSystemExtractionFolderId } from '@/lib/extraction-folders'
+import { isPlaylistUrl } from '@/lib/source-detector'
 
-const MAX_ITEMS = 5
+const MAX_ITEMS_MANUAL = 5
+const MAX_ITEMS_PLAYLIST = 20
 
 type BatchItemStatus = 'idle' | 'pending' | 'processing' | 'done' | 'cached' | 'error'
 
@@ -18,6 +33,21 @@ interface BatchItem {
   status: BatchItemStatus
   title?: string
   error?: string
+}
+
+interface PlaylistVideo {
+  videoId: string
+  title: string
+  url: string
+  thumbnailUrl: string | null
+  position: number
+}
+
+interface PlaylistResult {
+  playlistId: string
+  title: string
+  videoCount: number
+  videos: PlaylistVideo[]
 }
 
 export interface BatchExtractPanelProps {
@@ -126,27 +156,38 @@ export function BatchExtractPanel({
   folders,
   onComplete,
 }: BatchExtractPanelProps) {
+  // ── batch state ───────────────────────────────────────────────────────────
   const [items, setItems] = useState<BatchItem[]>([
     { id: createItemId(), url: '', status: 'idle' },
     { id: createItemId(), url: '', status: 'idle' },
   ])
+  const [maxItems, setMaxItems] = useState(MAX_ITEMS_MANUAL)
   const [mode, setMode] = useState<ExtractionMode>(extractionMode)
   const [folderId, setFolderId] = useState<string>('')
   const [isRunning, setIsRunning] = useState(false)
   const [completedCount, setCompletedCount] = useState(0)
 
+  // ── playlist state ────────────────────────────────────────────────────────
+  const [showPlaylist, setShowPlaylist] = useState(false)
+  const [playlistInput, setPlaylistInput] = useState('')
+  const [playlistLoading, setPlaylistLoading] = useState(false)
+  const [playlistResult, setPlaylistResult] = useState<PlaylistResult | null>(null)
+  const [playlistError, setPlaylistError] = useState<string | null>(null)
+  const [autoCreateFolder, setAutoCreateFolder] = useState(true)
+
   const userFolders = folders.filter((f) => !isSystemExtractionFolderId(f.id))
   const filledItems = items.filter((i) => i.url.trim())
   const canStart = filledItems.length > 0 && !isRunning
 
+  // ── manual batch handlers ─────────────────────────────────────────────────
   const addItem = () => {
-    if (items.length >= MAX_ITEMS || isRunning) return
+    if (items.length >= maxItems || isRunning) return
     setItems((prev) => [...prev, { id: createItemId(), url: '', status: 'idle' }])
   }
 
   const removeItem = (id: string) => {
     if (isRunning) return
-    setItems((prev) => prev.length > 1 ? prev.filter((i) => i.id !== id) : prev)
+    setItems((prev) => (prev.length > 1 ? prev.filter((i) => i.id !== id) : prev))
   }
 
   const updateUrl = (id: string, url: string) => {
@@ -160,9 +201,84 @@ export function BatchExtractPanel({
       { id: createItemId(), url: '', status: 'idle' },
       { id: createItemId(), url: '', status: 'idle' },
     ])
+    setMaxItems(MAX_ITEMS_MANUAL)
     setCompletedCount(0)
   }
 
+  // ── playlist handlers ─────────────────────────────────────────────────────
+  const loadPlaylist = async () => {
+    const url = playlistInput.trim()
+    if (!url || playlistLoading) return
+    if (!isPlaylistUrl(url)) {
+      setPlaylistError('La URL no parece ser una playlist de YouTube válida.')
+      return
+    }
+
+    setPlaylistLoading(true)
+    setPlaylistError(null)
+    setPlaylistResult(null)
+
+    try {
+      const res = await fetch('/api/youtube/playlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ playlistUrl: url }),
+      })
+      const data = (await res.json().catch(() => null)) as
+        | (PlaylistResult & { error?: string })
+        | null
+
+      if (!res.ok || !data) {
+        setPlaylistError(
+          typeof data?.error === 'string' ? data.error : 'No se pudo cargar la playlist.'
+        )
+        return
+      }
+
+      setPlaylistResult(data)
+    } catch {
+      setPlaylistError('Error de conexión al cargar la playlist.')
+    } finally {
+      setPlaylistLoading(false)
+    }
+  }
+
+  const usePlaylistItems = async () => {
+    if (!playlistResult) return
+
+    const videos = playlistResult.videos.slice(0, MAX_ITEMS_PLAYLIST)
+    const newItems: BatchItem[] = videos.map((v) => ({
+      id: createItemId(),
+      url: v.url,
+      status: 'idle',
+    }))
+
+    setItems(newItems)
+    setMaxItems(MAX_ITEMS_PLAYLIST)
+
+    // Auto-create folder with playlist name
+    if (autoCreateFolder) {
+      try {
+        const res = await fetch('/api/folders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: playlistResult.title.slice(0, 80), color: 'indigo' }),
+        })
+        if (res.ok) {
+          const data = (await res.json()) as { folder?: { id?: string } }
+          if (data.folder?.id) {
+            setFolderId(data.folder.id)
+          }
+        }
+      } catch {
+        // proceed without folder if creation fails
+      }
+    }
+
+    setShowPlaylist(false)
+  }
+
+  // ── run batch ─────────────────────────────────────────────────────────────
   const runBatch = useCallback(async () => {
     if (!canStart) return
 
@@ -214,17 +330,136 @@ export function BatchExtractPanel({
     onComplete()
   }, [canStart, filledItems, mode, folderId, outputLanguage, onComplete])
 
+  // ── render ────────────────────────────────────────────────────────────────
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-      <div className="mb-4 flex items-center gap-2">
-        <Layers size={15} className="text-indigo-500" />
-        <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-          Extracción por Lote
-        </h3>
-        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-          máx. {MAX_ITEMS}
-        </span>
+      {/* Header */}
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Layers size={15} className="text-indigo-500" />
+          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+            Extracción por Lote
+          </h3>
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+            máx. {maxItems}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setShowPlaylist((v) => !v)
+            setPlaylistError(null)
+          }}
+          className={`inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors ${
+            showPlaylist
+              ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
+              : 'border-slate-300 bg-white text-slate-500 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:border-indigo-600'
+          }`}
+        >
+          <ListVideo size={12} />
+          Playlist
+          <ChevronDown
+            size={11}
+            className={`transition-transform ${showPlaylist ? 'rotate-180' : ''}`}
+          />
+        </button>
       </div>
+
+      {/* Playlist section */}
+      {showPlaylist && (
+        <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/60 p-4 dark:border-indigo-900/50 dark:bg-indigo-950/20">
+          <p className="mb-2 text-xs font-semibold text-indigo-700 dark:text-indigo-300">
+            Cargar desde Playlist de YouTube
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="url"
+              value={playlistInput}
+              onChange={(e) => {
+                setPlaylistInput(e.target.value)
+                setPlaylistError(null)
+                setPlaylistResult(null)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void loadPlaylist()
+              }}
+              placeholder="https://youtube.com/playlist?list=PL..."
+              disabled={playlistLoading}
+              className="h-9 flex-1 rounded-lg border border-indigo-200 bg-white px-3 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-60 dark:border-indigo-800 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-indigo-900/30"
+            />
+            <button
+              type="button"
+              onClick={() => void loadPlaylist()}
+              disabled={!playlistInput.trim() || playlistLoading}
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {playlistLoading ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
+              {playlistLoading ? 'Cargando...' : 'Cargar'}
+            </button>
+          </div>
+
+          {playlistError && (
+            <p className="mt-2 flex items-center gap-1.5 text-xs text-rose-600 dark:text-rose-400">
+              <AlertCircle size={12} />
+              {playlistError}
+            </p>
+          )}
+
+          {playlistResult && (
+            <div className="mt-3 space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 line-clamp-1">
+                    {playlistResult.title}
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {playlistResult.videoCount} videos en total · se procesarán los primeros{' '}
+                    {Math.min(playlistResult.videos.length, MAX_ITEMS_PLAYLIST)}
+                  </p>
+                </div>
+                <CheckCircle size={16} className="mt-0.5 shrink-0 text-emerald-500" />
+              </div>
+
+              {/* Video list preview */}
+              <ul className="max-h-36 overflow-y-auto space-y-1 rounded-lg border border-indigo-100 bg-white p-2 dark:border-indigo-900/40 dark:bg-slate-900">
+                {playlistResult.videos.slice(0, MAX_ITEMS_PLAYLIST).map((v, i) => (
+                  <li
+                    key={v.videoId}
+                    className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"
+                  >
+                    <span className="w-4 shrink-0 text-center text-[10px] font-semibold text-slate-400">
+                      {i + 1}
+                    </span>
+                    <span className="truncate">{v.title}</span>
+                  </li>
+                ))}
+              </ul>
+
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={autoCreateFolder}
+                  onChange={(e) => setAutoCreateFolder(e.target.checked)}
+                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <FolderPlus size={12} className="text-indigo-500" />
+                Crear carpeta{' '}
+                <strong>&ldquo;{playlistResult.title.slice(0, 40)}&rdquo;</strong>{' '}
+                automáticamente
+              </label>
+
+              <button
+                type="button"
+                onClick={() => void usePlaylistItems()}
+                className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-sm font-semibold text-white transition hover:bg-indigo-700"
+              >
+                <Layers size={13} />
+                Agregar {Math.min(playlistResult.videos.length, MAX_ITEMS_PLAYLIST)} videos al lote
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Mode + Folder selectors */}
       <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -343,7 +578,7 @@ export function BatchExtractPanel({
 
       {/* Actions row */}
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        {items.length < MAX_ITEMS && (
+        {items.length < maxItems && (
           <button
             type="button"
             onClick={addItem}

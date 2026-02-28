@@ -21,3 +21,23 @@ export function detectSourceType(input: string): SourceType {
   if (isHttpUrl(trimmed)) return 'web_url'
   return 'text'
 }
+
+/**
+ * Extracts the YouTube playlist ID (list parameter) from a URL.
+ * Works for:
+ *   https://youtube.com/playlist?list=PLxxxx
+ *   https://youtube.com/watch?v=xxx&list=PLxxxx
+ */
+export function extractPlaylistId(url: string): string | null {
+  try {
+    const u = new URL(url.trim())
+    if (!u.hostname.includes('youtube.com') && !u.hostname.includes('youtu.be')) return null
+    return u.searchParams.get('list')
+  } catch {
+    return null
+  }
+}
+
+export function isPlaylistUrl(url: string): boolean {
+  return extractPlaylistId(url) !== null
+}
