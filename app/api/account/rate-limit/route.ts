@@ -20,6 +20,7 @@ export async function GET(req: NextRequest) {
       remaining: snapshot.remaining,
       resetAt: snapshot.resetAt,
       retryAfterSeconds: snapshot.retryAfterSeconds,
+      extra_credits: snapshot.extra_credits,
     })
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Error interno del servidor.'

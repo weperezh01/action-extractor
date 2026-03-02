@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlignLeft,
   AlertTriangle,
@@ -6,9 +6,12 @@ import {
   Eye,
   EyeOff,
   Brain,
+  CalendarDays,
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Clock,
   Copy,
@@ -17,6 +20,8 @@ import {
   FileText,
   Folder,
   Globe,
+  GanttChart,
+  GitBranch,
   GripVertical,
   ImageIcon,
   KanbanSquare,
@@ -81,6 +86,7 @@ import {
   isShareVisibilityShareable,
   getShareVisibilityLabel,
 } from '@/app/home/lib/share-visibility'
+import { type Lang, t } from '@/app/home/lib/i18n'
 
 interface ResultPanelProps {
   result: ExtractResult
@@ -157,6 +163,7 @@ interface ResultPanelProps {
   allTags?: import('@/app/home/lib/types').ExtractionTag[]
   onAddTag?: (name: string, color: string) => Promise<void>
   onRemoveTag?: (tagId: string) => Promise<void>
+  lang?: Lang
 }
 
 type PlaybookCloseStage = 'idle' | 'folding' | 'cover'
@@ -227,6 +234,295 @@ function getTaskStatusChipClassName(status: InteractiveTaskStatus) {
 
 function getTaskEventTypeLabel(eventType: InteractiveTaskEventType) {
   return TASK_EVENT_TYPE_OPTIONS.find((option) => option.value === eventType)?.label ?? 'Nota'
+}
+
+function getMonthMatrix(year: number, month: number): Date[][] {
+  const firstDay = new Date(year, month, 1)
+  const dow = firstDay.getDay() // 0=Dom, 1=Lun, ...
+  const offset = dow === 0 ? 6 : dow - 1 // días hacia atrás hasta el lunes
+  const gridStart = new Date(year, month, 1 - offset)
+  return Array.from({ length: 6 }, (_, row) =>
+    Array.from({ length: 7 }, (_, col) => {
+      const d = new Date(gridStart)
+      d.setDate(gridStart.getDate() + row * 7 + col)
+      return d
+    })
+  )
+}
+
+interface CalTaskSegment {
+  taskId: string
+  rowIndex: number
+  startCol: number
+  endCol: number
+  isStart: boolean
+  isEnd: boolean
+}
+
+function segmentTaskByWeeks(
+  task: { id: string; scheduledStartAt: string | null; scheduledEndAt: string | null; dueAt: string | null },
+  matrix: Date[][]
+): CalTaskSegment[] {
+  const rawStart = task.scheduledStartAt ?? task.dueAt
+  const rawEnd = task.scheduledEndAt ?? task.dueAt
+  if (!rawStart || !rawEnd) return []
+  const startDate = new Date(rawStart); startDate.setHours(0, 0, 0, 0)
+  const endDate = new Date(rawEnd); endDate.setHours(0, 0, 0, 0)
+  if (endDate < startDate) return []
+  const segments: CalTaskSegment[] = []
+  for (let rowIdx = 0; rowIdx < matrix.length; rowIdx++) {
+    const row = matrix[rowIdx]
+    const rowStart = row[0]; const rowEnd = row[6]
+    if (endDate < rowStart || startDate > rowEnd) continue
+    const segStart = startDate < rowStart ? rowStart : startDate
+    const segEnd = endDate > rowEnd ? rowEnd : endDate
+    const startCol = row.findIndex(d => isSameDay(d, segStart))
+    const endCol = row.findIndex(d => isSameDay(d, segEnd))
+    segments.push({
+      taskId: task.id, rowIndex: rowIdx,
+      startCol: startCol < 0 ? 0 : startCol,
+      endCol: endCol < 0 ? 6 : endCol,
+      isStart: isSameDay(segStart, startDate),
+      isEnd: isSameDay(segEnd, endDate),
+    })
+  }
+  return segments
+}
+
+function assignLanesInRow(segs: CalTaskSegment[]): (CalTaskSegment & { lane: number })[] {
+  const sorted = [...segs].sort((a, b) => a.startCol - b.startCol)
+  const laneEnds: number[] = []
+  return sorted.map(seg => {
+    let lane = laneEnds.findIndex(end => end < seg.startCol)
+    if (lane === -1) { lane = laneEnds.length; laneEnds.push(seg.endCol) }
+    else { laneEnds[lane] = seg.endCol }
+    return { ...seg, lane }
+  })
+}
+
+const GANTT_LEFT_W = 220  // px — ancho panel izquierdo de etiquetas
+const GANTT_DAY_W  = 32   // px — ancho por día en el timeline
+const GANTT_DAYS   = 42   // días visibles (6 semanas)
+
+function getGanttWindowStart(date: Date): Date {
+  const d = new Date(date)
+  d.setHours(0, 0, 0, 0)
+  const dow = d.getDay()
+  const offset = dow === 0 ? -6 : 1 - dow // retroceder al lunes
+  d.setDate(d.getDate() + offset)
+  return d
+}
+
+function daysBetween(a: Date, b: Date): number {
+  return Math.round((b.getTime() - a.getTime()) / (1000 * 60 * 60 * 24))
+}
+
+function getGanttBarClassName(status: InteractiveTaskStatus, isOverdue: boolean): string {
+  if (isOverdue)
+    return 'bg-rose-100 border-rose-300 text-rose-700 dark:bg-rose-900/40 dark:border-rose-700 dark:text-rose-300'
+  switch (status) {
+    case 'completed':
+      return 'bg-emerald-100 border-emerald-300 text-emerald-700 dark:bg-emerald-900/40 dark:border-emerald-700 dark:text-emerald-300'
+    case 'in_progress':
+      return 'bg-sky-100 border-sky-300 text-sky-700 dark:bg-sky-900/40 dark:border-sky-700 dark:text-sky-300'
+    case 'blocked':
+      return 'bg-amber-100 border-amber-300 text-amber-700 dark:bg-amber-900/40 dark:border-amber-700 dark:text-amber-300'
+    default:
+      return 'bg-indigo-100 border-indigo-300 text-indigo-700 dark:bg-indigo-900/40 dark:border-indigo-700 dark:text-indigo-300'
+  }
+}
+
+interface CpmNode {
+  id: string
+  durationDays: number
+  predecessorIds: string[]
+}
+
+interface CpmResult {
+  id: string
+  es: number
+  ef: number
+  ls: number
+  lf: number
+  slack: number
+  critical: boolean
+}
+
+function computeCPM(nodes: CpmNode[]): Map<string, CpmResult> {
+  const nodeMap = new Map<string, CpmNode>()
+  const successors = new Map<string, string[]>()
+  for (const n of nodes) { nodeMap.set(n.id, n); successors.set(n.id, []) }
+  for (const n of nodes) {
+    for (const predId of n.predecessorIds) {
+      if (nodeMap.has(predId)) successors.get(predId)!.push(n.id)
+    }
+  }
+  // Kahn topological sort
+  const inDeg = new Map<string, number>()
+  for (const n of nodes) {
+    let deg = 0
+    for (const p of n.predecessorIds) { if (nodeMap.has(p)) deg++ }
+    inDeg.set(n.id, deg)
+  }
+  const queue: string[] = []
+  inDeg.forEach((deg, id) => { if (deg === 0) queue.push(id) })
+  const topo: string[] = []
+  while (queue.length > 0) {
+    const curr = queue.shift()!
+    topo.push(curr)
+    for (const succId of successors.get(curr) ?? []) {
+      const nd = (inDeg.get(succId) ?? 1) - 1
+      inDeg.set(succId, nd)
+      if (nd === 0) queue.push(succId)
+    }
+  }
+  const inTopo = new Set(topo)
+  for (const n of nodes) { if (!inTopo.has(n.id)) topo.push(n.id) }
+  // Forward pass
+  const esMap = new Map<string, number>()
+  const efMap = new Map<string, number>()
+  for (const id of topo) {
+    const n = nodeMap.get(id)!
+    const esV = n.predecessorIds.reduce((max, p) => Math.max(max, efMap.get(p) ?? 0), 0)
+    esMap.set(id, esV)
+    efMap.set(id, esV + n.durationDays)
+  }
+  const projectEnd = nodes.reduce((m, n) => Math.max(m, efMap.get(n.id) ?? 0), 0)
+  // Backward pass
+  const lsMap = new Map<string, number>()
+  const lfMap = new Map<string, number>()
+  for (const id of [...topo].reverse()) {
+    const n = nodeMap.get(id)!
+    const succs = successors.get(id) ?? []
+    const lfV = succs.reduce((min, s) => Math.min(min, lsMap.get(s) ?? projectEnd), projectEnd)
+    lfMap.set(id, lfV)
+    lsMap.set(id, lfV - n.durationDays)
+  }
+  const result = new Map<string, CpmResult>()
+  for (const n of nodes) {
+    const esV = esMap.get(n.id) ?? 0
+    const efV = efMap.get(n.id) ?? n.durationDays
+    const lsV = lsMap.get(n.id) ?? esV
+    const lfV = lfMap.get(n.id) ?? efV
+    const slack = lsV - esV
+    result.set(n.id, { id: n.id, es: esV, ef: efV, ls: lsV, lf: lfV, slack: Math.max(0, slack), critical: slack <= 0 })
+  }
+  return result
+}
+
+// ── CPM Network Diagram layout ──────────────────────────────────────────────
+const CPM_NODE_W = 244   // total node width
+const CPM_NODE_H = 90    // total node height
+const CPM_SIDE_W = 48    // left/right side cell width
+const CPM_COL_GAP = 72   // horizontal gap between columns
+const CPM_ROW_GAP = 52   // vertical gap between rows in same column
+
+interface CpmNodeLayout {
+  id: string
+  x: number
+  y: number
+  layer: number
+}
+
+function buildCpmLayers(tasks: InteractiveTask[]): Map<string, number> {
+  const taskSet = new Set(tasks.map(t => t.id))
+  const successors = new Map<string, string[]>()
+  const inDeg = new Map<string, number>()
+  for (const t of tasks) { successors.set(t.id, []); inDeg.set(t.id, 0) }
+  for (const t of tasks) {
+    for (const p of t.predecessorIds) {
+      if (taskSet.has(p)) {
+        inDeg.set(t.id, (inDeg.get(t.id) ?? 0) + 1)
+        successors.get(p)!.push(t.id)
+      }
+    }
+  }
+  const layers = new Map<string, number>()
+  const queue: string[] = []
+  inDeg.forEach((d, id) => { if (d === 0) { queue.push(id); layers.set(id, 0) } })
+  while (queue.length > 0) {
+    const curr = queue.shift()!
+    const cl = layers.get(curr) ?? 0
+    for (const s of successors.get(curr) ?? []) {
+      layers.set(s, Math.max(layers.get(s) ?? 0, cl + 1))
+      const nd = (inDeg.get(s) ?? 1) - 1
+      inDeg.set(s, nd)
+      if (nd === 0) queue.push(s)
+    }
+  }
+  const maxL = layers.size > 0 ? Math.max(...Array.from(layers.values())) : 0
+  for (const t of tasks) { if (!layers.has(t.id)) layers.set(t.id, maxL + 1) }
+  return layers
+}
+
+function buildCpmLayout(tasks: InteractiveTask[]): Map<string, CpmNodeLayout> {
+  const layers = buildCpmLayers(tasks)
+  const byLayer = new Map<number, InteractiveTask[]>()
+  for (const t of tasks) {
+    const l = layers.get(t.id) ?? 0
+    const arr = byLayer.get(l) ?? []
+    arr.push(t)
+    byLayer.set(l, arr)
+  }
+  byLayer.forEach(group => {
+    group.sort((a, b) =>
+      a.phaseId !== b.phaseId ? a.phaseId - b.phaseId
+        : (a.positionPath ?? '').localeCompare(b.positionPath ?? '')
+    )
+  })
+  const layout = new Map<string, CpmNodeLayout>()
+  byLayer.forEach((group, layer) => {
+    group.forEach((t, rowIdx) => {
+      layout.set(t.id, {
+        id: t.id,
+        x: layer * (CPM_NODE_W + CPM_COL_GAP),
+        y: rowIdx * (CPM_NODE_H + CPM_ROW_GAP),
+        layer,
+      })
+    })
+  })
+  return layout
+}
+
+function hasCyclicDeps(tasks: InteractiveTask[]): boolean {
+  const taskSet = new Set(tasks.map(t => t.id))
+  const inDeg = new Map<string, number>()
+  const successors = new Map<string, string[]>()
+  for (const t of tasks) { inDeg.set(t.id, 0); successors.set(t.id, []) }
+  for (const t of tasks) {
+    for (const p of t.predecessorIds) {
+      if (taskSet.has(p)) {
+        inDeg.set(t.id, (inDeg.get(t.id) ?? 0) + 1)
+        successors.get(p)!.push(t.id)
+      }
+    }
+  }
+  const q: string[] = []
+  inDeg.forEach((d, id) => { if (d === 0) q.push(id) })
+  let visited = 0
+  while (q.length > 0) {
+    visited++
+    const curr = q.shift()!
+    for (const s of successors.get(curr) ?? []) {
+      const nd = (inDeg.get(s) ?? 1) - 1
+      inDeg.set(s, nd)
+      if (nd === 0) q.push(s)
+    }
+  }
+  return visited < tasks.length
+}
+
+function makeCpmBezierPath(x1: number, y1: number, x2: number, y2: number): string {
+  const ctrl = Math.max(CPM_COL_GAP * 0.9, (x2 - x1) * 0.45)
+  return `M${x1},${y1} C${x1 + ctrl},${y1} ${x2 - ctrl},${y2} ${x2},${y2}`
+}
+
+function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  )
 }
 
 interface PlaybookReferenceToken {
@@ -454,6 +750,7 @@ export function ResultPanel({
   allTags = [],
   onAddTag,
   onRemoveTag,
+  lang = 'en',
 }: ResultPanelProps) {
   const resolvedMode = normalizeExtractionMode(result.mode ?? extractionMode)
   const sourceUrl = (result.url ?? url).trim()
@@ -461,23 +758,23 @@ export function ResultPanel({
 
   const sourceSectionLabel = (() => {
     switch (resolvedSourceType) {
-      case 'youtube': return 'Video Fuente'
-      case 'web_url': return 'Página Web Fuente'
-      case 'pdf': return 'Documento PDF'
-      case 'docx': return 'Documento Word'
-      case 'manual': return 'Extracción Manual'
-      default: return 'Contenido Analizado'
+      case 'youtube': return lang === 'es' ? 'Video Fuente' : 'Source Video'
+      case 'web_url': return t(lang, 'result.sourceWebPage')
+      case 'pdf': return lang === 'es' ? 'Documento PDF' : 'PDF Document'
+      case 'docx': return lang === 'es' ? 'Documento Word' : 'Word Document'
+      case 'manual': return t(lang, 'result.manualExtraction')
+      default: return lang === 'es' ? 'Contenido Analizado' : 'Analyzed Content'
     }
   })()
 
   const sourceDisplayTitle = (() => {
     if (result.videoTitle) return result.videoTitle
     if (result.sourceLabel) return result.sourceLabel
-    if (resolvedSourceType === 'manual') return 'Extracción manual'
+    if (resolvedSourceType === 'manual') return t(lang, 'result.manualExtractionLabel')
     if (sourceUrl) {
       try { return new URL(sourceUrl).hostname } catch { return sourceUrl }
     }
-    return 'Análisis de texto'
+    return t(lang, 'result.textAnalysis')
   })()
   const playbookCreatedAt = useMemo(
     () => (result.createdAt ? formatPlaybookCreatedAt(result.createdAt) : null),
@@ -596,7 +893,29 @@ export function ResultPanel({
   const reextractProcessingRef = useRef(false)
   const rightControlsRef = useRef<HTMLDivElement | null>(null)
   const [interactiveTasks, setInteractiveTasks] = useState<InteractiveTask[]>([])
-  const [taskView, setTaskView] = useState<'list' | 'kanban'>('list')
+  const [taskView, setTaskView] = useState<'list' | 'kanban' | 'calendar' | 'gantt' | 'cpm'>('list')
+  const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
+    const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0); return d
+  })
+  const [schedulePopoverTask, setSchedulePopoverTask] = useState<InteractiveTask | null>(null)
+  const [schedulePopoverStart, setSchedulePopoverStart] = useState('')
+  const [schedulePopoverEnd, setSchedulePopoverEnd] = useState('')
+  const [schedulePopoverSaving, setSchedulePopoverSaving] = useState(false)
+  const [calendarSinFechaOpen, setCalendarSinFechaOpen] = useState(true)
+  const [ganttRangeStart, setGanttRangeStart] = useState<Date>(() => getGanttWindowStart(new Date()))
+  const [ganttSinFechaOpen, setGanttSinFechaOpen] = useState(true)
+  const [cpmOnlyCritical, setCpmOnlyCritical] = useState(false)
+  const [cpmGroupByPhase, setCpmGroupByPhase] = useState(true)
+  const [cpmEditTask, setCpmEditTask] = useState<InteractiveTask | null>(null)
+  const [cpmEditDuration, setCpmEditDuration] = useState(1)
+  const [cpmEditPreds, setCpmEditPreds] = useState<string[]>([])
+  const [cpmEditSaving, setCpmEditSaving] = useState(false)
+  const [cpmPredSearch, setCpmPredSearch] = useState('')
+  const [cpmPanX, setCpmPanX] = useState(24)
+  const [cpmPanY, setCpmPanY] = useState(24)
+  const [cpmZoom, setCpmZoom] = useState(0.85)
+  const cpmDragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null)
+  const cpmDidMoveRef = useRef(false)
   const [tasksLoading, setTasksLoading] = useState(false)
   const [tasksError, setTasksError] = useState<string | null>(null)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
@@ -625,6 +944,7 @@ export function ResultPanel({
   const [dragOverSubItem, setDragOverSubItem] = useState<{ phaseId: number; index: number } | null>(null)
   const dragPhaseRef = useRef<number | null>(null)
   const dragSubItemRef = useRef<{ phaseId: number; index: number } | null>(null)
+  const kanbanDragRef = useRef(false)
   const [taskAttachmentsByTaskId, setTaskAttachmentsByTaskId] = useState<
     Record<string, InteractiveTaskAttachment[]>
   >({})
@@ -1001,6 +1321,25 @@ export function ResultPanel({
     return map
   }, [interactiveTasks])
 
+  const calendarData = useMemo(() => {
+    const year = calendarMonth.getFullYear()
+    const month = calendarMonth.getMonth()
+    const matrix = getMonthMatrix(year, month)
+    const segsByRow = new Map<number, CalTaskSegment[]>()
+    for (const task of interactiveTasks) {
+      for (const seg of segmentTaskByWeeks(task, matrix)) {
+        const arr = segsByRow.get(seg.rowIndex) ?? []
+        arr.push(seg)
+        segsByRow.set(seg.rowIndex, arr)
+      }
+    }
+    const lanesByRow = new Map<number, (CalTaskSegment & { lane: number })[]>()
+    segsByRow.forEach((segs, rowIdx) => {
+      lanesByRow.set(rowIdx, assignLanesInRow(segs))
+    })
+    return { matrix, lanesByRow }
+  }, [calendarMonth, interactiveTasks])
+
   const fetchTaskAttachments = async (taskId: string) => {
     const extractionId = result.id?.trim()
     if (!extractionId) return false
@@ -1295,6 +1634,65 @@ export function ResultPanel({
       })
     } finally {
       setTaskMutationLoadingId(null)
+    }
+  }
+
+  const prevMonth = useCallback(() => {
+    setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))
+  }, [])
+
+  const nextMonth = useCallback(() => {
+    setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))
+  }, [])
+
+  const openSchedulePopover = useCallback((task: InteractiveTask) => {
+    setSchedulePopoverTask(task)
+    const toInput = (iso: string | null) => iso ? iso.slice(0, 10) : ''
+    setSchedulePopoverStart(toInput(task.scheduledStartAt ?? task.dueAt))
+    setSchedulePopoverEnd(toInput(task.scheduledEndAt ?? task.dueAt))
+  }, [])
+
+  const handleSaveSchedule = async () => {
+    if (!schedulePopoverTask || schedulePopoverSaving) return
+    setSchedulePopoverSaving(true)
+    try {
+      const ok = await refreshTaskCollection({
+        action: 'update_schedule',
+        taskId: schedulePopoverTask.id,
+        scheduledStartAt: schedulePopoverStart || null,
+        scheduledEndAt: schedulePopoverEnd || null,
+      })
+      if (ok) setSchedulePopoverTask(null)
+    } finally {
+      setSchedulePopoverSaving(false)
+    }
+  }
+
+  const prevGanttWeek = useCallback(() => {
+    setGanttRangeStart(prev => { const d = new Date(prev); d.setDate(d.getDate() - 7); return d })
+  }, [])
+
+  const nextGanttWeek = useCallback(() => {
+    setGanttRangeStart(prev => { const d = new Date(prev); d.setDate(d.getDate() + 7); return d })
+  }, [])
+
+  const resetGanttToToday = useCallback(() => {
+    setGanttRangeStart(getGanttWindowStart(new Date()))
+  }, [])
+
+  const handleSavePlanning = async () => {
+    if (!cpmEditTask || cpmEditSaving) return
+    setCpmEditSaving(true)
+    try {
+      const ok = await refreshTaskCollection({
+        action: 'update_planning',
+        taskId: cpmEditTask.id,
+        durationDays: cpmEditDuration,
+        predecessorIds: cpmEditPreds,
+      })
+      if (ok) setCpmEditTask(null)
+    } finally {
+      setCpmEditSaving(false)
     }
   }
 
@@ -3400,6 +3798,45 @@ export function ResultPanel({
                     <KanbanSquare size={13} />
                     <span className="hidden sm:inline">Kanban</span>
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskView('calendar')}
+                    title="Vista Calendario"
+                    className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
+                      taskView === 'calendar'
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <CalendarDays size={13} />
+                    <span className="hidden sm:inline">Calendario</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskView('gantt')}
+                    title="Vista Gantt"
+                    className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
+                      taskView === 'gantt'
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <GanttChart size={13} />
+                    <span className="hidden sm:inline">Gantt</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskView('cpm')}
+                    title="Vista CPM — Ruta Crítica"
+                    className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
+                      taskView === 'cpm'
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <GitBranch size={13} />
+                    <span className="hidden sm:inline">CPM</span>
+                  </button>
                 </div>
               )}
               {result.id && !isStructureEditing && canEditStructure && (
@@ -3603,30 +4040,83 @@ export function ResultPanel({
                     <div className="flex flex-col gap-2 p-2 flex-1">
                       {colTasks.map((task) => {
                         const isTaskMutating = taskMutationLoadingId === task.id
+                        const isSelected = task.id === selectedTaskId
+                        const dueDate = task.dueAt ? new Date(task.dueAt) : null
+                        const isOverdue =
+                          dueDate !== null &&
+                          dueDate < new Date() &&
+                          task.status !== 'completed'
+                        const eventCount = task.events?.length ?? 0
                         return (
                           <div
                             key={task.id}
                             draggable={canEditTaskContent && !isTaskMutating}
                             onDragStart={(e) => {
+                              kanbanDragRef.current = true
                               e.dataTransfer.setData('kanban-task-id', task.id)
                               e.dataTransfer.effectAllowed = 'move'
                             }}
-                            className={`rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-sm transition-all dark:border-slate-700 dark:bg-slate-900 ${
+                            onDragEnd={() => {
+                              setTimeout(() => { kanbanDragRef.current = false }, 50)
+                            }}
+                            onClick={() => {
+                              if (kanbanDragRef.current) return
+                              if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                                setMobileSheetTaskId(task.id)
+                                setMobileSheetTab('gestion')
+                              } else {
+                                setSelectedTaskId(isSelected ? null : task.id)
+                                setActiveTaskId(isSelected ? null : task.id)
+                              }
+                            }}
+                            className={`rounded-lg border bg-white text-xs shadow-sm transition-all dark:bg-slate-900 ${
+                              isSelected
+                                ? 'border-indigo-400 ring-1 ring-indigo-300 dark:border-indigo-500 dark:ring-indigo-600'
+                                : 'border-slate-200 dark:border-slate-700'
+                            } ${
                               canEditTaskContent && !isTaskMutating
                                 ? 'cursor-grab active:cursor-grabbing hover:shadow-md hover:border-indigo-200 dark:hover:border-indigo-700'
-                                : 'cursor-default'
+                                : 'cursor-pointer hover:shadow-md hover:border-indigo-200 dark:hover:border-indigo-700'
                             } ${isTaskMutating ? 'opacity-50' : ''}`}
                           >
-                            <p className="font-medium text-slate-700 dark:text-slate-200 line-clamp-3 leading-snug">
+                            {/* Barra de fase coloreada en el top */}
+                            <div className="flex items-center gap-1.5 px-3 pt-2 pb-1">
+                              <span className="inline-flex items-center rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400 max-w-[130px] truncate">
+                                F{task.phaseId} · {task.phaseTitle}
+                              </span>
+                            </div>
+
+                            {/* Texto de la tarea */}
+                            <p className="px-3 pb-2 font-medium text-slate-700 dark:text-slate-200 line-clamp-3 leading-snug">
                               {task.itemText}
                             </p>
-                            <p className="mt-1.5 text-[10px] text-slate-400 dark:text-slate-500">
-                              Fase {task.phaseId} · {task.phaseTitle}
-                            </p>
-                            {isTaskMutating && (
-                              <div className="mt-1 flex items-center gap-1 text-[10px] text-slate-400">
-                                <Loader2 size={10} className="animate-spin" />
-                                Actualizando...
+
+                            {/* Footer: fecha y eventos */}
+                            {(dueDate || eventCount > 0 || isTaskMutating) && (
+                              <div className="flex items-center justify-between gap-2 border-t border-slate-100 dark:border-slate-800 px-3 py-1.5">
+                                <div className="flex items-center gap-2">
+                                  {dueDate && (
+                                    <span className={`flex items-center gap-0.5 text-[10px] ${isOverdue ? 'text-rose-500 font-semibold' : 'text-slate-400 dark:text-slate-500'}`}>
+                                      <Clock size={9} />
+                                      {dueDate.toLocaleDateString('es', { month: 'short', day: 'numeric' })}
+                                      {isOverdue && ' ·  Vencida'}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {eventCount > 0 && (
+                                    <span className="flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500">
+                                      <MessageSquare size={9} />
+                                      {eventCount}
+                                    </span>
+                                  )}
+                                  {isTaskMutating && (
+                                    <span className="flex items-center gap-1 text-[10px] text-slate-400">
+                                      <Loader2 size={9} className="animate-spin" />
+                                      Guardando
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             )}
                           </div>
@@ -3643,6 +4133,923 @@ export function ResultPanel({
               })}
             </div>
           )}
+
+          {/* ── Schedule Popover — compartido por Calendar y Gantt ── */}
+          {schedulePopoverTask && typeof window !== 'undefined' && createPortal(
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px]"
+                onClick={() => setSchedulePopoverTask(null)} />
+              <div className="relative z-10 w-full max-w-xs rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900 p-5 space-y-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500 mb-0.5">
+                      Programar tarea
+                    </p>
+                    <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 line-clamp-2">
+                      {schedulePopoverTask.itemText}
+                    </p>
+                  </div>
+                  <button onClick={() => setSchedulePopoverTask(null)}
+                    className="flex-shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800">
+                    <X size={15} />
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                      Inicio
+                    </label>
+                    <input type="date" value={schedulePopoverStart}
+                      onChange={e => setSchedulePopoverStart(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                      Fin
+                    </label>
+                    <input type="date" value={schedulePopoverEnd}
+                      onChange={e => setSchedulePopoverEnd(e.target.value)}
+                      min={schedulePopoverStart || undefined}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  {(schedulePopoverTask.scheduledStartAt || schedulePopoverTask.dueAt) && (
+                    <button type="button"
+                      onClick={async () => {
+                        setSchedulePopoverSaving(true)
+                        try {
+                          await refreshTaskCollection({ action: 'update_schedule', taskId: schedulePopoverTask.id, scheduledStartAt: null, scheduledEndAt: null })
+                          setSchedulePopoverTask(null)
+                        } finally { setSchedulePopoverSaving(false) }
+                      }}
+                      disabled={schedulePopoverSaving}
+                      className="text-xs text-slate-400 hover:text-rose-500 disabled:opacity-50">
+                      Quitar fecha
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setSchedulePopoverTask(null)}
+                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                    Cancelar
+                  </button>
+                  <button type="button" onClick={handleSaveSchedule}
+                    disabled={schedulePopoverSaving || !schedulePopoverStart || !schedulePopoverEnd}
+                    className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700">
+                    {schedulePopoverSaving && <Loader2 size={11} className="animate-spin" />}
+                    Guardar
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
+
+          {!isStructureEditing && taskView === 'calendar' && interactiveTasks.length > 0 && (() => {
+            const { matrix, lanesByRow } = calendarData
+            const unscheduledTasks = interactiveTasks.filter(t =>
+              (t.scheduledStartAt ?? t.dueAt) === null
+            )
+
+            return (
+              <div key="calendar-view" className="space-y-3">
+
+                {/* ── Month navigation ── */}
+                <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-2.5 dark:border-slate-700 dark:bg-slate-900">
+                  <button type="button" onClick={prevMonth}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200">
+                    <ChevronLeft size={14} />
+                    <span className="hidden sm:inline">Mes anterior</span>
+                  </button>
+                  <span className="capitalize text-sm font-bold text-slate-700 dark:text-slate-200">
+                    {calendarMonth.toLocaleDateString('es', { month: 'long', year: 'numeric' })}
+                  </span>
+                  <button type="button" onClick={nextMonth}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200">
+                    <span className="hidden sm:inline">Mes siguiente</span>
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+
+                {/* ── Calendar grid ── */}
+                <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
+                  {/* Day-of-week header */}
+                  <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800">
+                    {['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'].map((d, i) => (
+                      <div key={d} className={`py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500 ${i > 0 ? 'border-l border-slate-100 dark:border-slate-700' : ''}`}>
+                        {d}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* 6 rows */}
+                  {matrix.map((row, rowIdx) => {
+                    const calToday = new Date(); calToday.setHours(0,0,0,0)
+                    const rowLanes = lanesByRow.get(rowIdx) ?? []
+                    const numLanes = rowLanes.length > 0 ? Math.max(...rowLanes.map(s => s.lane)) + 1 : 0
+                    const barsHeight = numLanes > 0 ? numLanes * 24 + 6 : 0
+                    const currentMonthNum = calendarMonth.getMonth()
+
+                    return (
+                      <div key={rowIdx} className="border-b border-slate-100 last:border-b-0 dark:border-slate-800">
+                        {/* Date numbers */}
+                        <div className="grid grid-cols-7">
+                          {row.map((day, colIdx) => {
+                            const isToday = isSameDay(day, calToday)
+                            const inMonth = day.getMonth() === currentMonthNum
+                            return (
+                              <div key={colIdx}
+                                className={`flex h-7 items-center justify-end px-1.5 ${colIdx > 0 ? 'border-l border-slate-100 dark:border-slate-800' : ''} ${isToday ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''}`}>
+                                <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-medium transition-colors ${
+                                  isToday ? 'bg-indigo-600 text-white font-bold' :
+                                  !inMonth ? 'text-slate-300 dark:text-slate-700' :
+                                  'text-slate-600 dark:text-slate-400'
+                                }`}>
+                                  {day.getDate()}
+                                </span>
+                              </div>
+                            )
+                          })}
+                        </div>
+
+                        {/* Bars layer */}
+                        {numLanes > 0 && (
+                          <div className="relative w-full" style={{ height: barsHeight }}>
+                            {rowLanes.map(seg => {
+                              const task = interactiveTasks.find(t => t.id === seg.taskId)
+                              if (!task) return null
+                              const rawEnd = task.scheduledEndAt ?? task.dueAt
+                              const nowZero = new Date(); nowZero.setHours(0,0,0,0)
+                              const isOverdue = rawEnd && new Date(rawEnd) < nowZero && task.status !== 'completed'
+                              const barColor = isOverdue
+                                ? 'bg-rose-100 text-rose-700 border-rose-200 dark:bg-rose-900/40 dark:text-rose-300 dark:border-rose-800'
+                                : task.status === 'completed'
+                                  ? 'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-900/40 dark:text-emerald-300 dark:border-emerald-800'
+                                : task.status === 'in_progress'
+                                  ? 'bg-sky-100 text-sky-700 border-sky-200 dark:bg-sky-900/40 dark:text-sky-300 dark:border-sky-800'
+                                : task.status === 'blocked'
+                                  ? 'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-800'
+                                : 'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-300 dark:border-indigo-800'
+                              const PAD = 2
+                              return (
+                                <div
+                                  key={`${seg.taskId}-r${rowIdx}`}
+                                  onClick={() => openSchedulePopover(task)}
+                                  title={task.itemText}
+                                  className={`absolute cursor-pointer select-none overflow-hidden border text-[10px] font-medium flex items-center hover:brightness-95 dark:hover:brightness-110 transition-[filter] ${barColor} ${seg.isStart ? 'rounded-l-full pl-2' : 'border-l-0'} ${seg.isEnd ? 'rounded-r-full pr-1' : 'border-r-0'}`}
+                                  style={{
+                                    left: `calc(${(seg.startCol / 7) * 100}% + ${PAD}px)`,
+                                    width: `calc(${((seg.endCol - seg.startCol + 1) / 7) * 100}% - ${PAD * 2}px)`,
+                                    top: `${seg.lane * 24 + 3}px`,
+                                    height: '20px',
+                                  }}
+                                >
+                                  {seg.isStart && <span className="truncate leading-none">{task.itemText}</span>}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* ── Sin fecha (colapsable) ── */}
+                {unscheduledTasks.length > 0 && (
+                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+                    <button type="button" onClick={() => setCalendarSinFechaOpen(v => !v)}
+                      className="flex w-full items-center justify-between px-4 py-2.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800">
+                      <span className="flex items-center gap-2">
+                        Sin fecha
+                        <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                          {unscheduledTasks.length}
+                        </span>
+                      </span>
+                      <ChevronDown size={14} className={`transition-transform duration-200 ${calendarSinFechaOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    <div aria-hidden={!calendarSinFechaOpen}
+                      className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${calendarSinFechaOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+                      <div className="overflow-hidden">
+                        <div className="flex flex-col gap-1.5 p-2">
+                          {unscheduledTasks.map(task => (
+                            <div key={task.id} onClick={() => openSchedulePopover(task)}
+                              className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-sm transition-all hover:border-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-indigo-700">
+                              <div className="flex items-start gap-1.5">
+                                {(task.depth ?? 0) > 0 && <span className="mt-0.5 flex-shrink-0 text-slate-300 dark:text-slate-600">└</span>}
+                                <div className="min-w-0 flex-1 space-y-1">
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    <span className="inline-flex items-center rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400 max-w-[120px] truncate">
+                                      F{task.phaseId} · {task.phaseTitle}
+                                    </span>
+                                    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${getTaskStatusChipClassName(task.status)}`}>
+                                      {getTaskStatusLabel(task.status)}
+                                    </span>
+                                  </div>
+                                  <p className="font-medium text-slate-700 dark:text-slate-200 line-clamp-2 leading-snug">
+                                    {task.itemText}
+                                  </p>
+                                  <p className="flex items-center gap-0.5 text-[10px] text-indigo-400 dark:text-indigo-500">
+                                    <CalendarDays size={9} />
+                                    Clic para programar
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+
+          {/* ── Gantt Chart view ── */}
+          {!isStructureEditing && taskView === 'gantt' && interactiveTasks.length > 0 && (() => {
+            const ganttRangeEnd = new Date(ganttRangeStart)
+            ganttRangeEnd.setDate(ganttRangeStart.getDate() + GANTT_DAYS - 1)
+
+            const ganttDays = Array.from({ length: GANTT_DAYS }, (_, i) => {
+              const d = new Date(ganttRangeStart)
+              d.setDate(ganttRangeStart.getDate() + i)
+              return d
+            })
+
+            const today = new Date(); today.setHours(0, 0, 0, 0)
+            const todayOffset = daysBetween(ganttRangeStart, today)
+            const todayVisible = todayOffset >= 0 && todayOffset < GANTT_DAYS
+
+            // Agrupar por fase; los sin-fecha van aparte
+            const phasesMap = new Map<number, { id: number; title: string; tasks: InteractiveTask[] }>()
+            const unscheduledTasks: InteractiveTask[] = []
+            for (const task of interactiveTasks) {
+              if ((task.scheduledStartAt ?? task.dueAt) === null) {
+                unscheduledTasks.push(task)
+                continue
+              }
+              if (!phasesMap.has(task.phaseId)) {
+                phasesMap.set(task.phaseId, { id: task.phaseId, title: task.phaseTitle, tasks: [] })
+              }
+              phasesMap.get(task.phaseId)!.tasks.push(task)
+            }
+            const phases = Array.from(phasesMap.values()).sort((a, b) => a.id - b.id)
+            const totalWidth = GANTT_LEFT_W + GANTT_DAYS * GANTT_DAY_W
+
+            // Etiqueta del rango visible
+            const fmtRangeLabel = () => {
+              const fmt = (d: Date) => d.toLocaleDateString('es', { day: 'numeric', month: 'short' })
+              return `${fmt(ganttRangeStart)} – ${fmt(ganttRangeEnd)}`
+            }
+
+            return (
+              <div key="gantt-view" className="space-y-3">
+
+                {/* Navegación */}
+                <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-2.5 dark:border-slate-700 dark:bg-slate-900">
+                  <button type="button" onClick={prevGanttWeek}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200">
+                    <ChevronLeft size={14} />
+                    <span className="hidden sm:inline">Sem. anterior</span>
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={resetGanttToToday}
+                      className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-500 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800">
+                      Hoy
+                    </button>
+                    <span className="text-sm font-bold text-slate-700 dark:text-slate-200">
+                      {fmtRangeLabel()}
+                    </span>
+                  </div>
+                  <button type="button" onClick={nextGanttWeek}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200">
+                    <span className="hidden sm:inline">Sem. siguiente</span>
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+
+                {/* Grid */}
+                <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+                  <div style={{ minWidth: `${totalWidth}px` }}>
+
+                    {/* Cabecera — días */}
+                    <div className="flex border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800">
+                      {/* Columna título (sticky) */}
+                      <div
+                        style={{ position: 'sticky', left: 0, width: GANTT_LEFT_W, zIndex: 20 }}
+                        className="flex-shrink-0 border-r border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800 flex items-center px-3 h-10"
+                      >
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                          Tarea
+                        </span>
+                      </div>
+                      {/* Días */}
+                      <div className="flex">
+                        {ganttDays.map((day, i) => {
+                          const isToday = isSameDay(day, today)
+                          const isMonday = day.getDay() === 1
+                          const showMonth = day.getDate() === 1 || i === 0
+                          return (
+                            <div
+                              key={i}
+                              style={{ width: GANTT_DAY_W }}
+                              className={`relative h-10 flex flex-col items-center justify-center border-l border-slate-100 dark:border-slate-700/50 ${isMonday && i > 0 ? 'border-l-slate-300 dark:border-l-slate-600' : ''}`}
+                            >
+                              {showMonth && (
+                                <span className="absolute top-0.5 left-0.5 text-[8px] font-bold uppercase text-slate-400 dark:text-slate-500 leading-none">
+                                  {day.toLocaleDateString('es', { month: 'short' })}
+                                </span>
+                              )}
+                              <span className={`text-[11px] font-medium leading-none ${isToday ? 'text-indigo-600 font-bold dark:text-indigo-400' : 'text-slate-400 dark:text-slate-500'}`}>
+                                {day.getDate()}
+                              </span>
+                              <span className="text-[8px] uppercase text-slate-300 dark:text-slate-700 leading-none mt-0.5">
+                                {day.toLocaleDateString('es', { weekday: 'short' }).slice(0, 2)}
+                              </span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Filas por fase */}
+                    {phases.map(phase => (
+                      <div key={phase.id}>
+                        {/* Fila de fase */}
+                        <div className="flex items-center border-b border-slate-100 dark:border-slate-800 bg-indigo-50/60 dark:bg-indigo-900/10">
+                          <div
+                            style={{ position: 'sticky', left: 0, width: GANTT_LEFT_W, zIndex: 10 }}
+                            className="flex-shrink-0 border-r border-slate-200 dark:border-slate-700 bg-indigo-50/60 dark:bg-indigo-900/10 px-3 h-8 flex items-center"
+                          >
+                            <span className="text-[11px] font-bold text-indigo-700 dark:text-indigo-400 truncate">
+                              F{phase.id} · {phase.title}
+                            </span>
+                          </div>
+                          <div style={{ width: `${GANTT_DAYS * GANTT_DAY_W}px` }} className="relative h-8">
+                            {todayVisible && (
+                              <div
+                                className="absolute top-0 bottom-0 w-px bg-indigo-400/30 dark:bg-indigo-500/30 pointer-events-none"
+                                style={{ left: `${todayOffset * GANTT_DAY_W + GANTT_DAY_W / 2}px` }}
+                              />
+                            )}
+                            {/* Separadores de semana */}
+                            {ganttDays.map((day, i) =>
+                              day.getDay() === 1 && i > 0 ? (
+                                <div key={i} className="absolute top-0 bottom-0 w-px bg-slate-200/60 dark:bg-slate-700/40 pointer-events-none"
+                                  style={{ left: `${i * GANTT_DAY_W}px` }} />
+                              ) : null
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Filas de tarea */}
+                        {phase.tasks.map(task => {
+                          const rawStart = task.scheduledStartAt ?? task.dueAt
+                          const rawEnd   = task.scheduledEndAt   ?? task.dueAt
+                          const tStart = rawStart ? (() => { const d = new Date(rawStart); d.setHours(0,0,0,0); return d })() : null
+                          const tEnd   = rawEnd   ? (() => { const d = new Date(rawEnd);   d.setHours(0,0,0,0); return d })() : null
+
+                          let barLeftPx: number | null = null
+                          let barWidthPx: number | null = null
+                          let isClampedLeft  = false
+                          let isClampedRight = false
+                          let isOverdue = false
+
+                          if (tStart && tEnd && tEnd >= ganttRangeStart && tStart <= ganttRangeEnd) {
+                            isClampedLeft  = tStart < ganttRangeStart
+                            isClampedRight = tEnd   > ganttRangeEnd
+                            const cStart = isClampedLeft  ? ganttRangeStart : tStart
+                            const cEnd   = isClampedRight ? ganttRangeEnd   : tEnd
+                            barLeftPx  = daysBetween(ganttRangeStart, cStart) * GANTT_DAY_W
+                            barWidthPx = (daysBetween(cStart, cEnd) + 1) * GANTT_DAY_W
+                            isOverdue  = tEnd < today && task.status !== 'completed'
+                          }
+
+                          return (
+                            <div
+                              key={task.id}
+                              className="flex border-b border-slate-100 dark:border-slate-800 group hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors"
+                              style={{ height: 44 }}
+                            >
+                              {/* Etiqueta (sticky) */}
+                              <div
+                                style={{ position: 'sticky', left: 0, width: GANTT_LEFT_W, zIndex: 10 }}
+                                onClick={() => openSchedulePopover(task)}
+                                className="flex-shrink-0 border-r border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 group-hover:bg-slate-50 dark:group-hover:bg-slate-800/50 px-3 flex items-center h-full cursor-pointer transition-colors"
+                              >
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  {(task.depth ?? 0) > 1 && (
+                                    <span className="flex-shrink-0 text-[10px] text-slate-300 dark:text-slate-600">└</span>
+                                  )}
+                                  <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold flex-shrink-0 ${getTaskStatusChipClassName(task.status)}`}>
+                                    {getTaskStatusLabel(task.status).slice(0, 3)}
+                                  </span>
+                                  <span className="text-[11px] text-slate-700 dark:text-slate-300 truncate leading-tight">
+                                    {task.itemText}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Timeline row */}
+                              <div
+                                style={{ width: `${GANTT_DAYS * GANTT_DAY_W}px` }}
+                                onClick={() => openSchedulePopover(task)}
+                                className="relative h-full cursor-pointer"
+                              >
+                                {/* Línea de hoy */}
+                                {todayVisible && (
+                                  <div
+                                    className="absolute top-0 bottom-0 w-px bg-indigo-400/30 dark:bg-indigo-500/30 pointer-events-none"
+                                    style={{ left: `${todayOffset * GANTT_DAY_W + GANTT_DAY_W / 2}px` }}
+                                  />
+                                )}
+                                {/* Separadores de semana */}
+                                {ganttDays.map((day, i) =>
+                                  day.getDay() === 1 && i > 0 ? (
+                                    <div key={i} className="absolute top-0 bottom-0 w-px bg-slate-100 dark:bg-slate-800 pointer-events-none"
+                                      style={{ left: `${i * GANTT_DAY_W}px` }} />
+                                  ) : null
+                                )}
+                                {/* Barra */}
+                                {barLeftPx !== null && barWidthPx !== null && (
+                                  <div
+                                    className={`absolute border text-[10px] font-medium flex items-center overflow-hidden hover:brightness-95 dark:hover:brightness-110 transition-[filter] ${getGanttBarClassName(task.status, isOverdue)} ${!isClampedLeft ? 'rounded-l-full' : ''} ${!isClampedRight ? 'rounded-r-full' : ''}`}
+                                    style={{
+                                      left: `${barLeftPx + 2}px`,
+                                      width: `${Math.max(barWidthPx - 4, 8)}px`,
+                                      top: '10px',
+                                      height: '22px',
+                                    }}
+                                  >
+                                    <span className="px-2 truncate leading-none">{task.itemText}</span>
+                                  </div>
+                                )}
+                                {/* Si la tarea está fuera del rango actual: icono indicador */}
+                                {barLeftPx === null && tStart && tEnd && (
+                                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                    <span className="text-[9px] text-slate-300 dark:text-slate-700 italic">
+                                      {tEnd < ganttRangeStart ? '← fuera rango' : 'fuera rango →'}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ))}
+
+                    {/* Mensaje si todo está sin fecha */}
+                    {phases.length === 0 && (
+                      <div className="flex" style={{ height: 48 }}>
+                        <div style={{ position: 'sticky', left: 0, width: GANTT_LEFT_W }}
+                          className="flex-shrink-0 border-r border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center px-3">
+                          <span className="text-xs text-slate-400">Sin tareas programadas</span>
+                        </div>
+                        <div style={{ width: `${GANTT_DAYS * GANTT_DAY_W}px` }} className="relative">
+                          {todayVisible && (
+                            <div className="absolute top-0 bottom-0 w-px bg-indigo-400/30 pointer-events-none"
+                              style={{ left: `${todayOffset * GANTT_DAY_W + GANTT_DAY_W / 2}px` }} />
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Sin fecha */}
+                {unscheduledTasks.length > 0 && (
+                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+                    <button type="button" onClick={() => setGanttSinFechaOpen(v => !v)}
+                      className="flex w-full items-center justify-between px-4 py-2.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800">
+                      <span className="flex items-center gap-2">
+                        Sin fecha
+                        <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                          {unscheduledTasks.length}
+                        </span>
+                      </span>
+                      <ChevronDown size={14} className={`transition-transform duration-200 ${ganttSinFechaOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    <div aria-hidden={!ganttSinFechaOpen}
+                      className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${ganttSinFechaOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+                      <div className="overflow-hidden">
+                        <div className="flex flex-col gap-1.5 p-2">
+                          {unscheduledTasks.map(task => (
+                            <div key={task.id} onClick={() => openSchedulePopover(task)}
+                              className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-sm transition-all hover:border-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-indigo-700">
+                              <div className="flex items-start gap-1.5">
+                                {(task.depth ?? 0) > 0 && <span className="mt-0.5 flex-shrink-0 text-slate-300 dark:text-slate-600">└</span>}
+                                <div className="min-w-0 flex-1 space-y-1">
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    <span className="inline-flex items-center rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400 max-w-[120px] truncate">
+                                      F{task.phaseId} · {task.phaseTitle}
+                                    </span>
+                                    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${getTaskStatusChipClassName(task.status)}`}>
+                                      {getTaskStatusLabel(task.status)}
+                                    </span>
+                                  </div>
+                                  <p className="font-medium text-slate-700 dark:text-slate-200 line-clamp-2 leading-snug">
+                                    {task.itemText}
+                                  </p>
+                                  <p className="flex items-center gap-0.5 text-[10px] text-indigo-400 dark:text-indigo-500">
+                                    <CalendarDays size={9} />
+                                    Clic para programar
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+
+          {/* ── CPM Network Diagram view ── */}
+          {!isStructureEditing && taskView === 'cpm' && interactiveTasks.length > 0 && (() => {
+            const isDark = typeof window !== 'undefined' && document.documentElement.classList.contains('dark')
+
+            const cpmNodes: CpmNode[] = interactiveTasks.map(t => ({
+              id: t.id, durationDays: t.durationDays, predecessorIds: t.predecessorIds,
+            }))
+            const hasCycle = hasCyclicDeps(interactiveTasks)
+            const cpmMap = computeCPM(cpmNodes)
+            const criticalCount = interactiveTasks.filter(t => cpmMap.get(t.id)?.critical).length
+            const projectDuration = interactiveTasks.reduce((m, t) => Math.max(m, cpmMap.get(t.id)?.ef ?? 0), 0)
+            const displayTasks = cpmOnlyCritical
+              ? interactiveTasks.filter(t => cpmMap.get(t.id)?.critical)
+              : interactiveTasks
+
+            const layout = buildCpmLayout(displayTasks)
+
+            // Collect edges
+            const edges: { taskId: string; predId: string; critical: boolean }[] = []
+            for (const task of displayTasks) {
+              for (const predId of task.predecessorIds) {
+                if (layout.has(predId)) {
+                  const pCpm = cpmMap.get(predId)
+                  const tCpm = cpmMap.get(task.id)
+                  const critical = !!(pCpm?.critical && tCpm?.critical && pCpm.ef === tCpm.es)
+                  edges.push({ taskId: task.id, predId, critical })
+                }
+              }
+            }
+
+            // Color palette (light / dark)
+            const nodeFill      = isDark ? '#0f172a' : '#ffffff'
+            const nodeBorder    = isDark ? '#475569' : '#cbd5e1'
+            const nodeCritFill  = isDark ? '#1c0505' : '#fff1f2'
+            const nodeCritBorder = isDark ? '#dc2626' : '#ef4444'
+            const textPrimary   = isDark ? '#f1f5f9' : '#0f172a'
+            const textSecondary = isDark ? '#64748b' : '#94a3b8'
+            const textData      = isDark ? '#94a3b8' : '#64748b'
+            const phaseChipBg   = isDark ? '#1e1b4b' : '#eef2ff'
+            const phaseChipText = isDark ? '#818cf8' : '#4f46e5'
+            const edgeNormal    = isDark ? '#334155' : '#cbd5e1'
+            const edgeCrit      = isDark ? '#dc2626' : '#ef4444'
+            const canvasBg      = isDark ? '#020617' : '#f8fafc'
+            const dividerColor  = isDark ? '#1e293b' : '#e2e8f0'
+
+            const openCpmEditor = (task: InteractiveTask) => {
+              if (cpmDidMoveRef.current) return
+              setCpmEditTask(task)
+              setCpmEditDuration(task.durationDays)
+              setCpmEditPreds([...task.predecessorIds])
+              setCpmPredSearch('')
+            }
+
+            const handleCpmWheel = (e: React.WheelEvent<SVGSVGElement>) => {
+              e.preventDefault()
+              const factor = e.deltaY < 0 ? 1.12 : 0.9
+              const newZoom = Math.max(0.2, Math.min(4, cpmZoom * factor))
+              const rect = e.currentTarget.getBoundingClientRect()
+              const mx = e.clientX - rect.left
+              const my = e.clientY - rect.top
+              const svgX = (mx - cpmPanX) / cpmZoom
+              const svgY = (my - cpmPanY) / cpmZoom
+              setCpmZoom(newZoom)
+              setCpmPanX(mx - svgX * newZoom)
+              setCpmPanY(my - svgY * newZoom)
+            }
+
+            const handleCpmMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+              if (e.button !== 0) return
+              cpmDragRef.current = { startX: e.clientX, startY: e.clientY, panX: cpmPanX, panY: cpmPanY }
+              cpmDidMoveRef.current = false
+            }
+
+            const handleCpmMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+              if (!cpmDragRef.current) return
+              const dx = e.clientX - cpmDragRef.current.startX
+              const dy = e.clientY - cpmDragRef.current.startY
+              if (Math.abs(dx) + Math.abs(dy) > 5) cpmDidMoveRef.current = true
+              setCpmPanX(cpmDragRef.current.panX + dx)
+              setCpmPanY(cpmDragRef.current.panY + dy)
+            }
+
+            const handleCpmMouseUp = () => { cpmDragRef.current = null }
+
+            const nw = CPM_NODE_W
+            const nh = CPM_NODE_H
+            const sw = CPM_SIDE_W
+
+            return (
+              <div className="space-y-3">
+
+                {/* ── Editor popover ── */}
+                {cpmEditTask && typeof window !== 'undefined' && createPortal(
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px]"
+                      onClick={() => setCpmEditTask(null)} />
+                    <div className="relative z-10 w-full max-w-sm rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900 p-5 space-y-4">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500 mb-0.5">
+                            Editar planificación
+                          </p>
+                          <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 line-clamp-2">
+                            {cpmEditTask.itemText}
+                          </p>
+                        </div>
+                        <button onClick={() => setCpmEditTask(null)}
+                          className="flex-shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800">
+                          <X size={15} />
+                        </button>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                          Duración (días)
+                        </label>
+                        <input type="number" min={1} value={cpmEditDuration}
+                          onChange={e => setCpmEditDuration(Math.max(1, Number.parseInt(e.target.value, 10) || 1))}
+                          className="w-24 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                        />
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                            Predecesoras ({cpmEditPreds.length})
+                          </label>
+                          {cpmEditPreds.length > 0 && (
+                            <button type="button" onClick={() => setCpmEditPreds([])}
+                              className="text-[10px] text-slate-400 hover:text-rose-500">
+                              Limpiar deps
+                            </button>
+                          )}
+                        </div>
+                        <input type="text" placeholder="Buscar tarea..." value={cpmPredSearch}
+                          onChange={e => setCpmPredSearch(e.target.value)}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-400 mb-2"
+                        />
+                        <div className="max-h-44 overflow-y-auto space-y-0.5 pr-0.5">
+                          {interactiveTasks
+                            .filter(t => t.id !== cpmEditTask.id && (!cpmPredSearch.trim() || t.itemText.toLowerCase().includes(cpmPredSearch.toLowerCase().trim())))
+                            .map(t => {
+                              const checked = cpmEditPreds.includes(t.id)
+                              return (
+                                <label key={t.id} className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800">
+                                  <input type="checkbox" checked={checked}
+                                    onChange={() => setCpmEditPreds(prev =>
+                                      checked ? prev.filter(id => id !== t.id) : [...prev, t.id]
+                                    )}
+                                    className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600"
+                                  />
+                                  <span className="text-[11px] leading-snug text-slate-700 dark:text-slate-300 line-clamp-2">
+                                    <span className="mr-1 text-[10px] text-indigo-500">F{t.phaseId}</span>
+                                    {t.itemText}
+                                  </span>
+                                </label>
+                              )
+                            })}
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-end gap-2 pt-1">
+                        <button type="button" onClick={() => setCpmEditTask(null)}
+                          className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                          Cancelar
+                        </button>
+                        <button type="button" onClick={handleSavePlanning} disabled={cpmEditSaving}
+                          className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700">
+                          {cpmEditSaving && <Loader2 size={11} className="animate-spin" />}
+                          Guardar
+                        </button>
+                      </div>
+                    </div>
+                  </div>,
+                  document.body
+                )}
+
+                {/* ── Toolbar ── */}
+                <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-2.5 dark:border-slate-700 dark:bg-slate-900">
+                  <div className="flex items-center gap-2">
+                    <GitBranch size={14} className="text-indigo-500" />
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                      Red CPM · {displayTasks.length} tareas · Duración proyecto: {projectDuration}d
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 rounded-lg bg-rose-50 px-2.5 py-1 dark:bg-rose-900/20">
+                    <Zap size={11} className="text-rose-500" />
+                    <span className="text-[11px] font-semibold text-rose-600 dark:text-rose-400">
+                      {criticalCount} crítica{criticalCount !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                    <input type="checkbox" checked={cpmOnlyCritical}
+                      onChange={e => { setCpmOnlyCritical(e.target.checked); setCpmPanX(24); setCpmPanY(24); setCpmZoom(0.85) }}
+                      className="h-3.5 w-3.5 rounded border-slate-300 text-rose-500 focus:ring-rose-400 dark:border-slate-600"
+                    />
+                    Solo ruta crítica
+                  </label>
+                  {canEditTaskContent && (
+                    <span className="text-[11px] text-slate-400 dark:text-slate-500">· Clic en nodo para editar</span>
+                  )}
+                </div>
+
+                {/* ── Cycle warning ── */}
+                {hasCycle && (
+                  <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-700 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
+                    <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+                    Hay un ciclo en las dependencias — el CPM no puede calcularse correctamente. Edita las tareas para eliminarlo.
+                  </div>
+                )}
+
+                {/* ── Hint: no deps yet ── */}
+                {!hasCycle && interactiveTasks.every(t => t.predecessorIds.length === 0) && (
+                  <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-4 py-2.5 text-[11px] text-indigo-600 dark:border-indigo-800/40 dark:bg-indigo-900/20 dark:text-indigo-400">
+                    Ninguna tarea tiene predecesoras aún. Haz clic en un nodo para asignar duración y dependencias, luego guarda para ver las flechas.
+                  </div>
+                )}
+
+                {/* ── SVG canvas ── */}
+                <div className="relative overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700" style={{ height: 600 }}>
+                  <svg
+                    width="100%" height="100%"
+                    style={{ background: canvasBg, cursor: cpmDragRef.current ? 'grabbing' : 'grab', userSelect: 'none', display: 'block' }}
+                    onMouseDown={handleCpmMouseDown}
+                    onMouseMove={handleCpmMouseMove}
+                    onMouseUp={handleCpmMouseUp}
+                    onMouseLeave={handleCpmMouseUp}
+                    onWheel={handleCpmWheel}
+                  >
+                    <defs>
+                      <marker id="cpm-arr" viewBox="0 0 10 10" refX="9" refY="5"
+                        markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                        <path d="M0,0 L10,5 L0,10 Z" fill={edgeNormal} />
+                      </marker>
+                      <marker id="cpm-arr-c" viewBox="0 0 10 10" refX="9" refY="5"
+                        markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                        <path d="M0,0 L10,5 L0,10 Z" fill={edgeCrit} />
+                      </marker>
+                    </defs>
+
+                    <g transform={`translate(${cpmPanX},${cpmPanY}) scale(${cpmZoom})`}>
+                      {/* Edges — rendered first (below nodes) */}
+                      {edges.map(edge => {
+                        const from = layout.get(edge.predId)
+                        const to   = layout.get(edge.taskId)
+                        if (!from || !to) return null
+                        const x1 = from.x + nw                // right-center of source
+                        const y1 = from.y + nh / 2
+                        const x2 = to.x                       // left-center of target
+                        const y2 = to.y + nh / 2
+                        return (
+                          <path
+                            key={`${edge.predId}->${edge.taskId}`}
+                            d={makeCpmBezierPath(x1, y1, x2, y2)}
+                            fill="none"
+                            stroke={edge.critical ? edgeCrit : edgeNormal}
+                            strokeWidth={edge.critical ? 2.5 : 1.5}
+                            markerEnd={edge.critical ? 'url(#cpm-arr-c)' : 'url(#cpm-arr)'}
+                          />
+                        )
+                      })}
+
+                      {/* Nodes */}
+                      {displayTasks.map(task => {
+                        const pos  = layout.get(task.id)
+                        if (!pos) return null
+                        const cpm  = cpmMap.get(task.id)
+                        const crit = cpm?.critical ?? false
+                        const title = task.itemText.length > 21
+                          ? task.itemText.slice(0, 20) + '…'
+                          : task.itemText
+
+                        const fill   = crit ? nodeCritFill   : nodeFill
+                        const border = crit ? nodeCritBorder : nodeBorder
+                        const numColor = crit ? nodeCritBorder : textPrimary
+
+                        return (
+                          <g
+                            key={task.id}
+                            transform={`translate(${pos.x},${pos.y})`}
+                            style={{ cursor: canEditTaskContent ? 'pointer' : 'default' }}
+                            onClick={() => canEditTaskContent && openCpmEditor(task)}
+                          >
+                            {/* Shadow */}
+                            <rect x={2} y={2} width={nw} height={nh} rx={5} fill={isDark ? '#000' : '#e2e8f0'} opacity={0.4} />
+
+                            {/* Main rect */}
+                            <rect x={0} y={0} width={nw} height={nh} rx={5}
+                              fill={fill} stroke={border} strokeWidth={crit ? 2.5 : 1.5} />
+
+                            {/* Critical left accent */}
+                            {crit && <rect x={0} y={0} width={5} height={nh} rx={3} fill={nodeCritBorder} />}
+
+                            {/* Inner grid: vertical dividers */}
+                            <line x1={sw} y1={0} x2={sw} y2={nh} stroke={dividerColor} strokeWidth={0.75} />
+                            <line x1={nw - sw} y1={0} x2={nw - sw} y2={nh} stroke={dividerColor} strokeWidth={0.75} />
+                            {/* Inner grid: horizontal dividers */}
+                            <line x1={0} y1={30} x2={nw} y2={30} stroke={dividerColor} strokeWidth={0.75} />
+                            <line x1={0} y1={60} x2={nw} y2={60} stroke={dividerColor} strokeWidth={0.75} />
+
+                            {/* ── Row 1: ES | title | EF ── */}
+                            {/* tiny labels */}
+                            <text x={4} y={9} fontSize={7} fill={textSecondary} fontFamily="system-ui,sans-serif">ES</text>
+                            <text x={nw - sw + 3} y={9} fontSize={7} fill={textSecondary} fontFamily="system-ui,sans-serif">EF</text>
+                            {/* values */}
+                            <text x={sw / 2} y={23} textAnchor="middle" fontSize={14} fontWeight="700"
+                              fill={numColor} fontFamily="system-ui,sans-serif">
+                              {cpm?.es ?? 0}
+                            </text>
+                            <text x={sw + (nw - sw * 2) / 2} y={22} textAnchor="middle" fontSize={10} fontWeight="600"
+                              fill={textPrimary} fontFamily="system-ui,sans-serif">
+                              {title}
+                            </text>
+                            <text x={nw - sw / 2} y={23} textAnchor="middle" fontSize={14} fontWeight="700"
+                              fill={numColor} fontFamily="system-ui,sans-serif">
+                              {cpm?.ef ?? task.durationDays}
+                            </text>
+
+                            {/* ── Row 2: phase | duration ── */}
+                            <text x={sw / 2} y={50} textAnchor="middle" fontSize={9.5} fontWeight="700"
+                              fill={phaseChipText} fontFamily="system-ui,sans-serif">
+                              F{task.phaseId}
+                            </text>
+                            <text x={sw + (nw - sw * 2) / 2} y={50} textAnchor="middle" fontSize={10}
+                              fill={textData} fontFamily="system-ui,sans-serif">
+                              D = {task.durationDays}d
+                            </text>
+
+                            {/* ── Row 3: LS | slack | LF ── */}
+                            <text x={4} y={69} fontSize={7} fill={textSecondary} fontFamily="system-ui,sans-serif">LS</text>
+                            <text x={nw - sw + 3} y={69} fontSize={7} fill={textSecondary} fontFamily="system-ui,sans-serif">LF</text>
+                            <text x={sw / 2} y={83} textAnchor="middle" fontSize={14} fontWeight="700"
+                              fill={numColor} fontFamily="system-ui,sans-serif">
+                              {cpm?.ls ?? 0}
+                            </text>
+                            <text x={sw + (nw - sw * 2) / 2} y={83} textAnchor="middle"
+                              fontSize={10} fontWeight={crit ? '700' : '400'}
+                              fill={crit ? nodeCritBorder : textData} fontFamily="system-ui,sans-serif">
+                              S = {cpm?.slack ?? 0}
+                            </text>
+                            <text x={nw - sw / 2} y={83} textAnchor="middle" fontSize={14} fontWeight="700"
+                              fill={numColor} fontFamily="system-ui,sans-serif">
+                              {cpm?.lf ?? task.durationDays}
+                            </text>
+                          </g>
+                        )
+                      })}
+                    </g>
+                  </svg>
+
+                  {/* Zoom controls */}
+                  <div className="absolute bottom-3 right-3 flex items-center gap-1.5">
+                    <button type="button" onClick={() => setCpmZoom(z => Math.min(4, z * 1.2))}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white/90 text-base font-bold text-slate-600 shadow-sm backdrop-blur-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800/90 dark:text-slate-300">
+                      +
+                    </button>
+                    <button type="button" onClick={() => setCpmZoom(z => Math.max(0.2, z / 1.2))}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white/90 text-base font-bold text-slate-600 shadow-sm backdrop-blur-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800/90 dark:text-slate-300">
+                      −
+                    </button>
+                    <button type="button" onClick={() => { setCpmZoom(0.85); setCpmPanX(24); setCpmPanY(24) }}
+                      className="flex h-7 items-center rounded-lg border border-slate-200 bg-white/90 px-2 text-[11px] font-medium text-slate-500 shadow-sm backdrop-blur-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800/90 dark:text-slate-400">
+                      Reset
+                    </button>
+                    <span className="w-9 text-right text-[10px] tabular-nums text-slate-400 dark:text-slate-600">
+                      {Math.round(cpmZoom * 100)}%
+                    </span>
+                  </div>
+
+                  {/* Legend */}
+                  <div className="absolute bottom-3 left-3 flex items-center gap-3 rounded-lg border border-slate-200/80 bg-white/90 px-3 py-1.5 text-[10px] text-slate-500 shadow-sm backdrop-blur-sm dark:border-slate-700 dark:bg-slate-800/90 dark:text-slate-400">
+                    <span className="flex items-center gap-1.5">
+                      <span className="inline-block h-2 w-4 rounded-sm" style={{ background: edgeCrit }} />
+                      Ruta crítica (S=0)
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="inline-block h-2 w-4 rounded-sm" style={{ background: edgeNormal }} />
+                      Normal
+                    </span>
+                    <span className="hidden sm:inline">ES·EF / D / LS·LF·S</span>
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
 
           {!isStructureEditing && taskView === 'list' &&
             result.phases.map((phase: Phase) => {

@@ -193,6 +193,49 @@ export interface DbGoogleDocsConnection {
   last_used_at: string
 }
 
+export type WorkspaceRole = 'owner' | 'admin' | 'member' | 'viewer'
+export type WorkspaceInvitationStatus = 'pending' | 'accepted' | 'declined' | 'expired'
+
+export interface DbWorkspace {
+  id: string
+  name: string
+  slug: string
+  description: string | null
+  avatar_color: string
+  owner_user_id: string
+  created_at: string
+  updated_at: string
+}
+
+export interface DbWorkspaceWithRole extends DbWorkspace {
+  role: WorkspaceRole
+  member_count: number
+}
+
+export interface DbWorkspaceMember {
+  workspace_id: string
+  user_id: string
+  role: WorkspaceRole
+  joined_at: string
+  user_name: string | null
+  user_email: string | null
+}
+
+export interface DbWorkspaceInvitation {
+  id: string
+  workspace_id: string
+  invited_by_user_id: string
+  email: string
+  role: WorkspaceRole
+  token: string
+  status: WorkspaceInvitationStatus
+  expires_at: string
+  created_at: string
+  accepted_at: string | null
+  workspace_name?: string
+  invited_by_name?: string | null
+}
+
 export type ExtractionShareVisibility = 'private' | 'circle' | 'unlisted' | 'public'
 export type ExtractionMemberRole = 'editor' | 'viewer'
 export type ExtractionFolderMemberRole = 'viewer'
@@ -276,6 +319,9 @@ export interface DbExtractionTask {
   status: ExtractionTaskStatus
   due_at: string | null
   completed_at: string | null
+  scheduled_start_at: string | null
+  scheduled_end_at: string | null
+  duration_days: number
   created_at: string
   updated_at: string
 }
@@ -367,6 +413,23 @@ export interface UserExtractionRateLimitUsage {
   remaining: number
   reset_at: string
   allowed: boolean
+}
+
+export interface DailyExtractionSnapshot {
+  limit: number
+  used: number
+  remaining: number
+  extra_credits: number
+  reset_at: string
+}
+
+export interface DbCreditTransaction {
+  id: string
+  user_id: string
+  amount: number
+  reason: string
+  stripe_session_id: string | null
+  created_at: string
 }
 
 export interface AdminDailyExtractionStat {
@@ -623,6 +686,9 @@ interface DbExtractionTaskRow {
   status: ExtractionTaskStatus
   due_at: Date | string | null
   completed_at: Date | string | null
+  scheduled_start_at: Date | string | null
+  scheduled_end_at: Date | string | null
+  duration_days: number | string
   created_at: Date | string
   updated_at: Date | string
 }
@@ -736,9 +802,63 @@ interface DbChatMessageRow {
   updated_at: Date | string
 }
 
+interface DbWorkspaceRow {
+  id: string
+  name: string
+  slug: string
+  description: string | null
+  avatar_color: string
+  owner_user_id: string
+  created_at: Date | string
+  updated_at: Date | string
+}
+
+interface DbWorkspaceWithRoleRow extends DbWorkspaceRow {
+  role: string
+  member_count: number | string
+}
+
+interface DbWorkspaceMemberRow {
+  workspace_id: string
+  user_id: string
+  role: string
+  joined_at: Date | string
+  user_name: string | null
+  user_email: string | null
+}
+
+interface DbWorkspaceInvitationRow {
+  id: string
+  workspace_id: string
+  invited_by_user_id: string
+  email: string
+  role: string
+  token: string
+  status: string
+  expires_at: Date | string
+  created_at: Date | string
+  accepted_at: Date | string | null
+  workspace_name?: string
+  invited_by_name?: string | null
+}
+
 interface DbExtractionRateLimitRow {
   window_start: Date | string
   request_count: number | string
+}
+
+interface DbDailyExtractionCountRow {
+  date: Date | string
+  count: number | string
+}
+
+interface DbCreditTransactionRow {
+  id: string
+  user_id: string
+  amount: number | string
+  reason: string
+  stripe_session_id: string | null
+  created_at: Date | string
 }
 
 interface DbCommunityActionRateLimitRow {
@@ -1075,6 +1195,20 @@ const INIT_SQL = `
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS parent_node_id TEXT;
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS depth INTEGER NOT NULL DEFAULT 1;
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS position_path TEXT;
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS scheduled_start_at TIMESTAMPTZ;
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS scheduled_end_at TIMESTAMPTZ;
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS duration_days INTEGER NOT NULL DEFAULT 1;
+
+  CREATE TABLE IF NOT EXISTS extraction_task_dependencies (
+    extraction_id       TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+    task_id             TEXT NOT NULL REFERENCES extraction_tasks(id) ON DELETE CASCADE,
+    predecessor_task_id TEXT NOT NULL REFERENCES extraction_tasks(id) ON DELETE CASCADE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (task_id, predecessor_task_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_etd_extraction  ON extraction_task_dependencies(extraction_id);
+  CREATE INDEX IF NOT EXISTS idx_etd_task        ON extraction_task_dependencies(task_id);
+  CREATE INDEX IF NOT EXISTS idx_etd_predecessor ON extraction_task_dependencies(predecessor_task_id);
 
   UPDATE extraction_tasks
   SET node_id = CONCAT('p', phase_id, '-i', item_index)
@@ -1505,13 +1639,20 @@ const INIT_SQL = `
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
-  -- Seed initial plans (ON CONFLICT = idempotent, won't overwrite admin edits)
+  -- Seed initial plans — use ON CONFLICT (name) DO NOTHING to safely handle duplicate names
+  -- (name is the business key; the id may differ if a plan was created manually)
   INSERT INTO plans (id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour, features_json, is_active, display_order)
-  VALUES
-    ('plan_free',     'free',     'Free',     0,  NULL, 12,  '{"batch_extraction":false,"export_integrations":true,"folders":true,"knowledge_chat":true,"concept_map_mode":true,"priority_support":false,"api_access":false}', true, 0),
-    ('plan_pro',      'pro',      'Pro',      15, NULL, 60,  '{"batch_extraction":true,"export_integrations":true,"folders":true,"knowledge_chat":true,"concept_map_mode":true,"priority_support":true,"api_access":false}',  true, 1),
-    ('plan_business', 'business', 'Business', 49, NULL, 200, '{"batch_extraction":true,"export_integrations":true,"folders":true,"knowledge_chat":true,"concept_map_mode":true,"priority_support":true,"api_access":true}',   true, 2)
-  ON CONFLICT (id) DO NOTHING;
+  VALUES ('plan_free', 'free', 'Free', 0, NULL, 12, '{"batch_extraction":false,"export_integrations":true,"folders":true,"knowledge_chat":true,"concept_map_mode":true,"priority_support":false,"api_access":false}', true, 0)
+  ON CONFLICT (name) DO NOTHING;
+  INSERT INTO plans (id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour, features_json, is_active, display_order)
+  VALUES ('plan_starter', 'starter', 'Starter', 9, NULL, 30, '{"batch_extraction":false,"export_integrations":true,"folders":true,"knowledge_chat":true,"concept_map_mode":true,"priority_support":false,"api_access":false}', true, 1)
+  ON CONFLICT (name) DO NOTHING;
+  INSERT INTO plans (id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour, features_json, is_active, display_order)
+  VALUES ('plan_pro', 'pro', 'Pro', 15, NULL, 60, '{"batch_extraction":true,"export_integrations":true,"folders":true,"knowledge_chat":true,"concept_map_mode":true,"priority_support":true,"api_access":false}', true, 2)
+  ON CONFLICT (name) DO NOTHING;
+  INSERT INTO plans (id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour, features_json, is_active, display_order)
+  VALUES ('plan_business', 'business', 'Business', 49, NULL, 200, '{"batch_extraction":true,"export_integrations":true,"folders":true,"knowledge_chat":true,"concept_map_mode":true,"priority_support":true,"api_access":true}', true, 3)
+  ON CONFLICT (name) DO NOTHING;
 
   -- ── Tags ───────────────────────────────────────────────────────────────────
   CREATE TABLE IF NOT EXISTS extraction_tags (
@@ -1540,9 +1681,115 @@ const INIT_SQL = `
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
+
+  -- ── Workspaces ──────────────────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS workspaces (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    description TEXT,
+    avatar_color TEXT NOT NULL DEFAULT 'indigo',
+    owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS workspace_members (
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'member',
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (workspace_id, user_id),
+    CONSTRAINT workspace_members_role_check CHECK (role IN ('owner','admin','member','viewer'))
+  );
+
+  CREATE TABLE IF NOT EXISTS workspace_invitations (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    invited_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member',
+    token TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    accepted_at TIMESTAMPTZ,
+    UNIQUE (workspace_id, email),
+    CONSTRAINT workspace_invitations_role_check CHECK (role IN ('admin','member','viewer')),
+    CONSTRAINT workspace_invitations_status_check CHECK (status IN ('pending','accepted','declined','expired'))
+  );
+
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL;
+
+  CREATE INDEX IF NOT EXISTS idx_workspaces_owner ON workspaces(owner_user_id);
+  CREATE INDEX IF NOT EXISTS idx_workspaces_slug ON workspaces(slug);
+  CREATE INDEX IF NOT EXISTS idx_workspace_members_user ON workspace_members(user_id);
+  CREATE INDEX IF NOT EXISTS idx_workspace_members_workspace ON workspace_members(workspace_id);
+  CREATE INDEX IF NOT EXISTS idx_workspace_invitations_workspace ON workspace_invitations(workspace_id);
+  CREATE INDEX IF NOT EXISTS idx_workspace_invitations_email ON workspace_invitations(email);
+  CREATE INDEX IF NOT EXISTS idx_workspace_invitations_token ON workspace_invitations(token);
+  CREATE INDEX IF NOT EXISTS idx_extractions_workspace_id ON extractions(workspace_id);
+
+  -- ── Daily extraction counts (replaces hourly sliding window) ──────────────
+  CREATE TABLE IF NOT EXISTS daily_extraction_counts (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    date DATE NOT NULL DEFAULT CURRENT_DATE,
+    count INT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, date)
+  );
+  CREATE INDEX IF NOT EXISTS idx_daily_extraction_counts_user ON daily_extraction_counts(user_id);
+  CREATE INDEX IF NOT EXISTS idx_daily_extraction_counts_date ON daily_extraction_counts(date);
+
+  -- ── Credit transactions ───────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS credit_transactions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    amount INT NOT NULL,
+    reason TEXT NOT NULL DEFAULT 'purchase',
+    stripe_session_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_credit_transactions_user ON credit_transactions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_credit_transactions_created ON credit_transactions(created_at DESC);
+
+  -- ── Schema migrations for daily limits ───────────────────────────────────
+  ALTER TABLE plans ADD COLUMN IF NOT EXISTS extractions_per_day INT NOT NULL DEFAULT 3;
+  ALTER TABLE user_plans ADD COLUMN IF NOT EXISTS extra_credits INT NOT NULL DEFAULT 0;
+
+  -- Update existing plan rows with correct daily limits (idempotent)
+  UPDATE plans SET extractions_per_day = 3   WHERE name = 'free';
+  UPDATE plans SET extractions_per_day = 15  WHERE name = 'starter';
+  UPDATE plans SET extractions_per_day = 40  WHERE name = 'pro';
+  UPDATE plans SET extractions_per_day = 150 WHERE name = 'business';
+
+  -- ── Prompt templates (admin-editable overrides) ───────────────────────────
+  CREATE TABLE IF NOT EXISTS prompt_templates (
+    prompt_key TEXT PRIMARY KEY,
+    content    TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by TEXT
+  );
+
+  -- ── Chat token daily limits ────────────────────────────────────────────────
+  ALTER TABLE plans ADD COLUMN IF NOT EXISTS chat_tokens_per_day INT NOT NULL DEFAULT 10000;
+  UPDATE plans SET chat_tokens_per_day = 10000  WHERE name = 'free';
+  UPDATE plans SET chat_tokens_per_day = 30000  WHERE name = 'starter';
+  UPDATE plans SET chat_tokens_per_day = 100000 WHERE name = 'pro';
+  UPDATE plans SET chat_tokens_per_day = 500000 WHERE name = 'business';
+
+  CREATE TABLE IF NOT EXISTS daily_chat_token_counts (
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    date       DATE NOT NULL DEFAULT CURRENT_DATE,
+    tokens_used INT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, date)
+  );
+  CREATE INDEX IF NOT EXISTS idx_daily_chat_tokens_user ON daily_chat_token_counts(user_id);
+  CREATE INDEX IF NOT EXISTS idx_daily_chat_tokens_date ON daily_chat_token_counts(date);
 `
 
-const DB_INIT_SIGNATURE = '2026-03-01-notif-v1'
+const DB_INIT_SIGNATURE = '2026-03-02-cpm-v2'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -1553,7 +1800,25 @@ function getDbReadyPromise() {
     let readyPromise: Promise<void>
     readyPromise = pool
       .query(INIT_SQL)
-      .then(() => undefined)
+      .then(async () => {
+        // Sync stripe_price_ids from env vars so admins don't have to set them manually
+        const priceUpdates: Array<{ name: string; priceId: string }> = [
+          { name: 'starter',  priceId: process.env.STRIPE_PRICE_STARTER_MONTHLY  ?? '' },
+          { name: 'pro',      priceId: process.env.STRIPE_PRICE_PRO_MONTHLY      ?? '' },
+          { name: 'business', priceId: process.env.STRIPE_PRICE_BUSINESS_MONTHLY ?? '' },
+        ].filter((u) => u.priceId)
+        for (const { name, priceId } of priceUpdates) {
+          await pool.query(
+            `UPDATE plans SET stripe_price_id = $1, updated_at = NOW() WHERE name = $2 AND (stripe_price_id IS NULL OR stripe_price_id = '')`,
+            [priceId, name]
+          )
+        }
+        // Sync daily limits (always update to ensure new values are applied)
+        await pool.query(`UPDATE plans SET extractions_per_day = 3   WHERE name = 'free'`)
+        await pool.query(`UPDATE plans SET extractions_per_day = 15  WHERE name = 'starter'`)
+        await pool.query(`UPDATE plans SET extractions_per_day = 40  WHERE name = 'pro'`)
+        await pool.query(`UPDATE plans SET extractions_per_day = 150 WHERE name = 'business'`)
+      })
       .catch((error) => {
         if (globalForDb.__actionExtractorDbReady === readyPromise) {
           globalForDb.__actionExtractorDbReady = undefined
@@ -1601,6 +1866,69 @@ function parseDbNullableInteger(value: unknown) {
   }
 
   return null
+}
+
+function normalizeWorkspaceRole(value: unknown): WorkspaceRole {
+  if (value === 'owner') return 'owner'
+  if (value === 'admin') return 'admin'
+  if (value === 'viewer') return 'viewer'
+  return 'member'
+}
+
+function normalizeWorkspaceInvitationStatus(value: unknown): WorkspaceInvitationStatus {
+  if (value === 'accepted') return 'accepted'
+  if (value === 'declined') return 'declined'
+  if (value === 'expired') return 'expired'
+  return 'pending'
+}
+
+function mapWorkspaceRow(row: DbWorkspaceRow): DbWorkspace {
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    description: row.description,
+    avatar_color: row.avatar_color,
+    owner_user_id: row.owner_user_id,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  }
+}
+
+function mapWorkspaceWithRoleRow(row: DbWorkspaceWithRoleRow): DbWorkspaceWithRole {
+  return {
+    ...mapWorkspaceRow(row),
+    role: normalizeWorkspaceRole(row.role),
+    member_count: parseDbInteger(row.member_count),
+  }
+}
+
+function mapWorkspaceMemberRow(row: DbWorkspaceMemberRow): DbWorkspaceMember {
+  return {
+    workspace_id: row.workspace_id,
+    user_id: row.user_id,
+    role: normalizeWorkspaceRole(row.role),
+    joined_at: toIso(row.joined_at),
+    user_name: row.user_name,
+    user_email: row.user_email,
+  }
+}
+
+function mapWorkspaceInvitationRow(row: DbWorkspaceInvitationRow): DbWorkspaceInvitation {
+  return {
+    id: row.id,
+    workspace_id: row.workspace_id,
+    invited_by_user_id: row.invited_by_user_id,
+    email: row.email,
+    role: normalizeWorkspaceRole(row.role),
+    token: row.token,
+    status: normalizeWorkspaceInvitationStatus(row.status),
+    expires_at: toIso(row.expires_at),
+    created_at: toIso(row.created_at),
+    accepted_at: row.accepted_at ? toIso(row.accepted_at) : null,
+    workspace_name: row.workspace_name,
+    invited_by_name: row.invited_by_name,
+  }
 }
 
 function normalizeExtractionShareVisibility(value: unknown): ExtractionShareVisibility {
@@ -1878,6 +2206,9 @@ function mapExtractionTaskRow(row: DbExtractionTaskRow): DbExtractionTask {
     status: row.status,
     due_at: row.due_at ? toIso(row.due_at) : null,
     completed_at: row.completed_at ? toIso(row.completed_at) : null,
+    scheduled_start_at: row.scheduled_start_at ? toIso(row.scheduled_start_at) : null,
+    scheduled_end_at: row.scheduled_end_at ? toIso(row.scheduled_end_at) : null,
+    duration_days: typeof row.duration_days === 'number' ? row.duration_days : (Number.parseInt(String(row.duration_days ?? '1'), 10) || 1),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   }
@@ -4044,6 +4375,9 @@ export async function listExtractionTasksWithEventsForUser(input: { extractionId
         status,
         due_at,
         completed_at,
+        scheduled_start_at,
+        scheduled_end_at,
+        duration_days,
         created_at,
         updated_at
       FROM extraction_tasks
@@ -4114,6 +4448,9 @@ export async function listExtractionTasksWithEventsForSharedExtraction(extractio
         status,
         due_at,
         completed_at,
+        scheduled_start_at,
+        scheduled_end_at,
+        duration_days,
         created_at,
         updated_at
       FROM extraction_tasks
@@ -4186,6 +4523,9 @@ export async function findExtractionTaskByIdForUser(input: {
         status,
         due_at,
         completed_at,
+        scheduled_start_at,
+        scheduled_end_at,
+        duration_days,
         created_at,
         updated_at
       FROM extraction_tasks
@@ -4233,6 +4573,9 @@ export async function updateExtractionTaskStateForUser(input: {
         status,
         due_at,
         completed_at,
+        scheduled_start_at,
+        scheduled_end_at,
+        duration_days,
         created_at,
         updated_at
     `,
@@ -4240,6 +4583,95 @@ export async function updateExtractionTaskStateForUser(input: {
   )
 
   return rows[0] ? mapExtractionTaskRow(rows[0]) : null
+}
+
+export async function updateExtractionTaskScheduleForUser(input: {
+  taskId: string
+  extractionId: string
+  scheduledStartAt: string | null
+  scheduledEndAt: string | null
+}): Promise<DbExtractionTask | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskRow>(
+    `UPDATE extraction_tasks
+     SET scheduled_start_at = $1, scheduled_end_at = $2, updated_at = NOW()
+     WHERE id = $3 AND extraction_id = $4
+     RETURNING id, extraction_id, user_id, phase_id, phase_title, item_index, item_text,
+       node_id, parent_node_id, depth, position_path, checked, status,
+       due_at, completed_at, scheduled_start_at, scheduled_end_at, duration_days, created_at, updated_at`,
+    [input.scheduledStartAt || null, input.scheduledEndAt || null, input.taskId, input.extractionId]
+  )
+  return rows[0] ? mapExtractionTaskRow(rows[0]) : null
+}
+
+export async function listExtractionTaskDependencies(
+  extractionId: string
+): Promise<Map<string, string[]>> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ task_id: string; predecessor_task_id: string }>(
+    `SELECT task_id, predecessor_task_id FROM extraction_task_dependencies WHERE extraction_id = $1`,
+    [extractionId]
+  )
+  const map = new Map<string, string[]>()
+  for (const row of rows) {
+    const existing = map.get(row.task_id) ?? []
+    existing.push(row.predecessor_task_id)
+    map.set(row.task_id, existing)
+  }
+  return map
+}
+
+export async function updateExtractionTaskPlanningForUser(input: {
+  taskId: string
+  extractionId: string
+  durationDays: number
+  predecessorIds: string[]
+}): Promise<{ ok: boolean; error?: string }> {
+  await ensureDbReady()
+
+  if (!Number.isInteger(input.durationDays) || input.durationDays < 1) {
+    return { ok: false, error: 'durationDays debe ser un entero >= 1.' }
+  }
+  if (input.predecessorIds.includes(input.taskId)) {
+    return { ok: false, error: 'Una tarea no puede ser su propio predecesor.' }
+  }
+
+  if (input.predecessorIds.length > 0) {
+    const { rows } = await pool.query<{ id: string }>(
+      `SELECT id FROM extraction_tasks WHERE extraction_id = $1 AND id = ANY($2::text[])`,
+      [input.extractionId, input.predecessorIds]
+    )
+    if (rows.length !== input.predecessorIds.length) {
+      return { ok: false, error: 'Uno o más predecesores no existen en esta extracción.' }
+    }
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      `UPDATE extraction_tasks SET duration_days = $1, updated_at = NOW() WHERE id = $2 AND extraction_id = $3`,
+      [input.durationDays, input.taskId, input.extractionId]
+    )
+    await client.query(
+      `DELETE FROM extraction_task_dependencies WHERE task_id = $1`,
+      [input.taskId]
+    )
+    if (input.predecessorIds.length > 0) {
+      const placeholders = input.predecessorIds.map((_, i) => `($1, $2, $${i + 3})`).join(', ')
+      await client.query(
+        `INSERT INTO extraction_task_dependencies (extraction_id, task_id, predecessor_task_id) VALUES ${placeholders}`,
+        [input.extractionId, input.taskId, ...input.predecessorIds]
+      )
+    }
+    await client.query('COMMIT')
+    return { ok: true }
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
 }
 
 export async function createExtractionTaskEventForUser(input: {
@@ -7240,6 +7672,8 @@ export interface DbPlan {
   price_monthly_usd: number
   stripe_price_id: string | null
   extractions_per_hour: number
+  extractions_per_day: number
+  chat_tokens_per_day: number
   features_json: string
   is_active: boolean
   display_order: number
@@ -7254,6 +7688,8 @@ interface DbPlanRow {
   price_monthly_usd: string | number
   stripe_price_id: string | null
   extractions_per_hour: string | number
+  extractions_per_day: string | number | null
+  chat_tokens_per_day: string | number | null
   features_json: string
   is_active: boolean
   display_order: string | number
@@ -7269,6 +7705,8 @@ function mapPlanRow(row: DbPlanRow): DbPlan {
     price_monthly_usd: Number(row.price_monthly_usd),
     stripe_price_id: row.stripe_price_id ?? null,
     extractions_per_hour: parseDbInteger(row.extractions_per_hour),
+    extractions_per_day: parseDbInteger(row.extractions_per_day ?? 3),
+    chat_tokens_per_day: parseDbInteger(row.chat_tokens_per_day ?? 10000),
     features_json: row.features_json,
     is_active: Boolean(row.is_active),
     display_order: parseDbInteger(row.display_order),
@@ -7281,7 +7719,7 @@ export async function listPlans(): Promise<DbPlan[]> {
   await ensureDbReady()
   const { rows } = await pool.query<DbPlanRow>(
     `SELECT id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-            features_json, is_active, display_order, created_at, updated_at
+            extractions_per_day, chat_tokens_per_day, features_json, is_active, display_order, created_at, updated_at
      FROM plans
      ORDER BY display_order ASC, created_at ASC`
   )
@@ -7292,7 +7730,7 @@ export async function getPlanByName(name: string): Promise<DbPlan | null> {
   await ensureDbReady()
   const { rows } = await pool.query<DbPlanRow>(
     `SELECT id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-            features_json, is_active, display_order, created_at, updated_at
+            extractions_per_day, chat_tokens_per_day, features_json, is_active, display_order, created_at, updated_at
      FROM plans WHERE name = $1 LIMIT 1`,
     [name]
   )
@@ -7317,7 +7755,7 @@ export async function createPlan(input: {
         features_json, is_active, display_order)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-               features_json, is_active, display_order, created_at, updated_at`,
+               extractions_per_day, chat_tokens_per_day, features_json, is_active, display_order, created_at, updated_at`,
     [
       id,
       input.name.toLowerCase().trim(),
@@ -7341,6 +7779,7 @@ export async function updatePlan(
     priceMonthlyUsd: number
     stripePriceId: string | null
     extractionsPerHour: number
+    chatTokensPerDay: number
     featuresJson: string
     isActive: boolean
     displayOrder: number
@@ -7357,6 +7796,7 @@ export async function updatePlan(
   if (input.priceMonthlyUsd !== undefined) { setClauses.push(`price_monthly_usd = $${idx++}`); values.push(input.priceMonthlyUsd) }
   if ('stripePriceId' in input) { setClauses.push(`stripe_price_id = $${idx++}`); values.push(input.stripePriceId || null) }
   if (input.extractionsPerHour !== undefined) { setClauses.push(`extractions_per_hour = $${idx++}`); values.push(input.extractionsPerHour) }
+  if (input.chatTokensPerDay !== undefined) { setClauses.push(`chat_tokens_per_day = $${idx++}`); values.push(input.chatTokensPerDay) }
   if (input.featuresJson !== undefined) { setClauses.push(`features_json = $${idx++}`); values.push(input.featuresJson) }
   if (input.isActive !== undefined) { setClauses.push(`is_active = $${idx++}`); values.push(input.isActive) }
   if (input.displayOrder !== undefined) { setClauses.push(`display_order = $${idx++}`); values.push(input.displayOrder) }
@@ -7368,7 +7808,7 @@ export async function updatePlan(
     `UPDATE plans SET ${setClauses.join(', ')}
      WHERE id = $${idx}
      RETURNING id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-               features_json, is_active, display_order, created_at, updated_at`,
+               extractions_per_day, chat_tokens_per_day, features_json, is_active, display_order, created_at, updated_at`,
     values
   )
   return rows[0] ? mapPlanRow(rows[0]) : null
@@ -7386,6 +7826,7 @@ export interface DbUserPlan {
   user_id: string
   plan: string
   extractions_per_hour: number
+  extra_credits: number
   stripe_subscription_id: string | null
   stripe_price_id: string | null
   status: string
@@ -7401,6 +7842,7 @@ interface DbUserPlanRow {
   user_id: string
   plan: string
   extractions_per_hour: number | string
+  extra_credits: number | string | null
   stripe_subscription_id: string | null
   stripe_price_id: string | null
   status: string
@@ -7417,6 +7859,7 @@ function mapUserPlanRow(row: DbUserPlanRow): DbUserPlan {
     user_id: row.user_id,
     plan: row.plan,
     extractions_per_hour: parseDbInteger(row.extractions_per_hour),
+    extra_credits: parseDbInteger(row.extra_credits ?? 0),
     stripe_subscription_id: row.stripe_subscription_id ?? null,
     stripe_price_id: row.stripe_price_id ?? null,
     status: row.status,
@@ -7431,7 +7874,7 @@ function mapUserPlanRow(row: DbUserPlanRow): DbUserPlan {
 export async function getUserActivePlan(userId: string): Promise<DbUserPlan | null> {
   await ensureDbReady()
   const { rows } = await pool.query<DbUserPlanRow>(
-    `SELECT id, user_id, plan, extractions_per_hour, stripe_subscription_id, stripe_price_id,
+    `SELECT id, user_id, plan, extractions_per_hour, extra_credits, stripe_subscription_id, stripe_price_id,
             status, current_period_start, current_period_end, canceled_at, created_at, updated_at
      FROM user_plans
      WHERE user_id = $1 AND status = 'active'
@@ -7457,6 +7900,7 @@ export async function upsertUserActivePlan(input: {
   userId: string
   plan: string
   extractionsPerHour: number
+  extractionsPerDay?: number
   subscriptionId: string
   priceId: string
   periodStart: Date | null
@@ -7543,6 +7987,321 @@ export async function logStripeEvent(
      ON CONFLICT (id) DO NOTHING`,
     [id, eventType, userId, rawJson]
   )
+}
+
+// ── Daily extraction limits + credits ──────────────────────────────────────
+
+export async function getUserDailyLimit(userId: string): Promise<number> {
+  await ensureDbReady()
+  // Join user_plans → plans to get extractions_per_day; default 3 for free tier
+  const { rows } = await pool.query<{ extractions_per_day: number | string }>(
+    `SELECT p.extractions_per_day
+     FROM user_plans up
+     JOIN plans p ON p.name = up.plan
+     WHERE up.user_id = $1 AND up.status = 'active'
+     LIMIT 1`,
+    [userId]
+  )
+  if (rows[0]) return parseDbInteger(rows[0].extractions_per_day)
+  return 3 // free default
+}
+
+export async function getDailyExtractionSnapshot(userId: string): Promise<DailyExtractionSnapshot> {
+  await ensureDbReady()
+  const limit = await getUserDailyLimit(userId)
+  const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD in UTC
+
+  const [countResult, creditsResult] = await Promise.all([
+    pool.query<DbDailyExtractionCountRow>(
+      `SELECT date, count FROM daily_extraction_counts WHERE user_id = $1 AND date = $2 LIMIT 1`,
+      [userId, today]
+    ),
+    pool.query<{ extra_credits: number | string | null }>(
+      `SELECT extra_credits FROM user_plans WHERE user_id = $1 AND status = 'active' LIMIT 1`,
+      [userId]
+    ),
+  ])
+
+  const used = countResult.rows[0] ? parseDbInteger(countResult.rows[0].count) : 0
+  const extra_credits = creditsResult.rows[0] ? parseDbInteger(creditsResult.rows[0].extra_credits ?? 0) : 0
+
+  // Reset is next UTC midnight
+  const resetDate = new Date(today)
+  resetDate.setUTCDate(resetDate.getUTCDate() + 1)
+  const reset_at = resetDate.toISOString()
+
+  return {
+    limit,
+    used,
+    remaining: Math.max(0, limit - used),
+    extra_credits,
+    reset_at,
+  }
+}
+
+export async function consumeDailyExtraction(userId: string): Promise<{
+  allowed: boolean
+  used_credit: boolean
+  snapshot: DailyExtractionSnapshot
+}> {
+  await ensureDbReady()
+  const snapshot = await getDailyExtractionSnapshot(userId)
+
+  if (snapshot.used < snapshot.limit) {
+    // Within daily quota — increment count
+    const today = new Date().toISOString().slice(0, 10)
+    await pool.query(
+      `INSERT INTO daily_extraction_counts (user_id, date, count)
+       VALUES ($1, $2, 1)
+       ON CONFLICT (user_id, date)
+       DO UPDATE SET count = daily_extraction_counts.count + 1, updated_at = NOW()`,
+      [userId, today]
+    )
+    const updatedSnapshot = { ...snapshot, used: snapshot.used + 1, remaining: Math.max(0, snapshot.remaining - 1) }
+    return { allowed: true, used_credit: false, snapshot: updatedSnapshot }
+  }
+
+  if (snapshot.extra_credits > 0) {
+    // Use a credit
+    await consumeUserCredit(userId)
+    const updatedSnapshot = { ...snapshot, extra_credits: snapshot.extra_credits - 1 }
+    return { allowed: true, used_credit: true, snapshot: updatedSnapshot }
+  }
+
+  return { allowed: false, used_credit: false, snapshot }
+}
+
+export async function getUserCreditBalance(userId: string): Promise<number> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ extra_credits: number | string | null }>(
+    `SELECT extra_credits FROM user_plans WHERE user_id = $1 AND status = 'active' LIMIT 1`,
+    [userId]
+  )
+  return rows[0] ? parseDbInteger(rows[0].extra_credits ?? 0) : 0
+}
+
+export async function consumeUserCredit(userId: string): Promise<void> {
+  await ensureDbReady()
+  const txId = randomUUID()
+  await pool.query(
+    `UPDATE user_plans
+     SET extra_credits = GREATEST(0, extra_credits - 1), updated_at = NOW()
+     WHERE user_id = $1 AND status = 'active' AND extra_credits > 0`,
+    [userId]
+  )
+  await pool.query(
+    `INSERT INTO credit_transactions (id, user_id, amount, reason)
+     VALUES ($1, $2, -1, 'consumed')`,
+    [txId, userId]
+  )
+}
+
+export async function addUserCredits(
+  userId: string,
+  amount: number,
+  reason: string,
+  stripeSessionId?: string
+): Promise<void> {
+  await ensureDbReady()
+  const txId = randomUUID()
+
+  // Ensure user has a plan row (upsert free plan if missing)
+  await pool.query(
+    `INSERT INTO user_plans (id, user_id, plan, extractions_per_hour, extra_credits, status)
+     VALUES ($1, $2, 'free', 12, $3, 'active')
+     ON CONFLICT (user_id) WHERE status = 'active'
+     DO UPDATE SET extra_credits = user_plans.extra_credits + $3, updated_at = NOW()`,
+    [randomUUID(), userId, amount]
+  )
+
+  await pool.query(
+    `INSERT INTO credit_transactions (id, user_id, amount, reason, stripe_session_id)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [txId, userId, amount, reason, stripeSessionId ?? null]
+  )
+}
+
+export async function listUserCreditTransactions(userId: string, limit = 10): Promise<DbCreditTransaction[]> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbCreditTransactionRow>(
+    `SELECT id, user_id, amount, reason, stripe_session_id, created_at
+     FROM credit_transactions
+     WHERE user_id = $1
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [userId, limit]
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    user_id: r.user_id,
+    amount: parseDbInteger(r.amount),
+    reason: r.reason,
+    stripe_session_id: r.stripe_session_id ?? null,
+    created_at: toIso(r.created_at),
+  }))
+}
+
+// ── Admin — Credit management ─────────────────────────────────────────────
+
+export interface AdminUserCreditRow {
+  user_id: string
+  user_name: string
+  user_email: string
+  extra_credits: number
+  plan: string
+  total_purchased: number
+  last_purchase_at: string | null
+}
+
+export interface AdminCreditStats {
+  total_credits_in_circulation: number
+  users_with_credits: number
+  total_purchases_alltime: number
+  total_purchases_30d: number
+  credits_purchased_30d: number
+}
+
+export async function adminGetCreditStats(): Promise<AdminCreditStats> {
+  await ensureDbReady()
+  const [circulation, purchases, recent] = await Promise.all([
+    pool.query<{ total: string | number; users: string | number }>(
+      `SELECT COALESCE(SUM(extra_credits), 0) AS total, COUNT(*) FILTER (WHERE extra_credits > 0) AS users
+       FROM user_plans WHERE status = 'active'`
+    ),
+    pool.query<{ total: string | number; credits: string | number }>(
+      `SELECT COUNT(*) AS total, COALESCE(SUM(amount), 0) AS credits
+       FROM credit_transactions WHERE reason = 'purchase'`
+    ),
+    pool.query<{ total: string | number; credits: string | number }>(
+      `SELECT COUNT(*) AS total, COALESCE(SUM(amount), 0) AS credits
+       FROM credit_transactions WHERE reason = 'purchase' AND created_at > NOW() - INTERVAL '30 days'`
+    ),
+  ])
+  return {
+    total_credits_in_circulation: parseDbInteger(circulation.rows[0]?.total ?? 0),
+    users_with_credits: parseDbInteger(circulation.rows[0]?.users ?? 0),
+    total_purchases_alltime: parseDbInteger(purchases.rows[0]?.total ?? 0),
+    total_purchases_30d: parseDbInteger(recent.rows[0]?.total ?? 0),
+    credits_purchased_30d: parseDbInteger(recent.rows[0]?.credits ?? 0),
+  }
+}
+
+export async function adminListUsersWithCredits(limit = 100): Promise<AdminUserCreditRow[]> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{
+    user_id: string
+    user_name: string
+    user_email: string
+    extra_credits: string | number
+    plan: string
+    total_purchased: string | number
+    last_purchase_at: Date | string | null
+  }>(
+    `SELECT up.user_id,
+            u.name  AS user_name,
+            u.email AS user_email,
+            up.extra_credits,
+            up.plan,
+            COALESCE(tx.total_purchased, 0) AS total_purchased,
+            tx.last_purchase_at
+     FROM user_plans up
+     JOIN users u ON u.id = up.user_id
+     LEFT JOIN (
+       SELECT user_id,
+              SUM(amount) AS total_purchased,
+              MAX(created_at) AS last_purchase_at
+       FROM credit_transactions
+       WHERE reason = 'purchase'
+       GROUP BY user_id
+     ) tx ON tx.user_id = up.user_id
+     WHERE up.status = 'active'
+       AND (up.extra_credits > 0 OR tx.total_purchased IS NOT NULL)
+     ORDER BY up.extra_credits DESC, tx.last_purchase_at DESC NULLS LAST
+     LIMIT $1`,
+    [limit]
+  )
+  return rows.map((r) => ({
+    user_id: r.user_id,
+    user_name: r.user_name,
+    user_email: r.user_email,
+    extra_credits: parseDbInteger(r.extra_credits),
+    plan: r.plan,
+    total_purchased: parseDbInteger(r.total_purchased),
+    last_purchase_at: r.last_purchase_at ? toIso(r.last_purchase_at) : null,
+  }))
+}
+
+export interface AdminRecentTransaction {
+  id: string
+  user_id: string
+  user_name: string
+  user_email: string
+  amount: number
+  reason: string
+  stripe_session_id: string | null
+  created_at: string
+}
+
+export async function adminListRecentCreditTransactions(limit = 50): Promise<AdminRecentTransaction[]> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{
+    id: string
+    user_id: string
+    user_name: string
+    user_email: string
+    amount: string | number
+    reason: string
+    stripe_session_id: string | null
+    created_at: Date | string
+  }>(
+    `SELECT ct.id, ct.user_id, u.name AS user_name, u.email AS user_email,
+            ct.amount, ct.reason, ct.stripe_session_id, ct.created_at
+     FROM credit_transactions ct
+     JOIN users u ON u.id = ct.user_id
+     ORDER BY ct.created_at DESC
+     LIMIT $1`,
+    [limit]
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    user_id: r.user_id,
+    user_name: r.user_name,
+    user_email: r.user_email,
+    amount: parseDbInteger(r.amount),
+    reason: r.reason,
+    stripe_session_id: r.stripe_session_id ?? null,
+    created_at: toIso(r.created_at),
+  }))
+}
+
+export async function adminGetUserCreditDetail(userId: string): Promise<{
+  balance: number
+  daily_used: number
+  daily_limit: number
+  transactions: DbCreditTransaction[]
+}> {
+  await ensureDbReady()
+  const [snapshot, txRows] = await Promise.all([
+    getDailyExtractionSnapshot(userId),
+    pool.query<DbCreditTransactionRow>(
+      `SELECT id, user_id, amount, reason, stripe_session_id, created_at
+       FROM credit_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`,
+      [userId]
+    ),
+  ])
+  return {
+    balance: snapshot.extra_credits,
+    daily_used: snapshot.used,
+    daily_limit: snapshot.limit,
+    transactions: txRows.rows.map((r) => ({
+      id: r.id,
+      user_id: r.user_id,
+      amount: parseDbInteger(r.amount),
+      reason: r.reason,
+      stripe_session_id: r.stripe_session_id ?? null,
+      created_at: toIso(r.created_at),
+    })),
+  }
 }
 
 // ── Tags ───────────────────────────────────────────────────────────────────
@@ -7878,4 +8637,623 @@ export async function getTaskFollowersForNotification(
     [taskId, excludeUserId]
   )
   return rows.map((r) => ({ userId: r.user_id, email: r.email, name: r.name ?? '' }))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WORKSPACE FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function generateSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+}
+
+export async function createWorkspace(input: {
+  ownerId: string
+  name: string
+  slug?: string
+  description?: string
+  avatarColor?: string
+}): Promise<DbWorkspace> {
+  await getDbReadyPromise()
+  const id = randomUUID()
+  const slug = input.slug?.trim() || generateSlug(input.name) + '-' + id.slice(0, 6)
+  const now = new Date()
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const { rows } = await client.query<DbWorkspaceRow>(
+      `INSERT INTO workspaces (id, name, slug, description, avatar_color, owner_user_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+       RETURNING *`,
+      [id, input.name.trim(), slug, input.description?.trim() ?? null, input.avatarColor ?? 'indigo', input.ownerId, now]
+    )
+    // Add owner as member
+    await client.query(
+      `INSERT INTO workspace_members (workspace_id, user_id, role, joined_at)
+       VALUES ($1, $2, 'owner', $3)`,
+      [id, input.ownerId, now]
+    )
+    await client.query('COMMIT')
+    return mapWorkspaceRow(rows[0])
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+export async function findWorkspaceById(id: string): Promise<DbWorkspace | null> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<DbWorkspaceRow>(
+    `SELECT * FROM workspaces WHERE id = $1`,
+    [id]
+  )
+  return rows[0] ? mapWorkspaceRow(rows[0]) : null
+}
+
+export async function findWorkspaceBySlug(slug: string): Promise<DbWorkspace | null> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<DbWorkspaceRow>(
+    `SELECT * FROM workspaces WHERE slug = $1`,
+    [slug]
+  )
+  return rows[0] ? mapWorkspaceRow(rows[0]) : null
+}
+
+export async function listWorkspacesForUser(userId: string): Promise<DbWorkspaceWithRole[]> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<DbWorkspaceWithRoleRow>(
+    `SELECT w.*, wm.role,
+       (SELECT COUNT(*) FROM workspace_members wm2 WHERE wm2.workspace_id = w.id)::int AS member_count
+     FROM workspaces w
+     JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = $1
+     ORDER BY w.updated_at DESC`,
+    [userId]
+  )
+  return rows.map(mapWorkspaceWithRoleRow)
+}
+
+export async function updateWorkspace(input: {
+  id: string
+  requestingUserId: string
+  name?: string
+  description?: string | null
+  avatarColor?: string
+}): Promise<DbWorkspace | null> {
+  await getDbReadyPromise()
+  // Verify requester is admin+
+  const role = await getWorkspaceMemberRole(input.id, input.requestingUserId)
+  if (!role || (role !== 'owner' && role !== 'admin')) {
+    throw new Error('Sin permisos para editar el workspace.')
+  }
+
+  const setClauses: string[] = ['updated_at = NOW()']
+  const values: unknown[] = []
+  let idx = 1
+
+  if (input.name !== undefined) {
+    setClauses.push(`name = $${idx++}`)
+    values.push(input.name.trim())
+  }
+  if ('description' in input) {
+    setClauses.push(`description = $${idx++}`)
+    values.push(input.description?.trim() ?? null)
+  }
+  if (input.avatarColor !== undefined) {
+    setClauses.push(`avatar_color = $${idx++}`)
+    values.push(input.avatarColor)
+  }
+
+  values.push(input.id)
+  const { rows } = await pool.query<DbWorkspaceRow>(
+    `UPDATE workspaces SET ${setClauses.join(', ')} WHERE id = $${idx} RETURNING *`,
+    values
+  )
+  return rows[0] ? mapWorkspaceRow(rows[0]) : null
+}
+
+export async function deleteWorkspace(input: { id: string; ownerUserId: string }): Promise<void> {
+  await getDbReadyPromise()
+  const { rowCount } = await pool.query(
+    `DELETE FROM workspaces WHERE id = $1 AND owner_user_id = $2`,
+    [input.id, input.ownerUserId]
+  )
+  if (!rowCount) throw new Error('Solo el owner puede eliminar el workspace.')
+}
+
+// ── Members ──────────────────────────────────────────────────────────────────
+
+export async function listWorkspaceMembers(workspaceId: string): Promise<DbWorkspaceMember[]> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<DbWorkspaceMemberRow>(
+    `SELECT wm.workspace_id, wm.user_id, wm.role, wm.joined_at,
+            u.name AS user_name, u.email AS user_email
+     FROM workspace_members wm
+     JOIN users u ON u.id = wm.user_id
+     WHERE wm.workspace_id = $1
+     ORDER BY wm.joined_at ASC`,
+    [workspaceId]
+  )
+  return rows.map(mapWorkspaceMemberRow)
+}
+
+export async function getWorkspaceMemberRole(
+  workspaceId: string,
+  userId: string
+): Promise<WorkspaceRole | null> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<{ role: string }>(
+    `SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`,
+    [workspaceId, userId]
+  )
+  return rows[0] ? normalizeWorkspaceRole(rows[0].role) : null
+}
+
+export async function upsertWorkspaceMember(input: {
+  workspaceId: string
+  userId: string
+  role: WorkspaceRole
+  requestingUserId: string
+}): Promise<DbWorkspaceMember> {
+  await getDbReadyPromise()
+  const reqRole = await getWorkspaceMemberRole(input.workspaceId, input.requestingUserId)
+  if (!reqRole || (reqRole !== 'owner' && reqRole !== 'admin')) {
+    throw new Error('Sin permisos para gestionar miembros.')
+  }
+  // Cannot change owner's role via this function
+  if (input.role === 'owner') throw new Error('No se puede asignar rol owner directamente.')
+
+  const { rows } = await pool.query<DbWorkspaceMemberRow>(
+    `INSERT INTO workspace_members (workspace_id, user_id, role, joined_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (workspace_id, user_id)
+     DO UPDATE SET role = $3
+     RETURNING workspace_id, user_id, role, joined_at`,
+    [input.workspaceId, input.userId, input.role]
+  )
+  const memberRow = rows[0]
+  // Fetch user info
+  const { rows: uRows } = await pool.query<{ name: string | null; email: string | null }>(
+    `SELECT name, email FROM users WHERE id = $1`,
+    [input.userId]
+  )
+  return mapWorkspaceMemberRow({
+    ...memberRow,
+    user_name: uRows[0]?.name ?? null,
+    user_email: uRows[0]?.email ?? null,
+  })
+}
+
+export async function removeWorkspaceMember(input: {
+  workspaceId: string
+  userId: string
+  requestingUserId: string
+}): Promise<void> {
+  await getDbReadyPromise()
+  const reqRole = await getWorkspaceMemberRole(input.workspaceId, input.requestingUserId)
+  // Self-removal allowed; admin+ can remove others (but not owner)
+  const isSelf = input.requestingUserId === input.userId
+  if (!isSelf && (!reqRole || (reqRole !== 'owner' && reqRole !== 'admin'))) {
+    throw new Error('Sin permisos para remover miembros.')
+  }
+  // Cannot remove owner
+  const targetRole = await getWorkspaceMemberRole(input.workspaceId, input.userId)
+  if (targetRole === 'owner') throw new Error('No se puede remover al owner del workspace.')
+
+  await pool.query(
+    `DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`,
+    [input.workspaceId, input.userId]
+  )
+}
+
+export async function transferWorkspaceOwnership(input: {
+  workspaceId: string
+  currentOwnerId: string
+  newOwnerId: string
+}): Promise<void> {
+  await getDbReadyPromise()
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    // Verify current owner
+    const { rows } = await client.query<{ owner_user_id: string }>(
+      `SELECT owner_user_id FROM workspaces WHERE id = $1`,
+      [input.workspaceId]
+    )
+    if (!rows[0] || rows[0].owner_user_id !== input.currentOwnerId) {
+      throw new Error('Solo el owner puede transferir el workspace.')
+    }
+    // Ensure new owner is a member
+    const { rows: memberRows } = await client.query<{ role: string }>(
+      `SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`,
+      [input.workspaceId, input.newOwnerId]
+    )
+    if (!memberRows[0]) throw new Error('El nuevo owner debe ser miembro del workspace.')
+
+    // Update workspace owner
+    await client.query(
+      `UPDATE workspaces SET owner_user_id = $1, updated_at = NOW() WHERE id = $2`,
+      [input.newOwnerId, input.workspaceId]
+    )
+    // Downgrade old owner to admin
+    await client.query(
+      `UPDATE workspace_members SET role = 'admin' WHERE workspace_id = $1 AND user_id = $2`,
+      [input.workspaceId, input.currentOwnerId]
+    )
+    // Upgrade new owner
+    await client.query(
+      `UPDATE workspace_members SET role = 'owner' WHERE workspace_id = $1 AND user_id = $2`,
+      [input.workspaceId, input.newOwnerId]
+    )
+    await client.query('COMMIT')
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+// ── Invitations ───────────────────────────────────────────────────────────────
+
+export async function createWorkspaceInvitation(input: {
+  workspaceId: string
+  invitedByUserId: string
+  email: string
+  role: WorkspaceRole
+}): Promise<DbWorkspaceInvitation> {
+  await getDbReadyPromise()
+  const reqRole = await getWorkspaceMemberRole(input.workspaceId, input.invitedByUserId)
+  if (!reqRole || (reqRole !== 'owner' && reqRole !== 'admin')) {
+    throw new Error('Sin permisos para invitar miembros.')
+  }
+
+  const id = randomUUID()
+  const token = randomUUID()
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
+
+  // Upsert: if there's an existing invitation for this workspace+email, replace it
+  const { rows } = await pool.query<DbWorkspaceInvitationRow>(
+    `INSERT INTO workspace_invitations
+       (id, workspace_id, invited_by_user_id, email, role, token, status, expires_at, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, NOW())
+     ON CONFLICT (workspace_id, email) DO UPDATE
+       SET id = $1, invited_by_user_id = $3, role = $5, token = $6, status = 'pending',
+           expires_at = $7, created_at = NOW(), accepted_at = NULL
+     RETURNING *`,
+    [id, input.workspaceId, input.invitedByUserId, input.email.toLowerCase().trim(), input.role, token, expiresAt]
+  )
+  return mapWorkspaceInvitationRow(rows[0])
+}
+
+export async function findWorkspaceInvitationByToken(
+  token: string
+): Promise<DbWorkspaceInvitation | null> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<DbWorkspaceInvitationRow>(
+    `SELECT wi.*, w.name AS workspace_name, u.name AS invited_by_name
+     FROM workspace_invitations wi
+     JOIN workspaces w ON w.id = wi.workspace_id
+     LEFT JOIN users u ON u.id = wi.invited_by_user_id
+     WHERE wi.token = $1`,
+    [token]
+  )
+  return rows[0] ? mapWorkspaceInvitationRow(rows[0]) : null
+}
+
+export async function acceptWorkspaceInvitation(input: {
+  token: string
+  userId: string
+}): Promise<DbWorkspaceMember> {
+  await getDbReadyPromise()
+  const invitation = await findWorkspaceInvitationByToken(input.token)
+  if (!invitation) throw new Error('Invitación no encontrada.')
+  if (invitation.status !== 'pending') throw new Error('Esta invitación ya fue procesada.')
+  if (new Date(invitation.expires_at) < new Date()) throw new Error('La invitación ha expirado.')
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    // Insert or update member
+    const { rows } = await client.query<DbWorkspaceMemberRow>(
+      `INSERT INTO workspace_members (workspace_id, user_id, role, joined_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = $3
+       RETURNING workspace_id, user_id, role, joined_at`,
+      [invitation.workspace_id, input.userId, invitation.role]
+    )
+    // Mark invitation accepted
+    await client.query(
+      `UPDATE workspace_invitations SET status = 'accepted', accepted_at = NOW() WHERE token = $1`,
+      [input.token]
+    )
+    await client.query('COMMIT')
+    const memberRow = rows[0]
+    const { rows: uRows } = await pool.query<{ name: string | null; email: string | null }>(
+      `SELECT name, email FROM users WHERE id = $1`,
+      [input.userId]
+    )
+    return mapWorkspaceMemberRow({
+      ...memberRow,
+      user_name: uRows[0]?.name ?? null,
+      user_email: uRows[0]?.email ?? null,
+    })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+export async function declineWorkspaceInvitation(token: string): Promise<void> {
+  await getDbReadyPromise()
+  await pool.query(
+    `UPDATE workspace_invitations SET status = 'declined' WHERE token = $1 AND status = 'pending'`,
+    [token]
+  )
+}
+
+export async function listWorkspaceInvitations(
+  workspaceId: string
+): Promise<DbWorkspaceInvitation[]> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<DbWorkspaceInvitationRow>(
+    `SELECT wi.*, w.name AS workspace_name, u.name AS invited_by_name
+     FROM workspace_invitations wi
+     JOIN workspaces w ON w.id = wi.workspace_id
+     LEFT JOIN users u ON u.id = wi.invited_by_user_id
+     WHERE wi.workspace_id = $1 AND wi.status = 'pending'
+     ORDER BY wi.created_at DESC`,
+    [workspaceId]
+  )
+  return rows.map(mapWorkspaceInvitationRow)
+}
+
+export async function cancelWorkspaceInvitation(input: {
+  invitationId: string
+  requestingUserId: string
+}): Promise<void> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<{ workspace_id: string }>(
+    `SELECT workspace_id FROM workspace_invitations WHERE id = $1`,
+    [input.invitationId]
+  )
+  if (!rows[0]) throw new Error('Invitación no encontrada.')
+  const role = await getWorkspaceMemberRole(rows[0].workspace_id, input.requestingUserId)
+  if (!role || (role !== 'owner' && role !== 'admin')) {
+    throw new Error('Sin permisos para cancelar invitaciones.')
+  }
+  await pool.query(`DELETE FROM workspace_invitations WHERE id = $1`, [input.invitationId])
+}
+
+// ── Workspace Extractions ─────────────────────────────────────────────────────
+
+export async function listWorkspaceExtractions(input: {
+  workspaceId: string
+  userId: string
+  limit?: number
+  cursor?: string
+}): Promise<DbExtraction[]> {
+  await getDbReadyPromise()
+  const limit = Math.min(input.limit ?? 30, 100)
+  const params: unknown[] = [input.workspaceId, limit]
+  let cursorClause = ''
+  if (input.cursor) {
+    cursorClause = ` AND e.id < $3`
+    params.push(input.cursor)
+  }
+  const { rows } = await pool.query<DbExtractionRow & { tags_json: string | null }>(
+    `SELECT e.*,
+       COALESCE(
+         (SELECT json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color))
+          FROM extraction_tag_assignments eta
+          JOIN extraction_tags t ON t.id = eta.tag_id
+          WHERE eta.extraction_id = e.id),
+         '[]'
+       )::text AS tags_json
+     FROM extractions e
+     WHERE e.workspace_id = $1${cursorClause}
+     ORDER BY e.created_at DESC
+     LIMIT $2`,
+    params
+  )
+  return rows.map(mapExtractionRow)
+}
+
+export async function moveExtractionToWorkspace(input: {
+  extractionId: string
+  userId: string
+  workspaceId: string | null
+}): Promise<void> {
+  await getDbReadyPromise()
+  // Verify extraction belongs to user
+  const { rows } = await pool.query<{ user_id: string }>(
+    `SELECT user_id FROM extractions WHERE id = $1`,
+    [input.extractionId]
+  )
+  if (!rows[0]) throw new Error('Extracción no encontrada.')
+  if (rows[0].user_id !== input.userId) throw new Error('Sin permisos sobre esta extracción.')
+
+  // If moving to workspace, verify user is member+
+  if (input.workspaceId) {
+    const role = await getWorkspaceMemberRole(input.workspaceId, input.userId)
+    if (!role || role === 'viewer') throw new Error('Sin permisos para mover extracciones al workspace.')
+  }
+
+  await pool.query(
+    `UPDATE extractions SET workspace_id = $1 WHERE id = $2 AND user_id = $3`,
+    [input.workspaceId, input.extractionId, input.userId]
+  )
+}
+
+export async function countWorkspaceExtractions(workspaceId: string): Promise<number> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<{ total: number | string }>(
+    `SELECT COUNT(*)::int AS total FROM extractions WHERE workspace_id = $1`,
+    [workspaceId]
+  )
+  return parseDbInteger(rows[0]?.total ?? 0)
+}
+
+// ── Prompt template overrides ─────────────────────────────────────────────────
+
+export async function getPromptOverride(key: string): Promise<string | null> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<{ content: string }>(
+    `SELECT content FROM prompt_templates WHERE prompt_key = $1`,
+    [key]
+  )
+  return rows[0]?.content ?? null
+}
+
+export async function setPromptOverride(key: string, content: string, updatedBy: string): Promise<void> {
+  await getDbReadyPromise()
+  await pool.query(
+    `INSERT INTO prompt_templates (prompt_key, content, updated_at, updated_by)
+     VALUES ($1, $2, NOW(), $3)
+     ON CONFLICT (prompt_key) DO UPDATE
+       SET content = EXCLUDED.content,
+           updated_at = NOW(),
+           updated_by = EXCLUDED.updated_by`,
+    [key, content, updatedBy]
+  )
+}
+
+export async function deletePromptOverride(key: string): Promise<void> {
+  await getDbReadyPromise()
+  await pool.query(`DELETE FROM prompt_templates WHERE prompt_key = $1`, [key])
+}
+
+export interface DbPromptTemplate {
+  prompt_key: string
+  content: string
+  updated_at: string
+  updated_by: string | null
+}
+
+export async function listPromptOverrides(): Promise<DbPromptTemplate[]> {
+  await getDbReadyPromise()
+  const { rows } = await pool.query<{
+    prompt_key: string
+    content: string
+    updated_at: Date | string
+    updated_by: string | null
+  }>(`SELECT prompt_key, content, updated_at, updated_by FROM prompt_templates ORDER BY prompt_key`)
+  return rows.map((row) => ({
+    prompt_key: row.prompt_key,
+    content: row.content,
+    updated_at: toIso(row.updated_at),
+    updated_by: row.updated_by,
+  }))
+}
+
+// ── Chat token daily limits ────────────────────────────────────────────────────
+
+export async function getUserChatTokenLimit(userId: string): Promise<number> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ chat_tokens_per_day: string | number | null }>(
+    `SELECT p.chat_tokens_per_day
+     FROM user_plans up
+     JOIN plans p ON p.name = up.plan
+     WHERE up.user_id = $1 AND up.status = 'active'
+     ORDER BY up.created_at DESC
+     LIMIT 1`,
+    [userId]
+  )
+  return parseDbInteger(rows[0]?.chat_tokens_per_day ?? 10000)
+}
+
+export async function getChatTokenSnapshot(userId: string): Promise<{
+  limit: number
+  used: number
+  remaining: number
+  reset_at: string
+  allowed: boolean
+}> {
+  await ensureDbReady()
+  const limit = await getUserChatTokenLimit(userId)
+  const { rows } = await pool.query<{ tokens_used: string | number }>(
+    `SELECT tokens_used FROM daily_chat_token_counts WHERE user_id = $1 AND date = CURRENT_DATE`,
+    [userId]
+  )
+  const used = parseDbInteger(rows[0]?.tokens_used ?? 0)
+  const remaining = Math.max(0, limit - used)
+  // Reset happens at midnight UTC — next midnight
+  const now = new Date()
+  const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1))
+  return {
+    limit,
+    used,
+    remaining,
+    reset_at: tomorrow.toISOString(),
+    allowed: used < limit,
+  }
+}
+
+export async function consumeChatTokens(
+  userId: string,
+  tokens: number
+): Promise<{ allowed: boolean; snapshot: { limit: number; used: number; remaining: number } }> {
+  await ensureDbReady()
+  const limit = await getUserChatTokenLimit(userId)
+  const { rows } = await pool.query<{ tokens_used: string | number }>(
+    `INSERT INTO daily_chat_token_counts (user_id, date, tokens_used)
+     VALUES ($1, CURRENT_DATE, $2)
+     ON CONFLICT (user_id, date) DO UPDATE
+       SET tokens_used = daily_chat_token_counts.tokens_used + EXCLUDED.tokens_used,
+           updated_at = NOW()
+     RETURNING tokens_used`,
+    [userId, tokens]
+  )
+  const used = parseDbInteger(rows[0]?.tokens_used ?? tokens)
+  const remaining = Math.max(0, limit - used)
+  return {
+    allowed: used <= limit,
+    snapshot: { limit, used, remaining },
+  }
+}
+
+export async function adminGetChatTokenStats(): Promise<
+  Array<{ user_id: string; email: string; tokens_used: number; limit: number; date: string }>
+> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{
+    user_id: string
+    email: string
+    tokens_used: string | number
+    limit: string | number
+    date: string | Date
+  }>(
+    `SELECT d.user_id, u.email,
+            d.tokens_used,
+            COALESCE(
+              (SELECT p.chat_tokens_per_day
+               FROM user_plans up
+               JOIN plans p ON p.name = up.plan
+               WHERE up.user_id = d.user_id AND up.status = 'active'
+               ORDER BY up.created_at DESC LIMIT 1),
+              10000
+            ) AS limit,
+            d.date::text
+     FROM daily_chat_token_counts d
+     JOIN users u ON u.id = d.user_id
+     WHERE d.date = CURRENT_DATE
+     ORDER BY d.tokens_used DESC
+     LIMIT 50`
+  )
+  return rows.map((row) => ({
+    user_id: row.user_id,
+    email: row.email,
+    tokens_used: parseDbInteger(row.tokens_used),
+    limit: parseDbInteger(row.limit),
+    date: typeof row.date === 'string' ? row.date : (row.date as Date).toISOString().slice(0, 10),
+  }))
 }

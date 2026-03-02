@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type Stripe from 'stripe'
-import { stripe, planFromPriceId, PLAN_LIMITS } from '@/lib/stripe'
+import { stripe, planFromPriceId, PLAN_LIMITS, CREDIT_PACK_AMOUNTS } from '@/lib/stripe'
 import {
   getUserByStripeCustomerId,
   logStripeEvent,
   setUserStripeCustomerId,
   upsertUserActivePlan,
   deactivateUserPlan,
+  addUserCredits,
 } from '@/lib/db'
 
 export const runtime = 'nodejs'
@@ -45,7 +46,24 @@ export async function POST(req: NextRequest) {
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object as Stripe.Checkout.Session
       const userId = session.metadata?.userId
-      if (!userId || !session.subscription || !session.customer) {
+
+      if (!userId) {
+        return NextResponse.json({ received: true })
+      }
+
+      // Credit pack purchase (one-time payment)
+      if (session.metadata?.type === 'credits') {
+        const packId = session.metadata?.packId ?? ''
+        const amount = CREDIT_PACK_AMOUNTS[packId] ?? 0
+        if (amount > 0) {
+          await addUserCredits(userId, amount, 'purchase', session.id)
+          console.log(`[Stripe] checkout.session.completed — user ${userId} → ${amount} credits (${packId})`)
+        }
+        return NextResponse.json({ received: true })
+      }
+
+      // Subscription purchase
+      if (!session.subscription || !session.customer) {
         return NextResponse.json({ received: true })
       }
 
@@ -58,7 +76,7 @@ export async function POST(req: NextRequest) {
       const subscription = await stripe.subscriptions.retrieve(subscriptionId) as any
       const priceId = subscription.items?.data[0]?.price?.id ?? ''
       const plan = planFromPriceId(priceId) ?? 'pro'
-      const extractionsPerHour = PLAN_LIMITS[plan] ?? 60
+      const extractionsPerHour = PLAN_LIMITS[plan] ?? 40
       const { periodStart, periodEnd } = extractPeriodDates(subscription)
 
       await setUserStripeCustomerId(userId, customerId)
@@ -86,7 +104,7 @@ export async function POST(req: NextRequest) {
 
       const priceId = subscription.items?.data[0]?.price?.id ?? ''
       const plan = planFromPriceId(priceId) ?? 'pro'
-      const extractionsPerHour = PLAN_LIMITS[plan] ?? 60
+      const extractionsPerHour = PLAN_LIMITS[plan] ?? 40
       const status: string = subscription.status
       const { periodStart, periodEnd } = extractPeriodDates(subscription)
 

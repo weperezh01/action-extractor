@@ -1,17 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const dbMocks = vi.hoisted(() => ({
-  consumeExtractionRateLimitByUser: vi.fn(),
+  consumeDailyExtraction: vi.fn(),
+  getDailyExtractionSnapshot: vi.fn(),
   consumeCommunityActionRateLimitByUser: vi.fn(),
-  getExtractionRateLimitUsageByUser: vi.fn(),
   getCommunityActionRateLimitUsageByUser: vi.fn(),
+  consumeGuestExtractionRateLimit: vi.fn(),
 }))
 
 vi.mock('@/lib/db', () => ({
-  consumeExtractionRateLimitByUser: dbMocks.consumeExtractionRateLimitByUser,
+  consumeDailyExtraction: dbMocks.consumeDailyExtraction,
+  getDailyExtractionSnapshot: dbMocks.getDailyExtractionSnapshot,
   consumeCommunityActionRateLimitByUser: dbMocks.consumeCommunityActionRateLimitByUser,
-  getExtractionRateLimitUsageByUser: dbMocks.getExtractionRateLimitUsageByUser,
   getCommunityActionRateLimitUsageByUser: dbMocks.getCommunityActionRateLimitUsageByUser,
+  consumeGuestExtractionRateLimit: dbMocks.consumeGuestExtractionRateLimit,
 }))
 
 import {
@@ -22,10 +24,8 @@ import {
   getUserCommunityActionRateLimitSnapshot,
   getUserExtractionRateLimitSnapshot,
   resolveCommunityActionRateLimitPerHour,
-  resolveExtractionRateLimitPerHour,
 } from '@/lib/rate-limit'
 
-const ORIGINAL_LIMIT_ENV = process.env.ACTION_EXTRACTOR_EXTRACTIONS_PER_HOUR
 const ORIGINAL_COMMUNITY_POSTS_LIMIT_ENV = process.env.ACTION_EXTRACTOR_COMMUNITY_POSTS_PER_HOUR
 const ORIGINAL_COMMUNITY_COMMENTS_LIMIT_ENV = process.env.ACTION_EXTRACTOR_COMMUNITY_COMMENTS_PER_HOUR
 const ORIGINAL_COMMUNITY_FOLLOWS_LIMIT_ENV = process.env.ACTION_EXTRACTOR_COMMUNITY_FOLLOWS_PER_HOUR
@@ -40,84 +40,90 @@ function restoreEnv(name: string, value: string | undefined) {
 
 describe('lib/rate-limit', () => {
   beforeEach(() => {
-    dbMocks.consumeExtractionRateLimitByUser.mockReset()
+    dbMocks.consumeDailyExtraction.mockReset()
+    dbMocks.getDailyExtractionSnapshot.mockReset()
     dbMocks.consumeCommunityActionRateLimitByUser.mockReset()
-    dbMocks.getExtractionRateLimitUsageByUser.mockReset()
     dbMocks.getCommunityActionRateLimitUsageByUser.mockReset()
-    delete process.env.ACTION_EXTRACTOR_EXTRACTIONS_PER_HOUR
     delete process.env.ACTION_EXTRACTOR_COMMUNITY_POSTS_PER_HOUR
     delete process.env.ACTION_EXTRACTOR_COMMUNITY_COMMENTS_PER_HOUR
     delete process.env.ACTION_EXTRACTOR_COMMUNITY_FOLLOWS_PER_HOUR
   })
 
   afterEach(() => {
-    restoreEnv('ACTION_EXTRACTOR_EXTRACTIONS_PER_HOUR', ORIGINAL_LIMIT_ENV)
     restoreEnv('ACTION_EXTRACTOR_COMMUNITY_POSTS_PER_HOUR', ORIGINAL_COMMUNITY_POSTS_LIMIT_ENV)
     restoreEnv('ACTION_EXTRACTOR_COMMUNITY_COMMENTS_PER_HOUR', ORIGINAL_COMMUNITY_COMMENTS_LIMIT_ENV)
     restoreEnv('ACTION_EXTRACTOR_COMMUNITY_FOLLOWS_PER_HOUR', ORIGINAL_COMMUNITY_FOLLOWS_LIMIT_ENV)
   })
 
-  it('usa el límite por defecto cuando env no está definida o es inválida', () => {
-    expect(resolveExtractionRateLimitPerHour()).toBe(12)
-
-    process.env.ACTION_EXTRACTOR_EXTRACTIONS_PER_HOUR = 'abc'
-    expect(resolveExtractionRateLimitPerHour()).toBe(12)
-
-    process.env.ACTION_EXTRACTOR_EXTRACTIONS_PER_HOUR = '0'
-    expect(resolveExtractionRateLimitPerHour()).toBe(12)
-  })
-
-  it('limita el valor máximo a 500 por hora', () => {
-    process.env.ACTION_EXTRACTOR_EXTRACTIONS_PER_HOUR = '9999'
-    expect(resolveExtractionRateLimitPerHour()).toBe(500)
-  })
-
-  it('consume rate limit y calcula retryAfterSeconds', async () => {
-    process.env.ACTION_EXTRACTOR_EXTRACTIONS_PER_HOUR = '20'
-
-    const now = new Date('2026-02-21T12:00:00.000Z').getTime()
+  it('consume daily extraction and returns correct result', async () => {
+    const now = new Date('2026-03-02T12:00:00.000Z').getTime()
+    const resetAt = new Date('2026-03-03T00:00:00.000Z').toISOString()
     const dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(now)
 
-    dbMocks.consumeExtractionRateLimitByUser.mockResolvedValue({
+    dbMocks.consumeDailyExtraction.mockResolvedValue({
       allowed: false,
-      limit: 20,
-      used: 20,
-      remaining: 0,
-      reset_at: new Date(now + 4_500).toISOString(),
+      used_credit: false,
+      snapshot: {
+        limit: 3,
+        used: 3,
+        remaining: 0,
+        extra_credits: 0,
+        reset_at: resetAt,
+      },
     })
 
     const result = await consumeUserExtractionRateLimit('user-123')
 
-    expect(dbMocks.consumeExtractionRateLimitByUser).toHaveBeenCalledWith({ userId: 'user-123', limit: 20 })
+    expect(dbMocks.consumeDailyExtraction).toHaveBeenCalledWith('user-123')
     expect(result).toMatchObject({
       allowed: false,
-      limit: 20,
-      used: 20,
+      limit: 3,
+      used: 3,
       remaining: 0,
-      retryAfterSeconds: 5,
+      extra_credits: 0,
+      used_credit: false,
     })
 
     dateNowSpy.mockRestore()
   })
 
-  it('retorna fallback de retryAfterSeconds cuando reset_at es inválido', async () => {
-    dbMocks.getExtractionRateLimitUsageByUser.mockResolvedValue({
-      allowed: true,
-      limit: 12,
+  it('snapshot returns allowed=true when credits available even if daily limit exhausted', async () => {
+    const resetAt = new Date('2026-03-03T00:00:00.000Z').toISOString()
+
+    dbMocks.getDailyExtractionSnapshot.mockResolvedValue({
+      limit: 3,
       used: 3,
-      remaining: 9,
-      reset_at: 'not-a-date',
+      remaining: 0,
+      extra_credits: 5,
+      reset_at: resetAt,
     })
 
     const result = await getUserExtractionRateLimitSnapshot('user-abc')
 
-    expect(dbMocks.getExtractionRateLimitUsageByUser).toHaveBeenCalledWith({ userId: 'user-abc', limit: 12 })
-    expect(result.retryAfterSeconds).toBe(60)
+    expect(result.allowed).toBe(true)
+    expect(result.extra_credits).toBe(5)
+  })
+
+  it('snapshot returns allowed=false when daily limit exhausted and no credits', async () => {
+    const resetAt = new Date('2026-03-03T00:00:00.000Z').toISOString()
+
+    dbMocks.getDailyExtractionSnapshot.mockResolvedValue({
+      limit: 3,
+      used: 3,
+      remaining: 0,
+      extra_credits: 0,
+      reset_at: resetAt,
+    })
+
+    const result = await getUserExtractionRateLimitSnapshot('user-abc')
+
+    expect(result.allowed).toBe(false)
+    expect(result.extra_credits).toBe(0)
   })
 
   it('construye el mensaje de rate limit para UX', () => {
-    expect(buildExtractionRateLimitMessage(12)).toBe(
-      'Has alcanzado el límite de 12 extracciones por hora. Intenta de nuevo en unos minutos.'
+    expect(buildExtractionRateLimitMessage(3)).toBe(
+      'Has alcanzado el límite de 3 extracciones por día. Vuelve mañana o compra créditos extra.'
     )
   })
 

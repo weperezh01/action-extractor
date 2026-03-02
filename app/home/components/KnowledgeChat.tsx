@@ -16,6 +16,16 @@ interface ChatApiResponse {
   answer?: unknown
   references?: unknown
   error?: unknown
+  chatTokensExhausted?: boolean
+  resetAt?: string
+}
+
+interface ChatTokenSnapshot {
+  limit: number
+  used: number
+  remaining: number
+  reset_at: string
+  allowed: boolean
 }
 
 interface ChatHistoryApiResponse {
@@ -197,6 +207,22 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
 
+  // Chat token quota state
+  const [chatTokens, setChatTokens] = useState<ChatTokenSnapshot | null>(null)
+  const [tokensExhausted, setTokensExhausted] = useState(false)
+
+  const fetchChatTokens = useCallback(async () => {
+    try {
+      const res = await fetch('/api/account/chat-tokens', { cache: 'no-store' })
+      if (!res.ok) return
+      const data = (await res.json()) as ChatTokenSnapshot
+      setChatTokens(data)
+      setTokensExhausted(!data.allowed)
+    } catch {
+      // non-blocking
+    }
+  }, [])
+
   // Load conversation list
   const loadConversations = useCallback(async () => {
     try {
@@ -266,6 +292,12 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
     })
   }, [isOpen, conversationsLoaded, loadConversations])
 
+  // Fetch token quota on open
+  useEffect(() => {
+    if (!isOpen) return
+    void fetchChatTokens()
+  }, [isOpen, fetchChatTokens])
+
   useEffect(() => {
     if (!isOpen) return
     if (historyLoaded) return
@@ -281,7 +313,7 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
     container.scrollTop = container.scrollHeight
   }, [isOpen, messages, loading, historyLoading, clearingHistory])
 
-  const canSend = input.trim().length > 0 && !loading && !historyLoading && !clearingHistory
+  const canSend = input.trim().length > 0 && !loading && !historyLoading && !clearingHistory && !tokensExhausted
   const scopeLabel = useMemo(() => {
     if (scope === 'active' && activeExtractionId) return 'Extracción activa'
     return 'Todas mis extracciones'
@@ -393,6 +425,12 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
 
       const payload = (await response.json().catch(() => ({}))) as ChatApiResponse
       if (!response.ok) {
+        if (payload.chatTokensExhausted) {
+          setTokensExhausted(true)
+          if (chatTokens) {
+            setChatTokens((prev) => prev ? { ...prev, remaining: 0, allowed: false } : prev)
+          }
+        }
         setError(resolveErrorMessage(payload, 'No se pudo responder la pregunta.'))
         return
       }
@@ -412,6 +450,9 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
           references,
         },
       ])
+
+      // Re-fetch token quota after successful response
+      void fetchChatTokens()
 
       // Refresh conversations list to update updatedAt
       void loadConversations().then((list) => {
@@ -670,7 +711,17 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
 
               {/* Footer */}
               <footer className="border-t border-slate-200 px-4 py-3 dark:border-slate-700">
-                {error && (
+                {tokensExhausted && (
+                  <p className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                    Límite diario de tokens alcanzado. Vuelve mañana para continuar.
+                  </p>
+                )}
+                {!tokensExhausted && error && (
+                  <p className="mb-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">
+                    {error}
+                  </p>
+                )}
+                {tokensExhausted && error && !error.includes('límite') && (
                   <p className="mb-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">
                     {error}
                   </p>
@@ -683,8 +734,9 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
                     onKeyDown={handleInputKeyDown}
                     rows={2}
                     maxLength={2000}
-                    placeholder="Pregunta sobre tus extracciones..."
-                    className="min-h-[44px] flex-1 resize-none rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/40"
+                    disabled={tokensExhausted}
+                    placeholder={tokensExhausted ? 'Límite diario alcanzado' : 'Pregunta sobre tus extracciones...'}
+                    className="min-h-[44px] flex-1 resize-none rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50 disabled:text-slate-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/40 dark:disabled:bg-slate-900 dark:disabled:text-slate-600"
                   />
                   <button
                     type="button"
@@ -696,6 +748,18 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
                     {historyLoading ? 'Cargando...' : 'Enviar'}
                   </button>
                 </div>
+
+                {chatTokens && (
+                  <p className={`mt-1.5 text-[10px] tabular-nums ${
+                    tokensExhausted
+                      ? 'text-amber-600 dark:text-amber-400'
+                      : chatTokens.remaining < chatTokens.limit * 0.1
+                        ? 'text-rose-500 dark:text-rose-400'
+                        : 'text-slate-400 dark:text-slate-500'
+                  }`}>
+                    {tokensExhausted ? '0' : chatTokens.remaining.toLocaleString('es-MX')} / {chatTokens.limit.toLocaleString('es-MX')} tokens chat hoy
+                  </p>
+                )}
               </footer>
             </>
           )}

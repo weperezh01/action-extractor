@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { getUserActivePlan, getUserStripeCustomerId } from '@/lib/db'
+import { getUserActivePlan, getUserStripeCustomerId, getUserDailyLimit, getUserCreditBalance } from '@/lib/db'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -12,15 +12,19 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
 
-    const [plan, stripeCustomerId] = await Promise.all([
+    const [plan, stripeCustomerId, dailyLimit, creditBalance] = await Promise.all([
       getUserActivePlan(user.id),
       getUserStripeCustomerId(user.id),
+      getUserDailyLimit(user.id),
+      getUserCreditBalance(user.id),
     ])
 
     if (!plan) {
       return NextResponse.json({
         plan: 'free',
         extractionsPerHour: 12,
+        extractionsPerDay: dailyLimit,
+        creditBalance,
         status: 'active',
         currentPeriodEnd: null,
         hasStripeCustomer: Boolean(stripeCustomerId),
@@ -30,6 +34,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       plan: plan.plan,
       extractionsPerHour: plan.extractions_per_hour,
+      extractionsPerDay: dailyLimit,
+      creditBalance: plan.extra_credits,
       status: plan.status,
       currentPeriodEnd: plan.current_period_end,
       hasStripeCustomer: Boolean(stripeCustomerId),

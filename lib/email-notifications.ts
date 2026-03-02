@@ -276,6 +276,72 @@ function buildNewCommentEmailHtml(params: {
   `)
 }
 
+// ─── Workspace invitation email ────────────────────────────────────────────
+
+export async function sendWorkspaceInvitationEmail(params: {
+  toEmail: string
+  invitedByName: string
+  workspaceName: string
+  role: string
+  inviteToken: string
+}): Promise<void> {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://roi.welltechnologies.net'
+  const inviteUrl = `${appUrl}/workspace/invite/${params.inviteToken}`
+
+  const roleLabels: Record<string, string> = {
+    admin: 'Administrador',
+    member: 'Miembro',
+    viewer: 'Observador',
+  }
+  const roleLabel = roleLabels[params.role] ?? params.role
+
+  try {
+    await sendEmail({
+      to: params.toEmail,
+      subject: `${params.invitedByName} te invitó al workspace "${params.workspaceName}"`,
+      html: buildWorkspaceInvitationEmailHtml({
+        toEmail: params.toEmail,
+        invitedByName: params.invitedByName,
+        workspaceName: params.workspaceName,
+        roleLabel,
+        inviteUrl,
+      }),
+    })
+  } catch (err) {
+    console.error('[email-notifications] Error al enviar invitación de workspace:', err)
+  }
+}
+
+function buildWorkspaceInvitationEmailHtml(params: {
+  toEmail: string
+  invitedByName: string
+  workspaceName: string
+  roleLabel: string
+  inviteUrl: string
+}) {
+  const { invitedByName, workspaceName, roleLabel, inviteUrl } = params
+  return emailWrapper(`
+    <h2 style="margin:0 0 8px;color:#0f172a;font-size:20px;font-weight:700;">Invitación al workspace</h2>
+    <p style="color:#475569;font-size:15px;line-height:1.6;margin:0 0 20px;">
+      <strong>${escHtml(invitedByName)}</strong> te ha invitado a unirte al workspace
+      <strong>"${escHtml(workspaceName)}"</strong> como <strong>${escHtml(roleLabel)}</strong>.
+    </p>
+
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px 20px;margin-bottom:24px;">
+      <p style="margin:0 0 6px;font-size:13px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-weight:600;">Workspace</p>
+      <p style="margin:0 0 14px;color:#1e293b;font-size:16px;font-weight:600;">${escHtml(workspaceName)}</p>
+      <p style="margin:0 0 6px;font-size:13px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-weight:600;">Tu rol</p>
+      <span style="background:#dbeafe;color:#1d4ed8;padding:4px 10px;border-radius:99px;font-size:13px;font-weight:600;">${escHtml(roleLabel)}</span>
+    </div>
+
+    <p style="color:#64748b;font-size:13px;margin:0 0 16px;">Esta invitación expira en 7 días.</p>
+
+    <a href="${inviteUrl}" style="display:inline-block;background:#4f46e5;color:white;padding:12px 24px;border-radius:8px;font-weight:600;font-size:15px;text-decoration:none;">
+      Aceptar invitación
+    </a>
+  `)
+}
+
 function escHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }

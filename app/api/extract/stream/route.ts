@@ -7,6 +7,7 @@ import {
   findAnyVideoCacheByVideoId,
   findVideoCacheByVideoId,
   getAppSetting,
+  getPromptOverride,
   logAiUsage,
   upsertVideoCache,
 } from '@/lib/db'
@@ -321,9 +322,11 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const [dbExtractionProvider, dbExtractionModel] = await Promise.all([
+  const [dbExtractionProvider, dbExtractionModel, systemOverride, userOverride] = await Promise.all([
     getAppSetting('extraction_provider').catch(() => null),
     getAppSetting('extraction_model').catch(() => null),
+    getPromptOverride(`extraction:${mode}:system`).catch(() => null),
+    getPromptOverride(`extraction:${mode}:user`).catch(() => null),
   ])
   const EXTRACTION_PROVIDER: AiProvider =
     (dbExtractionProvider as AiProvider | null) ?? 'anthropic'
@@ -641,11 +644,11 @@ export async function POST(req: NextRequest) {
                 {
                   provider: EXTRACTION_PROVIDER,
                   model: EXTRACTION_MODEL,
-                  system: buildExtractionSystemPrompt(mode, resolvedOutputLanguage),
+                  system: buildExtractionSystemPrompt(mode, resolvedOutputLanguage, systemOverride),
                   messages: [
                     {
                       role: 'user',
-                      content: buildExtractionUserPrompt(finalTranscript, mode, resolvedOutputLanguage),
+                      content: buildExtractionUserPrompt(finalTranscript, mode, resolvedOutputLanguage, userOverride),
                     },
                   ],
                   maxTokens: EXTRACTION_MAX_TOKENS,

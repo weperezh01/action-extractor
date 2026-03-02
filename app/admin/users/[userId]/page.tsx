@@ -3,6 +3,111 @@
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 
+// ─── Credit detail types ──────────────────────────────────────────────────────
+
+interface CreditTransaction {
+  id: string
+  amount: number
+  reason: string
+  stripe_session_id: string | null
+  created_at: string
+}
+
+interface UserCreditDetail {
+  balance: number
+  daily_used: number
+  daily_limit: number
+  transactions: CreditTransaction[]
+}
+
+const CREDIT_REASON_LABELS: Record<string, string> = {
+  purchase: 'Compra Stripe',
+  manual_admin: 'Manual (admin)',
+  promo: 'Promoción',
+  refund: 'Reembolso',
+  compensation: 'Compensación',
+}
+
+// ─── Add credits inline form ──────────────────────────────────────────────────
+
+function AddCreditsInline({ userId, onSuccess }: { userId: string; onSuccess: () => void }) {
+  const [amount, setAmount] = useState('')
+  const [reason, setReason] = useState('manual_admin')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setNotice(null)
+    const numAmount = Number.parseInt(amount, 10)
+    if (!Number.isFinite(numAmount) || numAmount <= 0) {
+      setError('Ingresa una cantidad válida (> 0).')
+      return
+    }
+    setSaving(true)
+    try {
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/credits`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: numAmount, reason }),
+      })
+      const data = (await res.json().catch(() => null)) as { error?: string } | null
+      if (!res.ok) {
+        setError(typeof data?.error === 'string' ? data.error : 'Error al agregar créditos.')
+        return
+      }
+      setAmount('')
+      setNotice(`+${numAmount} créditos agregados correctamente.`)
+      onSuccess()
+    } catch {
+      setError('Error de conexión.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form onSubmit={(e) => void handleSubmit(e)} className="flex flex-wrap items-end gap-3">
+      <div>
+        <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">Cantidad</label>
+        <input
+          type="number"
+          min="1"
+          max="10000"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder="5"
+          className="h-9 w-24 rounded-lg border border-slate-300 px-3 text-sm bg-white text-slate-900 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
+        />
+      </div>
+      <div>
+        <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">Razón</label>
+        <select
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          className="h-9 rounded-lg border border-slate-300 px-2 text-sm bg-white text-slate-900 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
+        >
+          <option value="manual_admin">Manual (admin)</option>
+          <option value="promo">Promoción</option>
+          <option value="refund">Reembolso</option>
+          <option value="compensation">Compensación</option>
+        </select>
+      </div>
+      <button
+        type="submit"
+        disabled={saving}
+        className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:bg-slate-400 transition-colors"
+      >
+        {saving ? 'Guardando...' : '+ Agregar'}
+      </button>
+      {error && <p className="w-full text-xs text-red-600 dark:text-red-400">{error}</p>}
+      {notice && <p className="w-full text-xs text-emerald-600 dark:text-emerald-400">{notice}</p>}
+    </form>
+  )
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface AdminUserItem {
@@ -145,15 +250,35 @@ export default function UserDetailPage({ params }: { params: { userId: string } 
   const [payload, setPayload] = useState<UserMonthlyPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [creditDetail, setCreditDetail] = useState<UserCreditDetail | null>(null)
+  const [chatTokens, setChatTokens] = useState<{ limit: number; used: number; remaining: number; allowed: boolean } | null>(null)
+
+  const loadCreditDetail = async () => {
+    try {
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/credits`, { cache: 'no-store' })
+      const data = (await res.json().catch(() => null)) as (UserCreditDetail & { error?: string }) | null
+      if (res.ok && data && !data.error) setCreditDetail(data)
+    } catch { /* silent */ }
+  }
+
+  const loadChatTokens = async () => {
+    try {
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/chat-tokens`, { cache: 'no-store' })
+      const data = (await res.json().catch(() => null)) as { limit: number; used: number; remaining: number; allowed: boolean; error?: string } | null
+      if (res.ok && data && !data.error) setChatTokens(data)
+    } catch { /* silent */ }
+  }
 
   useEffect(() => {
     void (async () => {
       try {
-        const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/monthly`, {
-          cache: 'no-store',
-        })
-        const data = (await res.json().catch(() => null)) as (UserMonthlyPayload & { error?: string }) | null
-        if (!res.ok || !data) {
+        const [monthlyRes] = await Promise.all([
+          fetch(`/api/admin/users/${encodeURIComponent(userId)}/monthly`, { cache: 'no-store' }),
+          loadCreditDetail(),
+          loadChatTokens(),
+        ])
+        const data = (await monthlyRes.json().catch(() => null)) as (UserMonthlyPayload & { error?: string }) | null
+        if (!monthlyRes.ok || !data) {
           setError(typeof data?.error === 'string' ? data.error : 'Error al cargar el usuario.')
           return
         }
@@ -164,6 +289,7 @@ export default function UserDetailPage({ params }: { params: { userId: string } 
         setLoading(false)
       }
     })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId])
 
   if (loading) {
@@ -296,6 +422,109 @@ export default function UserDetailPage({ params }: { params: { userId: string } 
                 : '$0.0000'}
             </p>
           </div>
+        </div>
+
+        {/* ── Chat token KPI ── */}
+        {chatTokens && (
+          <div className="rounded-xl border border-violet-200 bg-white p-4 dark:border-violet-800/50 dark:bg-slate-900">
+            <p className="text-[10px] uppercase font-semibold text-slate-400 mb-2">Tokens Chat Hoy (UTC)</p>
+            <div className="flex items-end justify-between mb-2">
+              <p className={`text-2xl font-bold tabular-nums ${chatTokens.used >= chatTokens.limit ? 'text-rose-600 dark:text-rose-400' : 'text-violet-700 dark:text-violet-300'}`}>
+                {chatTokens.used.toLocaleString('es-ES')}
+              </p>
+              <p className="text-sm text-slate-400">/ {chatTokens.limit.toLocaleString('es-ES')}</p>
+            </div>
+            <div className="h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${chatTokens.used >= chatTokens.limit ? 'bg-rose-500' : 'bg-violet-500'}`}
+                style={{ width: `${Math.min(100, chatTokens.limit > 0 ? (chatTokens.used / chatTokens.limit) * 100 : 0)}%` }}
+              />
+            </div>
+            <p className="text-[10px] text-slate-400 mt-1.5">
+              Restantes: <span className="font-semibold text-slate-600 dark:text-slate-300">{chatTokens.remaining.toLocaleString('es-ES')}</span>
+              {!chatTokens.allowed && <span className="ml-2 text-rose-500 font-semibold">Límite alcanzado</span>}
+            </p>
+          </div>
+        )}
+
+        {/* ── Daily usage + credits ── */}
+        <div className="rounded-xl border border-indigo-200 bg-white p-5 dark:border-indigo-800/50 dark:bg-slate-900">
+          <h2 className="text-base font-semibold mb-4">Uso diario y créditos extra</h2>
+          {creditDetail ? (
+            <div className="space-y-5">
+              {/* Usage bar */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <p className="text-sm text-slate-600 dark:text-slate-400">Extracciones hoy (UTC)</p>
+                  <p className="text-sm font-semibold">
+                    <span className={creditDetail.daily_used >= creditDetail.daily_limit ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-slate-100'}>
+                      {creditDetail.daily_used}
+                    </span>
+                    <span className="text-slate-400"> / {creditDetail.daily_limit}</span>
+                  </p>
+                </div>
+                <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      creditDetail.daily_used >= creditDetail.daily_limit ? 'bg-rose-500' : 'bg-indigo-500'
+                    }`}
+                    style={{ width: `${Math.min(100, creditDetail.daily_limit > 0 ? (creditDetail.daily_used / creditDetail.daily_limit) * 100 : 0)}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Credit balance + add form */}
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-0.5">Créditos extra disponibles</p>
+                  <p className={`text-3xl font-bold ${creditDetail.balance > 0 ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-400'}`}>
+                    {creditDetail.balance}
+                  </p>
+                </div>
+                <AddCreditsInline userId={userId} onSuccess={() => void loadCreditDetail()} />
+              </div>
+
+              {/* Transactions */}
+              {creditDetail.transactions.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400 mb-2">
+                    Últimas transacciones de créditos
+                  </p>
+                  <div className="space-y-1.5">
+                    {creditDetail.transactions.map((tx) => (
+                      <div key={tx.id} className="flex items-center justify-between rounded-lg border border-slate-100 dark:border-slate-800 px-3 py-2 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className={`font-mono font-bold ${tx.amount > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                            {tx.amount > 0 ? `+${tx.amount}` : tx.amount}
+                          </span>
+                          <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                            tx.reason === 'purchase'
+                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+                              : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+                          }`}>
+                            {CREDIT_REASON_LABELS[tx.reason] ?? tx.reason}
+                          </span>
+                          {tx.stripe_session_id && (
+                            <span className="font-mono text-[10px] text-slate-400 truncate max-w-[120px]">{tx.stripe_session_id}</span>
+                          )}
+                        </div>
+                        <span className="text-slate-400">{formatDate(tx.created_at)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {creditDetail.transactions.length === 0 && (
+                <p className="text-sm text-slate-500 dark:text-slate-400">Sin transacciones de créditos aún.</p>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+              <div className="w-4 h-4 border-2 border-slate-300 border-t-indigo-500 rounded-full animate-spin" />
+              Cargando datos de créditos...
+            </div>
+          )}
         </div>
 
         {/* ── Monthly breakdown ── */}

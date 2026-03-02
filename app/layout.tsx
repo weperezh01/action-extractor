@@ -3,7 +3,7 @@ import './globals.css'
 
 export const metadata: Metadata = {
   title: 'Roi Action Extractor App',
-  description: 'Convierte videos largos en checklists accionables en segundos.',
+  description: 'Convert YouTube videos into actionable plans in seconds.',
   icons: {
     icon: '/roi-logo.png',
     shortcut: '/roi-logo.png',
@@ -30,7 +30,7 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="es" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript }} />
       </head>

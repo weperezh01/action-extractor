@@ -1,14 +1,11 @@
 import {
   consumeCommunityActionRateLimitByUser,
-  consumeExtractionRateLimitByUser,
   consumeGuestExtractionRateLimit,
   getCommunityActionRateLimitUsageByUser,
-  getExtractionRateLimitUsageByUser,
-  getUserPlanRateLimit,
+  consumeDailyExtraction,
+  getDailyExtractionSnapshot,
 } from '@/lib/db'
 
-const DEFAULT_EXTRACTIONS_PER_HOUR = 12
-const MAX_EXTRACTIONS_PER_HOUR = 500
 const DEFAULT_COMMUNITY_POSTS_PER_HOUR = 30
 const DEFAULT_COMMUNITY_COMMENTS_PER_HOUR = 120
 const DEFAULT_COMMUNITY_FOLLOWS_PER_HOUR = 120
@@ -25,6 +22,8 @@ export interface UserExtractionRateLimitResult {
   remaining: number
   resetAt: string
   retryAfterSeconds: number
+  extra_credits: number
+  used_credit: boolean
 }
 
 export interface UserCommunityActionRateLimitResult {
@@ -36,57 +35,46 @@ export interface UserCommunityActionRateLimitResult {
   retryAfterSeconds: number
 }
 
-export function resolveExtractionRateLimitPerHour() {
-  const rawLimit = process.env.ACTION_EXTRACTOR_EXTRACTIONS_PER_HOUR
-  if (!rawLimit) {
-    return DEFAULT_EXTRACTIONS_PER_HOUR
-  }
-
-  const parsed = Number.parseInt(rawLimit, 10)
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_EXTRACTIONS_PER_HOUR
-  }
-
-  return Math.min(parsed, MAX_EXTRACTIONS_PER_HOUR)
-}
-
 export async function consumeUserExtractionRateLimit(userId: string): Promise<UserExtractionRateLimitResult> {
-  const limit = await getUserPlanRateLimit(userId)
-  const usage = await consumeExtractionRateLimitByUser({ userId, limit })
+  const result = await consumeDailyExtraction(userId)
+  const { snapshot } = result
 
-  const resetAtMs = new Date(usage.reset_at).getTime()
+  const resetAtMs = new Date(snapshot.reset_at).getTime()
   const retryAfterSeconds = Number.isFinite(resetAtMs)
     ? Math.max(1, Math.ceil((resetAtMs - Date.now()) / 1000))
-    : 60
+    : 86400
 
   return {
-    allowed: usage.allowed,
-    limit: usage.limit,
-    used: usage.used,
-    remaining: usage.remaining,
-    resetAt: usage.reset_at,
+    allowed: result.allowed,
+    limit: snapshot.limit,
+    used: snapshot.used,
+    remaining: snapshot.remaining,
+    resetAt: snapshot.reset_at,
     retryAfterSeconds,
+    extra_credits: snapshot.extra_credits,
+    used_credit: result.used_credit,
   }
 }
 
 export async function getUserExtractionRateLimitSnapshot(
   userId: string
 ): Promise<UserExtractionRateLimitResult> {
-  const limit = await getUserPlanRateLimit(userId)
-  const usage = await getExtractionRateLimitUsageByUser({ userId, limit })
+  const snapshot = await getDailyExtractionSnapshot(userId)
 
-  const resetAtMs = new Date(usage.reset_at).getTime()
+  const resetAtMs = new Date(snapshot.reset_at).getTime()
   const retryAfterSeconds = Number.isFinite(resetAtMs)
     ? Math.max(1, Math.ceil((resetAtMs - Date.now()) / 1000))
-    : 60
+    : 86400
 
   return {
-    allowed: usage.allowed,
-    limit: usage.limit,
-    used: usage.used,
-    remaining: usage.remaining,
-    resetAt: usage.reset_at,
+    allowed: snapshot.used < snapshot.limit || snapshot.extra_credits > 0,
+    limit: snapshot.limit,
+    used: snapshot.used,
+    remaining: snapshot.remaining,
+    resetAt: snapshot.reset_at,
     retryAfterSeconds,
+    extra_credits: snapshot.extra_credits,
+    used_credit: false,
   }
 }
 
@@ -183,7 +171,7 @@ export async function getUserCommunityActionRateLimitSnapshot(
 }
 
 export function buildExtractionRateLimitMessage(limit: number) {
-  return `Has alcanzado el límite de ${limit} extracciones por hora. Intenta de nuevo en unos minutos.`
+  return `Has alcanzado el límite de ${limit} extracciones por día. Vuelve mañana o compra créditos extra.`
 }
 
 export function buildCommunityActionRateLimitMessage(action: CommunityActionKind, limit: number) {

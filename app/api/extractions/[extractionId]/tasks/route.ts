@@ -4,8 +4,11 @@ import {
   createExtractionTaskEventForUser,
   findExtractionAccessForUser,
   findExtractionTaskByIdForUser,
+  listExtractionTaskDependencies,
   listExtractionTasksWithEventsForUser,
   syncExtractionTasksForUser,
+  updateExtractionTaskPlanningForUser,
+  updateExtractionTaskScheduleForUser,
   updateExtractionTaskStateForUser,
   type ExtractionAccessRole,
   type ExtractionTaskEventType,
@@ -61,6 +64,10 @@ function toGuestClientTask(task: GuestTask, extractionId: string) {
     status: task.status,
     dueAt: null,
     completedAt: null,
+    scheduledStartAt: null,
+    scheduledEndAt: null,
+    durationDays: 1,
+    predecessorIds: [],
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     events: task.events.map((e) => ({
@@ -96,6 +103,10 @@ function toClientTask(task: Awaited<ReturnType<typeof listExtractionTasksWithEve
     status: task.status,
     dueAt: task.due_at,
     completedAt: task.completed_at,
+    scheduledStartAt: task.scheduled_start_at,
+    scheduledEndAt: task.scheduled_end_at,
+    durationDays: task.duration_days,
+    predecessorIds: [],  // populated by getTasksResponse after merging depsMap
     createdAt: task.created_at,
     updatedAt: task.updated_at,
     events: task.events.map((event) => ({
@@ -112,8 +123,14 @@ function toClientTask(task: Awaited<ReturnType<typeof listExtractionTasksWithEve
 }
 
 async function getTasksResponse(extractionId: string) {
-  const tasks = await listExtractionTasksWithEventsForUser({ extractionId })
-  return tasks.map(toClientTask)
+  const [tasks, depsMap] = await Promise.all([
+    listExtractionTasksWithEventsForUser({ extractionId }),
+    listExtractionTaskDependencies(extractionId),
+  ])
+  return tasks.map(task => ({
+    ...toClientTask(task),
+    predecessorIds: depsMap.get(task.id) ?? [],
+  }))
 }
 
 interface AuthTaskAccess {
@@ -350,6 +367,14 @@ export async function POST(
         return guestTasksResponse()
       }
 
+      if (action === 'update_schedule') {
+        return NextResponse.json({ error: 'La programación no está disponible en modo invitado.' }, { status: 400 })
+      }
+
+      if (action === 'update_planning') {
+        return NextResponse.json({ error: 'La planificación CPM no está disponible en modo invitado.' }, { status: 400 })
+      }
+
       return NextResponse.json({ error: 'Acción no soportada.' }, { status: 400 })
     }
 
@@ -549,6 +574,49 @@ export async function POST(
       return NextResponse.json({
         tasks: await getTasksResponse(extractionId),
       })
+    }
+
+    if (action === 'update_schedule') {
+      if (!access.access.canEdit) {
+        return NextResponse.json({ error: 'No tienes permisos para editar esta extracción.' }, { status: 403 })
+      }
+      const taskId = typeof (body as { taskId?: unknown }).taskId === 'string'
+        ? (body as { taskId: string }).taskId.trim() : ''
+      if (!taskId) return NextResponse.json({ error: 'taskId es requerido.' }, { status: 400 })
+
+      const rawStart = (body as { scheduledStartAt?: unknown }).scheduledStartAt
+      const rawEnd = (body as { scheduledEndAt?: unknown }).scheduledEndAt
+      const scheduledStartAt = rawStart === null || rawStart === '' ? null
+        : typeof rawStart === 'string' ? rawStart.trim() : null
+      const scheduledEndAt = rawEnd === null || rawEnd === '' ? null
+        : typeof rawEnd === 'string' ? rawEnd.trim() : null
+
+      await updateExtractionTaskScheduleForUser({ taskId, extractionId, scheduledStartAt, scheduledEndAt })
+      return NextResponse.json({ tasks: await getTasksResponse(extractionId) })
+    }
+
+    if (action === 'update_planning') {
+      if (!access.access.canEdit) {
+        return NextResponse.json({ error: 'No tienes permisos para editar esta extracción.' }, { status: 403 })
+      }
+      const taskId = typeof (body as { taskId?: unknown }).taskId === 'string'
+        ? (body as { taskId: string }).taskId.trim() : ''
+      if (!taskId) return NextResponse.json({ error: 'taskId es requerido.' }, { status: 400 })
+
+      const rawDuration = (body as { durationDays?: unknown }).durationDays
+      const durationDays = typeof rawDuration === 'number' ? Math.round(rawDuration)
+        : typeof rawDuration === 'string' ? (Number.parseInt(rawDuration, 10) || 1) : 1
+
+      const rawPreds = (body as { predecessorIds?: unknown }).predecessorIds
+      const predecessorIds = Array.isArray(rawPreds)
+        ? rawPreds.filter((p): p is string => typeof p === 'string' && p.trim().length > 0).map(p => p.trim())
+        : []
+
+      const result = await updateExtractionTaskPlanningForUser({ taskId, extractionId, durationDays, predecessorIds })
+      if (!result.ok) {
+        return NextResponse.json({ error: result.error ?? 'Error al guardar planificación.' }, { status: 400 })
+      }
+      return NextResponse.json({ tasks: await getTasksResponse(extractionId) })
     }
 
     return NextResponse.json({ error: 'Acción no soportada.' }, { status: 400 })

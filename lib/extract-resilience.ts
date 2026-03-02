@@ -42,7 +42,7 @@ export async function retryWithBackoff<T>(
   const maxAttempts = Math.max(1, options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS)
   const baseDelayMs = Math.max(1, options.baseDelayMs ?? DEFAULT_BASE_DELAY_MS)
 
-  let lastError: unknown = new Error('Retry error desconocido.')
+  let lastError: unknown = new Error('Unknown retry error.')
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
@@ -135,7 +135,9 @@ function isJsonFormatError(error: unknown) {
   return (
     message.includes('json inválido') ||
     message.includes('json invalido') ||
-    message.includes('normalizar la respuesta')
+    message.includes('normalizar la respuesta') ||
+    message.includes('invalid json') ||
+    message.includes('normalize response')
   )
 }
 
@@ -145,7 +147,7 @@ export function classifyTranscriptError(error: unknown): ExtractionUserFacingErr
       status: 429,
       retryable: true,
       message:
-        'YouTube está limitando temporalmente la transcripción por exceso de solicitudes. Espera 2-5 minutos y vuelve a intentar.',
+        'YouTube is temporarily rate-limiting transcript requests. Wait 2-5 minutes and try again.',
     }
   }
 
@@ -154,7 +156,7 @@ export function classifyTranscriptError(error: unknown): ExtractionUserFacingErr
       status: 404,
       retryable: false,
       message:
-        'El video no está disponible (privado, eliminado o restringido). Verifica el enlace y que sea público.',
+        'This video is not available (private, deleted, or region-restricted). Verify the link and make sure it is public.',
     }
   }
 
@@ -168,7 +170,7 @@ export function classifyTranscriptError(error: unknown): ExtractionUserFacingErr
       status: 422,
       retryable: false,
       message:
-        'Este video no tiene subtítulos disponibles. Prueba con un video que tenga subtítulos automáticos o manuales.',
+        'This video does not have captions available. Try a video with automatic or manual subtitles enabled.',
     }
   }
 
@@ -176,7 +178,7 @@ export function classifyTranscriptError(error: unknown): ExtractionUserFacingErr
     status: 502,
     retryable: true,
     message:
-      'No se pudo obtener la transcripción tras varios intentos automáticos. Sugerencias: verifica que el video sea público, tenga subtítulos y vuelve a intentar en unos minutos.',
+      'Could not fetch the transcript after multiple automatic retries. Make sure the video is public and has captions, then try again in a few minutes.',
   }
 }
 
@@ -186,7 +188,7 @@ export function classifyModelError(error: unknown): ExtractionUserFacingError {
       status: 502,
       retryable: false,
       message:
-        'La IA devolvió un formato inválido incluso después de corrección automática. Intenta nuevamente o prueba con otro video.',
+        'The AI returned an invalid format even after automatic correction. Try again or use a different video.',
     }
   }
 
@@ -196,7 +198,7 @@ export function classifyModelError(error: unknown): ExtractionUserFacingError {
       status: 429,
       retryable: true,
       message:
-        'El servicio de IA está temporalmente saturado o en límite de cuota. Espera 1-2 minutos y vuelve a intentar.',
+        'The AI service is temporarily over capacity or quota-limited. Wait 1-2 minutes and try again.',
     }
   }
 
@@ -205,7 +207,7 @@ export function classifyModelError(error: unknown): ExtractionUserFacingError {
       status: 503,
       retryable: false,
       message:
-        'El servicio de IA no está autorizado en este momento. Contacta al administrador de la plataforma.',
+        'The AI service is not authorized at this time. Contact the platform administrator.',
     }
   }
 
@@ -214,7 +216,7 @@ export function classifyModelError(error: unknown): ExtractionUserFacingError {
       status: 502,
       retryable: true,
       message:
-        'El servicio de IA tuvo una falla temporal. Reintentamos automáticamente, pero no se pudo completar. Intenta de nuevo en unos minutos.',
+        'The AI service had a temporary failure. We retried automatically but could not complete. Try again in a few minutes.',
     }
   }
 
@@ -223,7 +225,7 @@ export function classifyModelError(error: unknown): ExtractionUserFacingError {
       status: 503,
       retryable: true,
       message:
-        'No se pudo conectar con el servicio de IA. Revisa tu conexión y vuelve a intentar en unos minutos.',
+        'Could not connect to the AI service. Check your connection and try again in a few minutes.',
     }
   }
 
@@ -232,7 +234,7 @@ export function classifyModelError(error: unknown): ExtractionUserFacingError {
       status: 502,
       retryable: false,
       message:
-        'La solicitud a la IA no pudo procesarse con este contenido. Prueba con otro video o una URL diferente.',
+        'The AI could not process this content. Try a different video or URL.',
     }
   }
 
@@ -240,6 +242,6 @@ export function classifyModelError(error: unknown): ExtractionUserFacingError {
     status: 502,
     retryable: true,
     message:
-      'No se pudo generar la extracción con IA tras varios intentos automáticos. Intenta nuevamente y, si persiste, prueba con otro video.',
+      'Could not generate the extraction after multiple automatic retries. Try again, or use a different video if the problem persists.',
   }
 }

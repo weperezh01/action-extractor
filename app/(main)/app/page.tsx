@@ -82,6 +82,8 @@ import type {
 } from '@/app/home/lib/types'
 import type { UploadedFileState } from '@/app/home/components/ExtractionForm'
 import { detectSourceType } from '@/lib/source-detector'
+import { useLang } from '@/app/home/hooks/useLang'
+import { t } from '@/app/home/lib/i18n'
 
 function slowScrollToElement(element: HTMLElement, durationMs = 1400) {
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -185,18 +187,21 @@ function resolvePlaybookPhaseKey(playbookId: string | null | undefined) {
   return normalizedId || CURRENT_PLAYBOOK_PHASE_KEY
 }
 
-function resolvePlaybookDisplayTitle(item: {
-  videoTitle?: string | null
-  sourceLabel?: string | null
-  objective?: string | null
-  url?: string | null
-}) {
+function resolvePlaybookDisplayTitle(
+  item: {
+    videoTitle?: string | null
+    sourceLabel?: string | null
+    objective?: string | null
+    url?: string | null
+  },
+  untitledFallback = 'Untitled'
+) {
   return (
     item.videoTitle?.trim() ||
     item.sourceLabel?.trim() ||
     item.objective?.trim() ||
     item.url?.trim() ||
-    'Sin título'
+    untitledFallback
   )
 }
 
@@ -357,6 +362,7 @@ function normalizeSharedFolder(raw: unknown): FolderItem | null {
 function ActionExtractor() {
   const searchParams = useSearchParams()
   const resetTokenFromUrl = searchParams.get('token')
+  const { lang, toggle: toggleLang } = useLang()
 
   const [url, setUrl] = useState('')
   const [extractionMode, setExtractionMode] = useState<ExtractionMode>(DEFAULT_EXTRACTION_MODE)
@@ -410,6 +416,10 @@ function ActionExtractor() {
   const [reauthRequired, setReauthRequired] = useState(false)
   const [rateLimitUsed, setRateLimitUsed] = useState<number | null>(null)
   const [rateLimitTotal, setRateLimitTotal] = useState<number | null>(null)
+  const [extraCredits, setExtraCredits] = useState<number | null>(null)
+  const [rateLimitExceeded, setRateLimitExceeded] = useState(false)
+  const [chatTokenUsed, setChatTokenUsed] = useState<number | null>(null)
+  const [chatTokenLimit, setChatTokenLimit] = useState<number | null>(null)
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false)
   const [isBatchMode, setIsBatchMode] = useState(false)
   const [allTags, setAllTags] = useState<ExtractionTag[]>([])
@@ -438,7 +448,7 @@ function ActionExtractor() {
     if (!trimmedUrl) return null
     // If it starts with http but doesn't look like a valid URL structure, flag it
     if (/^https?:\/\//i.test(trimmedUrl) && !/^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(trimmedUrl)) {
-      return 'Ingresa una URL válida (ejemplo: https://youtube.com/watch?v=... o https://ejemplo.com).'
+      return t(lang, 'app.invalidUrl')
     }
     return null
   })()
@@ -646,7 +656,7 @@ function ActionExtractor() {
         const message =
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
-            : 'No se pudieron cargar los compartidos de carpeta.'
+            : t(lang, 'app.folderShareLoadError')
         setError(message)
         return
       }
@@ -655,7 +665,7 @@ function ActionExtractor() {
         : []
       setFolderShareMembers(members)
     } catch {
-      setError('Error de conexión al cargar compartidos de carpeta.')
+      setError(t(lang, 'app.folderShareLoadError'))
     } finally {
       setFolderShareMembersLoading(false)
     }
@@ -692,7 +702,7 @@ function ActionExtractor() {
         body: JSON.stringify({ email }),
       })
       if (res.status === 401) {
-        setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+        setError(t(lang, 'app.sessionExpired'))
         return
       }
       const data = (await res.json().catch(() => null)) as {
@@ -705,7 +715,7 @@ function ActionExtractor() {
         setError(
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
-            : 'No se pudo compartir la carpeta.'
+            : t(lang, 'app.folderShareError')
         )
         return
       }
@@ -715,16 +725,16 @@ function ActionExtractor() {
           : ''
       if (sharedWithEmail && sharedWithEmail !== email) {
         setError(
-          `Se detectó una diferencia en el correo compartido. Solicitado: ${email}. Registrado: ${sharedWithEmail}.`
+          `${t(lang, 'app.sharingEmailMismatch')} ${email}. ${t(lang, 'app.sharingEmailRegistered')} ${sharedWithEmail}.`
         )
         await loadFolderShareMembers(folderId)
         return
       }
       setFolderShareEmailDraft('')
       await loadFolderShareMembers(folderId)
-      setNotice(`Acceso de carpeta compartido con ${sharedWithEmail || email}.`)
+      setNotice(t(lang, 'app.infoUpdated'))
     } catch {
-      setError('Error de conexión al compartir carpeta.')
+      setError(t(lang, 'app.folderShareError'))
     } finally {
       setFolderShareMutationLoading(false)
     }
@@ -744,7 +754,7 @@ function ActionExtractor() {
     const confirmed =
       typeof window === 'undefined'
         ? false
-        : window.confirm('¿Revocar acceso de esta carpeta para este usuario?')
+        : window.confirm(t(lang, 'app.confirmRevokeFolder'))
     if (!confirmed) return
 
     setFolderShareMutationLoading(true)
@@ -755,7 +765,7 @@ function ActionExtractor() {
         { method: 'DELETE' }
       )
       if (res.status === 401) {
-        setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+        setError(t(lang, 'app.sessionExpired'))
         return
       }
       const data = (await res.json().catch(() => null)) as { error?: unknown } | null
@@ -763,14 +773,14 @@ function ActionExtractor() {
         setError(
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
-            : 'No se pudo revocar el acceso.'
+            : t(lang, 'app.folderRevokeError')
         )
         return
       }
       await loadFolderShareMembers(folderId)
-      setNotice('Acceso revocado correctamente.')
+      setNotice(t(lang, 'app.infoUpdated'))
     } catch {
-      setError('Error de conexión al revocar acceso de carpeta.')
+      setError(t(lang, 'app.folderRevokeError'))
     } finally {
       setFolderShareMutationLoading(false)
     }
@@ -842,7 +852,7 @@ function ActionExtractor() {
         setUploadError('Respuesta inesperada del servidor.')
       }
     } catch {
-      setUploadError('Error de conexión al subir el archivo.')
+      setUploadError(t(lang, 'app.uploadError'))
     } finally {
       setIsUploading(false)
     }
@@ -1349,65 +1359,72 @@ function ActionExtractor() {
   useEffect(() => {
     if (!user) return
 
+    const upgradeStatus = searchParams.get('upgrade')
+    if (upgradeStatus === 'success') {
+      const planName = searchParams.get('plan') ?? ''
+      const label = planName ? planName.charAt(0).toUpperCase() + planName.slice(1) : ''
+      setNotice(label ? `${t(lang, 'app.welcomePlan')} ${label}${t(lang, 'app.welcomePlanSuffix')}` : t(lang, 'app.subscriptionActivated'))
+    }
+
     const notionStatus = searchParams.get('notion')
     if (notionStatus === 'connected') {
-      setNotice('Notion conectado correctamente.')
+      setNotice(t(lang, 'app.notionConnected'))
       void loadNotionStatus()
     } else if (notionStatus === 'auth_required') {
-      setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+      setError(t(lang, 'app.sessionExpired'))
     } else if (notionStatus === 'connect_denied') {
-      setError('Conexión con Notion cancelada por el usuario.')
+      setError(t(lang, 'app.notionCanceled'))
     } else if (notionStatus === 'invalid_state') {
-      setError('No se pudo validar la sesión de conexión con Notion. Intenta nuevamente.')
+      setError(t(lang, 'app.notionStateError'))
     } else if (notionStatus === 'not_configured') {
-      setError('La integración con Notion no está configurada en el servidor.')
+      setError(t(lang, 'app.notionNotConfigured'))
     } else if (notionStatus === 'error') {
-      setError('No se pudo completar la conexión con Notion.')
+      setError(t(lang, 'app.notionError'))
     }
 
     const todoistStatus = searchParams.get('todoist')
     if (todoistStatus === 'connected') {
-      setNotice('Todoist conectado correctamente.')
+      setNotice(t(lang, 'app.todoistConnected'))
       void loadTodoistStatus()
     } else if (todoistStatus === 'auth_required') {
-      setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+      setError(t(lang, 'app.sessionExpired'))
     } else if (todoistStatus === 'connect_denied') {
-      setError('Conexión con Todoist cancelada por el usuario.')
+      setError(t(lang, 'app.todoistCanceled'))
     } else if (todoistStatus === 'invalid_state') {
-      setError('No se pudo validar la sesión de conexión con Todoist.')
+      setError(t(lang, 'app.todoistStateError'))
     } else if (todoistStatus === 'not_configured') {
-      setError('La integración con Todoist no está configurada en el servidor.')
+      setError(t(lang, 'app.todoistNotConfigured'))
     } else if (todoistStatus === 'error') {
-      setError('No se pudo completar la conexión con Todoist.')
+      setError(t(lang, 'app.todoistError'))
     }
 
     const googleStatus = searchParams.get('gdocs')
     if (googleStatus === 'connected') {
-      setNotice('Google Docs conectado correctamente.')
+      setNotice(t(lang, 'app.googleDocsConnected'))
       void loadGoogleDocsStatus()
     } else if (googleStatus === 'auth_required') {
-      setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+      setError(t(lang, 'app.sessionExpired'))
     } else if (googleStatus === 'connect_denied') {
-      setError('Conexión con Google Docs cancelada por el usuario.')
+      setError(t(lang, 'app.googleDocsCanceled'))
     } else if (googleStatus === 'invalid_state') {
-      setError('No se pudo validar la sesión de conexión con Google Docs.')
+      setError(t(lang, 'app.googleDocsStateError'))
     } else if (googleStatus === 'not_configured') {
-      setError('La integración con Google Docs no está configurada en el servidor.')
+      setError(t(lang, 'app.googleDocsNotConfigured'))
     } else if (googleStatus === 'error') {
-      setError('No se pudo completar la conexión con Google Docs.')
+      setError(t(lang, 'app.googleDocsError'))
     }
 
     const trelloStatus = searchParams.get('trello')
     if (trelloStatus === 'auth_required') {
-      setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+      setError(t(lang, 'app.sessionExpired'))
       return
     }
     if (trelloStatus === 'not_configured') {
-      setError('La integración con Trello no está configurada en el servidor.')
+      setError(t(lang, 'app.trelloNotConfigured'))
       return
     }
     if (trelloStatus === 'error') {
-      setError('No se pudo completar la conexión con Trello.')
+      setError(t(lang, 'app.trelloError'))
       return
     }
     if (trelloStatus !== 'token') return
@@ -1419,7 +1436,7 @@ function ActionExtractor() {
     const trelloToken = hashParams.get('token')?.trim() ?? ''
 
     if (!trelloState || !trelloToken) {
-      setError('No se pudo leer el token de Trello devuelto por OAuth.')
+      setError(t(lang, 'app.trelloTokenError'))
       return
     }
 
@@ -1440,7 +1457,7 @@ function ActionExtractor() {
 
         if (res.status === 401) {
           handleUnauthorized()
-          setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+          setError(t(lang, 'app.sessionExpired'))
           return
         }
 
@@ -1451,15 +1468,15 @@ function ActionExtractor() {
           const message =
             typeof data?.error === 'string' && data.error.trim()
               ? data.error
-              : 'No se pudo completar la conexión con Trello.'
+              : t(lang, 'app.trelloError')
           setError(message)
           return
         }
 
-        setNotice('Trello conectado correctamente.')
+        setNotice(t(lang, 'app.trelloConnected'))
         void loadTrelloStatus()
       } catch {
-        setError('Error de conexión al completar OAuth con Trello.')
+        setError(t(lang, 'app.trelloOAuthError'))
       } finally {
         setTrelloLoading(false)
         if (typeof window !== 'undefined') {
@@ -1498,7 +1515,7 @@ function ActionExtractor() {
 
   const handleExtract = async (options?: { url?: string; mode?: ExtractionMode }) => {
     if (!user) {
-      setError('Debes iniciar sesión para extraer contenido.')
+      setError(t(lang, 'app.mustSignIn'))
       return
     }
 
@@ -1560,7 +1577,7 @@ function ActionExtractor() {
     setPendingStackedScrollPlaybookId(null)
     setIsResultBookClosed(false)
     setShareCopied(false)
-    setStreamStatus(`Iniciando extracción (${getExtractionModeLabel(extractionModeToUse)})...`)
+    setStreamStatus(`${t(lang, 'app.extracting')} (${getExtractionModeLabel(extractionModeToUse)})...`)
     setStreamPreview('')
 
     let streamHadResult = false
@@ -1631,15 +1648,16 @@ function ActionExtractor() {
           setStackedResultIds([])
           setPendingStackedScrollPlaybookId(null)
           setError(null)
-          setStreamStatus(fromCache ? 'Resultado recuperado desde caché.' : 'Extracción completada.')
+          setStreamStatus(fromCache ? t(lang, 'app.resultFromCache') : t(lang, 'app.extractionComplete'))
           setNotice(
             fromCache
-              ? 'Resultado desde caché: esta extracción no consume límite por hora.'
-              : 'Extracción nueva: consumió 1 cupo del límite por hora.'
+              ? t(lang, 'app.fromCache')
+              : t(lang, 'app.newExtraction')
           )
           streamHadResult = true
           if (!fromCache) {
             setRateLimitUsed((prev) => prev !== null ? prev + 1 : null)
+            setRateLimitExceeded(false)
           }
           void loadHistory()
         }
@@ -1652,10 +1670,10 @@ function ActionExtractor() {
           if (typeof message === 'string' && message.trim()) {
             setError(message)
           } else {
-            setError('Error al procesar el contenido.')
+            setError(t(lang, 'app.connectionError'))
           }
         } else {
-          setError('Error al procesar el contenido.')
+          setError(t(lang, 'app.connectionError'))
         }
         streamHadError = true
       }
@@ -1674,12 +1692,12 @@ function ActionExtractor() {
       if (res.status === 401) {
         setResult(previousResult)
         handleUnauthorized()
-        setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+        setError(t(lang, 'app.sessionExpired'))
         return
       }
 
       if (!res.ok) {
-        let apiError = 'Error al procesar el contenido.'
+        let apiError = t(lang, 'app.connectionError')
         try {
           const data = (await res.json()) as { error?: unknown }
           if (typeof data.error === 'string' && data.error.trim()) {
@@ -1688,12 +1706,15 @@ function ActionExtractor() {
         } catch {
           // noop
         }
+        if (res.status === 429) {
+          setRateLimitExceeded(true)
+        }
         setError(apiError)
         return
       }
 
       if (!res.body) {
-        setError('No se pudo iniciar el stream de extracción.')
+        setError(t(lang, 'app.streamFailed'))
         return
       }
 
@@ -1723,10 +1744,10 @@ function ActionExtractor() {
       }
 
       if (!streamHadResult && !streamHadError) {
-        setError('La extracción finalizó sin resultado. Intenta de nuevo.')
+        setError(t(lang, 'app.streamNoResult'))
       }
     } catch {
-      setError('Error de conexión. Verifica tu internet e intenta de nuevo.')
+      setError(t(lang, 'app.connectionErrorRetry'))
     } finally {
       setIsProcessing(false)
       setStreamStatus(null)
@@ -1763,17 +1784,17 @@ function ActionExtractor() {
     })
 
     await navigator.clipboard.writeText(markdown)
-    setNotice('Contenido copiado como Markdown.')
+    setNotice(t(lang, 'app.markdownCopied'))
   }
 
   const handleCopyShareLink = async () => {
     if (resultAccessRole !== 'owner') {
-      setError('Solo el owner puede generar enlaces compartibles.')
+      setError(t(lang, 'app.onlyOwnerShare'))
       return
     }
     if (!result?.id || shareLoading) return
     if (!isShareVisibilityShareable(normalizeShareVisibility(result.shareVisibility))) {
-      setError('Este contenido no es compartible. Cámbialo a Público o Solo con enlace.')
+      setError(t(lang, 'app.notShareable'))
       return
     }
 
@@ -1788,7 +1809,7 @@ function ActionExtractor() {
 
       if (res.status === 401) {
         handleUnauthorized()
-        setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+        setError(t(lang, 'app.sessionExpired'))
         return
       }
 
@@ -1801,15 +1822,15 @@ function ActionExtractor() {
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
             : res.status === 409
-              ? 'Este contenido no es compartible. Cámbialo a Público o Solo con enlace.'
-            : 'No se pudo generar el enlace compartible.'
+              ? t(lang, 'app.notShareable')
+            : t(lang, 'app.shareLinkError')
         setError(message)
         return
       }
 
       const token = typeof data?.token === 'string' ? data.token : ''
       if (!token) {
-        setError('No se pudo generar el enlace compartible.')
+        setError(t(lang, 'app.shareLinkError'))
         return
       }
 
@@ -1818,7 +1839,7 @@ function ActionExtractor() {
       setShareCopied(true)
       window.setTimeout(() => setShareCopied(false), 2500)
     } catch {
-      setError('No se pudo copiar el enlace compartible. Intenta de nuevo.')
+      setError(t(lang, 'app.shareLinkCopyError'))
     } finally {
       setShareLoading(false)
     }
@@ -1828,7 +1849,7 @@ function ActionExtractor() {
     const extractionId = item.id?.trim()
     if (!extractionId || historyShareLoadingItemId) return
     if (!isShareVisibilityShareable(normalizeShareVisibility(item.shareVisibility))) {
-      setError('Este contenido no es compartible. Cámbialo a Público o Solo con enlace.')
+      setError(t(lang, 'app.notShareable'))
       return
     }
 
@@ -1843,7 +1864,7 @@ function ActionExtractor() {
 
       if (res.status === 401) {
         handleUnauthorized()
-        setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+        setError(t(lang, 'app.sessionExpired'))
         return
       }
 
@@ -1856,27 +1877,27 @@ function ActionExtractor() {
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
             : res.status === 409
-              ? 'Este contenido no es compartible. Cámbialo a Público o Solo con enlace.'
-            : 'No se pudo generar el enlace compartible.'
+              ? t(lang, 'app.notShareable')
+            : t(lang, 'app.shareLinkError')
         setError(message)
         return
       }
 
       const token = typeof data?.token === 'string' ? data.token : ''
       if (!token) {
-        setError('No se pudo generar el enlace compartible.')
+        setError(t(lang, 'app.shareLinkError'))
         return
       }
 
       const shareUrl = `${window.location.origin}/share/${token}`
       await navigator.clipboard.writeText(shareUrl)
       setHistoryShareCopiedItemId(extractionId)
-      setNotice('Enlace compartible copiado.')
+      setNotice(t(lang, 'app.shareLinkCopied'))
       window.setTimeout(() => {
         setHistoryShareCopiedItemId((current) => (current === extractionId ? null : current))
       }, 2500)
     } catch {
-      setError('No se pudo copiar el enlace compartible. Intenta de nuevo.')
+      setError(t(lang, 'app.shareLinkCopyError'))
     } finally {
       setHistoryShareLoadingItemId((current) => (current === extractionId ? null : current))
     }
@@ -1884,7 +1905,7 @@ function ActionExtractor() {
 
   const handleUpdateShareVisibility = async (nextVisibility: ShareVisibility) => {
     if (resultAccessRole !== 'owner') {
-      setError('Solo el owner puede cambiar la visibilidad.')
+      setError(t(lang, 'app.onlyOwnerVisibility'))
       return
     }
     const extractionId = result?.id?.trim()
@@ -1913,7 +1934,7 @@ function ActionExtractor() {
 
       if (res.status === 401) {
         handleUnauthorized()
-        setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+        setError(t(lang, 'app.sessionExpired'))
         setResult((previous) => {
           if (!previous || previous.id !== extractionId) return previous
           return {
@@ -1932,7 +1953,7 @@ function ActionExtractor() {
         const message =
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
-            : 'No se pudo actualizar la visibilidad del contenido.'
+            : t(lang, 'app.visibilityError')
         setError(message)
         setResult((previous) => {
           if (!previous || previous.id !== extractionId) return previous
@@ -1961,7 +1982,7 @@ function ActionExtractor() {
       setNotice(getShareVisibilityChangeNotice(persistedVisibility))
       void loadHistory()
     } catch {
-      setError('No se pudo actualizar la visibilidad. Intenta nuevamente.')
+      setError(t(lang, 'app.visibilityError'))
       setResult((previous) => {
         if (!previous || previous.id !== extractionId) return previous
         return {
@@ -1995,7 +2016,7 @@ function ActionExtractor() {
           objective?: string
           error?: string
         } | null
-        if (!res.ok) { setError(data?.error ?? 'No se pudo guardar.'); return false }
+        if (!res.ok) { setError(data?.error ?? t(lang, 'app.infoUpdated')); return false }
         setResult((prev) =>
           !prev || prev.id !== extractionId ? prev : {
             ...prev,
@@ -2005,11 +2026,11 @@ function ActionExtractor() {
             objective: data?.objective ?? meta.objective,
           }
         )
-        setNotice('Información actualizada correctamente.')
+        setNotice(t(lang, 'app.infoUpdated'))
         void loadHistory()
         return true
       } catch {
-        setError('Error de conexión al guardar.')
+        setError(t(lang, 'app.saveConnectionError'))
         return false
       }
     },
@@ -2033,7 +2054,7 @@ function ActionExtractor() {
           setError(
             typeof data?.error === 'string' && data.error.trim()
               ? data.error
-              : 'No se pudo asignar la carpeta.'
+              : t(lang, 'app.folderAssignError')
           )
           return
         }
@@ -2049,7 +2070,7 @@ function ActionExtractor() {
           prev && prev.id === extractionId ? { ...prev, folderId: persistedFolderId } : prev
         )
       } catch {
-        setError('Error de conexión al asignar carpeta.')
+        setError(t(lang, 'app.folderAssignError'))
       }
     },
     [handleUnauthorized, resultAccessRole, setError, setHistory, setResult]
@@ -2071,7 +2092,7 @@ function ActionExtractor() {
 
         if (res.status === 401) {
           handleUnauthorized()
-          setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+          setError(t(lang, 'app.sessionExpired'))
           return false
         }
 
@@ -2080,16 +2101,16 @@ function ActionExtractor() {
           setError(
             typeof data?.error === 'string' && data.error.trim()
               ? data.error
-              : 'No se pudo agregar el miembro.'
+              : t(lang, 'app.memberAddError')
           )
           return false
         }
 
         await loadCircleMembers(extractionId)
-        setNotice('Miembro agregado al círculo.')
+        setNotice(t(lang, 'app.memberAdded'))
         return true
       } catch {
-        setError('Error de conexión al agregar el miembro.')
+        setError(t(lang, 'app.memberAddError'))
         return false
       } finally {
         setCircleMemberMutationLoading(false)
@@ -2113,7 +2134,7 @@ function ActionExtractor() {
 
         if (res.status === 401) {
           handleUnauthorized()
-          setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+          setError(t(lang, 'app.sessionExpired'))
           return false
         }
 
@@ -2122,16 +2143,16 @@ function ActionExtractor() {
           setError(
             typeof data?.error === 'string' && data.error.trim()
               ? data.error
-              : 'No se pudo eliminar el miembro.'
+              : t(lang, 'app.memberRemoveError')
           )
           return false
         }
 
         await loadCircleMembers(extractionId)
-        setNotice('Miembro eliminado del círculo.')
+        setNotice(t(lang, 'app.memberRemoved'))
         return true
       } catch {
-        setError('Error de conexión al eliminar el miembro.')
+        setError(t(lang, 'app.memberRemoveError'))
         return false
       } finally {
         setCircleMemberMutationLoading(false)
@@ -2145,7 +2166,7 @@ function ActionExtractor() {
       if (resultAccessRole !== 'owner' && resultAccessRole !== 'editor') return false
       const extractionId = result?.id?.trim()
       if (!extractionId) {
-        setError('No se puede guardar: esta extracción no está en historial.')
+        setError(t(lang, 'app.saveNotInHistory'))
         return false
       }
 
@@ -2161,7 +2182,7 @@ function ActionExtractor() {
 
         if (res.status === 401) {
           handleUnauthorized()
-          setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+          setError(t(lang, 'app.sessionExpired'))
           return false
         }
 
@@ -2173,7 +2194,7 @@ function ActionExtractor() {
           const message =
             typeof data?.error === 'string' && data.error.trim()
               ? data.error
-              : 'No se pudo guardar la edición del contenido.'
+              : t(lang, 'app.saveContentError')
           setError(message)
           return false
         }
@@ -2194,11 +2215,11 @@ function ActionExtractor() {
             [phaseKey]: null,
           }
         })
-        setNotice('Contenido actualizado correctamente.')
+        setNotice(t(lang, 'app.infoUpdated'))
         void loadHistory()
         return true
       } catch {
-        setError('No se pudo guardar la edición del contenido.')
+        setError(t(lang, 'app.saveContentError'))
         return false
       }
     },
@@ -2333,7 +2354,7 @@ function ActionExtractor() {
       const filename = `action-extractor-${modeFilenamePartByMode[exportMode]}-${safeDate}.pdf`
       pdf.save(filename)
     } catch {
-      setError('No se pudo generar el PDF. Intenta de nuevo.')
+      setError(t(lang, 'app.pdfError'))
     } finally {
       setIsExportingPdf(false)
     }
@@ -2602,7 +2623,7 @@ function ActionExtractor() {
 
     const resolvedPlaybook = resolveDeskPlaybookByIdentifier(identifier, preferredSource)
     if (!resolvedPlaybook) {
-      setNotice(`No encontré un playbook con el identificador "${identifier}".`)
+      setNotice(`${t(lang, 'app.playbookNotFound')} "${identifier}".`)
       return
     }
 
@@ -2731,11 +2752,11 @@ function ActionExtractor() {
 
   const handleDeleteHistoryItem = useCallback(
     async (item: HistoryItem) => {
-      const title = item.videoTitle?.trim() || item.sourceLabel?.trim() || item.objective?.trim() || item.url || 'Sin fuente'
+      const title = item.videoTitle?.trim() || item.sourceLabel?.trim() || item.objective?.trim() || item.url || t(lang, 'app.noSource')
       const confirmed =
         typeof window === 'undefined'
           ? false
-          : window.confirm(`¿Eliminar esta extracción del historial?\n\n${title}`)
+          : window.confirm(`${t(lang, 'app.confirmDeleteExtraction')}\n\n${title}`)
       if (!confirmed) return
 
       setError(null)
@@ -2744,17 +2765,17 @@ function ActionExtractor() {
       const result = await removeHistoryItem(item.id)
       if (result.unauthorized) {
         handleUnauthorized()
-        setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+        setError(t(lang, 'app.sessionExpired'))
         return
       }
 
       if (!result.ok) {
-        setError(result.error ?? 'No se pudo eliminar la extracción del historial.')
+        setError(result.error ?? t(lang, 'app.deletionError'))
         return
       }
 
       detachCurrentResultFromHistory(item.id)
-      setNotice('Extracción eliminada del historial.')
+      setNotice(t(lang, 'app.extractionDeleted'))
     },
     [detachCurrentResultFromHistory, handleUnauthorized, removeHistoryItem]
   )
@@ -2765,7 +2786,7 @@ function ActionExtractor() {
     const confirmed =
       typeof window === 'undefined'
         ? false
-        : window.confirm('¿Seguro que quieres borrar todo tu historial? Esta acción no se puede deshacer.')
+        : window.confirm(t(lang, 'app.confirmClearHistory'))
     if (!confirmed) return
 
     setError(null)
@@ -2774,12 +2795,12 @@ function ActionExtractor() {
     const result = await clearAllHistory()
     if (result.unauthorized) {
       handleUnauthorized()
-      setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+      setError(t(lang, 'app.sessionExpired'))
       return
     }
 
     if (!result.ok) {
-      setError(result.error ?? 'No se pudo limpiar el historial.')
+      setError(result.error ?? t(lang, 'app.clearHistoryError'))
       return
     }
 
@@ -2804,7 +2825,7 @@ function ActionExtractor() {
       typeof result.deletedCount === 'number' && result.deletedCount > 0
         ? ` (${result.deletedCount})`
         : ''
-    setNotice(`Historial limpiado correctamente${deletedCount}.`)
+    setNotice(`${t(lang, 'app.historyCleared')}${deletedCount}.`)
   }, [clearAllHistory, handleUnauthorized, history.length])
 
   const filteredHistoryForActiveFolders = (() => {
@@ -3061,17 +3082,28 @@ function ActionExtractor() {
     setIsHistoryDrawerOpen(false)
   }
 
-  // Rate limit fetch — runs once after user logs in
+  // Rate limit + chat token quota fetch — runs once after user logs in
   useEffect(() => {
     if (!user) return
     let cancelled = false
     void (async () => {
       try {
-        const res = await fetch('/api/account/rate-limit', { cache: 'no-store' })
-        if (res.ok && !cancelled) {
-          const data = (await res.json()) as { used?: number; limit?: number }
-          if (typeof data.used === 'number') setRateLimitUsed(data.used)
-          if (typeof data.limit === 'number') setRateLimitTotal(data.limit)
+        const [rlRes, ctRes] = await Promise.all([
+          fetch('/api/account/rate-limit', { cache: 'no-store' }),
+          fetch('/api/account/chat-tokens', { cache: 'no-store' }),
+        ])
+        if (!cancelled) {
+          if (rlRes.ok) {
+            const data = (await rlRes.json()) as { used?: number; limit?: number; extra_credits?: number }
+            if (typeof data.used === 'number') setRateLimitUsed(data.used)
+            if (typeof data.limit === 'number') setRateLimitTotal(data.limit)
+            if (typeof data.extra_credits === 'number') setExtraCredits(data.extra_credits)
+          }
+          if (ctRes.ok) {
+            const data = (await ctRes.json()) as { used?: number; limit?: number }
+            if (typeof data.used === 'number') setChatTokenUsed(data.used)
+            if (typeof data.limit === 'number') setChatTokenLimit(data.limit)
+          }
         }
       } catch {
         // non-critical, ignore
@@ -3131,128 +3163,170 @@ function ActionExtractor() {
 
   return (
     <div className="min-h-screen bg-white text-zinc-900 dark:bg-black dark:text-zinc-100">
-      <nav className="sticky top-0 z-10 flex items-center justify-between border-b border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur md:px-6 md:py-4 dark:border-white/10 dark:bg-black/90">
-        {/* ── Logo + title ── */}
-        <div className="flex min-w-0 items-center gap-2 md:gap-3">
-          <div className="relative h-8 w-8 flex-shrink-0 overflow-hidden rounded-lg border border-zinc-200 bg-white md:h-9 md:w-9 dark:border-white/15 dark:bg-zinc-950">
-            <Image
-              src="/roi-logo.png"
-              alt="Roi Action Extractor App logo"
-              fill
-              sizes="36px"
-              className="object-cover"
-              priority
-            />
-          </div>
-          {/* Full name on md+, short name on sm, hidden on xs */}
-          <span className="hidden text-sm font-bold tracking-tight text-zinc-900 sm:inline md:text-xl dark:text-zinc-100">
-            <span className="md:hidden">ROI Extractor</span>
-            <span className="hidden md:inline">Roi Action Extractor App</span>
-          </span>
-        </div>
+      <nav className="sticky top-0 z-10 border-b border-zinc-200/80 bg-white/98 shadow-[0_1px_4px_0_rgb(0,0,0,0.06)] backdrop-blur-xl dark:border-white/[0.07] dark:bg-zinc-950/97 dark:shadow-[0_1px_4px_0_rgb(0,0,0,0.35)]">
+        <div className="flex h-14 items-center justify-between px-4 md:px-6">
 
-        {/* ── Right controls ── */}
-        <div className="flex items-center gap-1.5 md:gap-3">
+          {/* ── Left: Logo + divider + nav links ── */}
+          <div className="flex min-w-0 items-center">
 
-          {/* Privacy / Terms — desktop only */}
-          <div className="hidden items-center gap-3 text-xs font-medium text-zinc-500 md:flex dark:text-zinc-400">
-            <Link className="transition-colors hover:text-zinc-800 dark:hover:text-zinc-100" href="/privacy-policy">
-              Política de Privacidad
-            </Link>
-            <Link className="transition-colors hover:text-zinc-800 dark:hover:text-zinc-100" href="/terms-of-use">
-              Términos de Uso
-            </Link>
-          </div>
-
-          {/* Theme toggle — icon only on mobile, icon+label on sm+ */}
-          <button
-            onClick={toggleTheme}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-transparent px-2.5 text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 md:h-10 md:px-3 dark:border-white/15 dark:text-zinc-300 dark:hover:bg-white/5 dark:hover:text-zinc-100"
-            aria-label={theme === 'dark' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
-            title={theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}
-          >
-            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-            <span className="hidden text-sm font-medium sm:inline whitespace-nowrap">
-              {theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}
-            </span>
-          </button>
-
-          {user ? (
-            <>
-              {/* User email — desktop only */}
-              <span className="hidden max-w-[160px] truncate text-sm text-zinc-600 lg:inline dark:text-zinc-300">
-                {user.name ?? user.email}
+            {/* Logo + title */}
+            <div className="flex items-center gap-2.5 pr-4 md:pr-5">
+              <div className="relative h-8 w-8 flex-shrink-0 overflow-hidden rounded-xl ring-2 ring-violet-500/30 dark:ring-violet-400/25">
+                <Image
+                  src="/roi-logo.png"
+                  alt="ROI Action Extractor logo"
+                  fill
+                  sizes="32px"
+                  className="object-cover"
+                  priority
+                />
+              </div>
+              <span className="hidden font-bold tracking-tight text-zinc-900 sm:inline dark:text-zinc-100">
+                <span className="text-sm md:hidden">ROI Extractor</span>
+                <span className="hidden text-[15px] md:inline">ROI Action Extractor</span>
               </span>
+            </div>
 
-              {/* Rate limit badge — shows remaining extractions */}
-              {rateLimitTotal !== null && rateLimitUsed !== null && (
-                <span
-                  title={`${rateLimitTotal - rateLimitUsed} extracciones disponibles de ${rateLimitTotal} por hora`}
-                  className={`hidden items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold sm:flex ${
-                    rateLimitTotal - rateLimitUsed <= 2
-                      ? 'border-rose-200 bg-rose-50 text-rose-600 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300'
-                      : rateLimitTotal - rateLimitUsed <= 5
-                        ? 'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-300'
-                        : 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300'
-                  }`}
-                >
-                  {rateLimitTotal - rateLimitUsed} / {rateLimitTotal}
-                </span>
-              )}
+            {/* Vertical divider */}
+            <div className="hidden h-5 w-px shrink-0 bg-zinc-200 sm:block dark:bg-white/10" />
 
-              {/* Pricing */}
+            {/* Nav links */}
+            <div className="hidden items-center gap-0.5 pl-3 sm:flex md:pl-4">
               <Link
                 href="/pricing"
-                className="hidden sm:inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 bg-transparent px-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 md:h-10 md:px-3 dark:border-white/15 dark:text-zinc-200 dark:hover:bg-white/5"
-                title="Planes y precios"
+                className="rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-600 transition-all duration-150 hover:bg-violet-50 hover:text-violet-700 dark:text-zinc-400 dark:hover:bg-violet-950/50 dark:hover:text-violet-300"
+                title={t(lang, 'app.plansTitle')}
               >
-                Planes
+                {t(lang, 'app.plansLabel')}
               </Link>
-
-              {/* Mi ROI dashboard */}
               <Link
                 href="/dashboard"
-                className="hidden sm:inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 bg-transparent px-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 md:h-10 md:px-3 dark:border-white/15 dark:text-zinc-200 dark:hover:bg-white/5"
-                title="Mi dashboard de ROI"
+                className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-600 transition-all duration-150 hover:bg-violet-50 hover:text-violet-700 dark:text-zinc-400 dark:hover:bg-violet-950/50 dark:hover:text-violet-300"
+                title={t(lang, 'app.myRoiTitle')}
               >
-                <BarChart2 size={16} />
-                <span className="hidden sm:inline">Mi ROI</span>
+                <BarChart2 size={14} />
+                {t(lang, 'app.myRoiLabel')}
               </Link>
+            </div>
+          </div>
 
-              {/* Settings — icon only on mobile, icon+text on sm+ */}
-              <Link
-                href="/settings"
-                className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-transparent px-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 md:h-10 md:px-3 dark:border-white/15 dark:text-zinc-200 dark:hover:bg-white/5"
-                title="Configuración"
-              >
-                <Settings2 size={16} />
-                <span className="hidden sm:inline">Configuración</span>
-              </Link>
+          {/* ── Right: controls ── */}
+          <div className="flex items-center gap-1 md:gap-1.5">
+            {user ? (
+              <>
+                {/* Rate limit badge */}
+                {rateLimitTotal !== null && rateLimitUsed !== null && (
+                  <span
+                    title={`${rateLimitTotal - rateLimitUsed} ${t(lang, 'app.rateLimitTooltip')} ${rateLimitTotal} ${t(lang, 'app.rateLimitDay')}${extraCredits ? ` · +${extraCredits} ${t(lang, 'app.extraCreditsLabel')}` : ''}`}
+                    className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold sm:flex ${
+                      rateLimitTotal - rateLimitUsed <= 0 && !extraCredits
+                        ? 'bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300'
+                        : rateLimitTotal - rateLimitUsed <= 1
+                          ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300'
+                          : 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300'
+                    }`}
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${
+                        rateLimitTotal - rateLimitUsed <= 0 && !extraCredits
+                          ? 'bg-rose-500'
+                          : rateLimitTotal - rateLimitUsed <= 1
+                            ? 'bg-amber-500'
+                            : 'bg-emerald-500'
+                      }`}
+                    />
+                    Extr {t(lang, 'app.rateLimitDay')} {rateLimitTotal - rateLimitUsed} / {rateLimitTotal}
+                    {extraCredits ? ` +${extraCredits}` : ''}
+                  </span>
+                )}
 
-              {/* Keyboard shortcuts hint */}
-              <button
-                type="button"
-                onClick={() => setShowShortcutsHelp(true)}
-                title="Atajos de teclado (?)"
-                aria-label="Mostrar atajos de teclado"
-                className="hidden h-9 w-9 items-center justify-center rounded-lg border border-zinc-300 bg-transparent text-sm font-bold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 md:inline-flex md:h-10 md:w-10 dark:border-white/15 dark:text-zinc-300 dark:hover:bg-white/5 dark:hover:text-zinc-100"
-              >
-                ?
-              </button>
+                {/* Chat token progress bar */}
+                {chatTokenLimit !== null && chatTokenUsed !== null && (() => {
+                  const remaining = chatTokenLimit - chatTokenUsed
+                  const pct = chatTokenLimit > 0 ? Math.min(1, chatTokenUsed / chatTokenLimit) : 0
+                  const isExhausted = remaining <= 0
+                  const isWarning = !isExhausted && pct >= 0.8
+                  const fmt = (n: number) => n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
+                  const barColor = isExhausted ? 'bg-rose-500' : isWarning ? 'bg-amber-500' : 'bg-violet-500'
+                  const textColor = isExhausted ? 'text-rose-600 dark:text-rose-400' : isWarning ? 'text-amber-600 dark:text-amber-400' : 'text-violet-600 dark:text-violet-400'
+                  return (
+                    <div
+                      title={`${fmt(Math.max(0, remaining))} tokens de chat restantes hoy · límite: ${fmt(chatTokenLimit)}`}
+                      className="hidden sm:flex items-center gap-1.5"
+                    >
+                      <span className={`text-[11px] font-semibold ${textColor}`}>Chat</span>
+                      <div className="w-14 h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                        <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${pct * 100}%` }} />
+                      </div>
+                      <span className={`text-[11px] font-semibold tabular-nums ${textColor}`}>
+                        {fmt(chatTokenUsed)}/{fmt(chatTokenLimit)}
+                      </span>
+                    </div>
+                  )
+                })()}
 
-              {/* Logout — icon only on mobile, icon+text on sm+ */}
-              <button
-                onClick={handleLogout}
-                className="inline-flex h-9 items-center gap-2 rounded-lg bg-violet-600 px-2.5 text-sm font-medium text-white transition-colors duration-200 hover:bg-violet-700 md:h-10 md:px-4 dark:shadow-[0_24px_52px_-22px_rgba(139,92,246,0.96)]"
-                title="Salir"
-              >
-                <LogOut size={16} />
-                <span className="hidden sm:inline">Salir</span>
-              </button>
-            </>
-          ) : (
-            <span className="text-xs text-zinc-500 sm:text-sm dark:text-zinc-400">Acceso requerido</span>
-          )}
+                {/* Theme toggle — icon only */}
+                <button
+                  onClick={toggleTheme}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 transition-all duration-150 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/[0.07] dark:hover:text-zinc-200"
+                  aria-label={theme === 'dark' ? t(lang, 'app.themeLight') : t(lang, 'app.themeDark')}
+                  title={theme === 'dark' ? t(lang, 'app.modeLight') : t(lang, 'app.modeDark')}
+                >
+                  {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+                </button>
+
+                {/* Settings — icon only */}
+                <Link
+                  href="/settings"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 transition-all duration-150 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/[0.07] dark:hover:text-zinc-200"
+                  title={t(lang, 'app.settings')}
+                >
+                  <Settings2 size={16} />
+                </Link>
+
+                {/* Keyboard shortcuts — icon only, md+ */}
+                <button
+                  type="button"
+                  onClick={() => setShowShortcutsHelp(true)}
+                  title={t(lang, 'app.shortcuts')}
+                  aria-label={t(lang, 'app.shortcutsAria')}
+                  className="hidden h-9 w-9 items-center justify-center rounded-lg text-sm font-bold text-zinc-500 transition-all duration-150 hover:bg-zinc-100 hover:text-zinc-800 md:inline-flex dark:text-zinc-400 dark:hover:bg-white/[0.07] dark:hover:text-zinc-200"
+                >
+                  ?
+                </button>
+
+                {/* Divider */}
+                <div className="mx-1 hidden h-5 w-px shrink-0 bg-zinc-200 sm:block dark:bg-white/10" />
+
+                {/* User name/email */}
+                <span className="hidden max-w-[140px] truncate text-sm text-zinc-500 lg:inline dark:text-zinc-400">
+                  {user.name ?? user.email}
+                </span>
+
+                {/* Logout */}
+                <button
+                  onClick={handleLogout}
+                  className="ml-0.5 inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-violet-600 to-violet-700 px-3 py-2 text-sm font-semibold text-white shadow-md shadow-violet-500/20 transition-all duration-150 hover:from-violet-500 hover:to-violet-600 hover:shadow-lg hover:shadow-violet-500/25 md:px-4 dark:shadow-violet-900/30 dark:hover:shadow-violet-800/40"
+                  title={t(lang, 'app.logout')}
+                >
+                  <LogOut size={14} />
+                  <span className="hidden sm:inline">{t(lang, 'app.logout')}</span>
+                </button>
+
+                {/* Language toggle */}
+                <button
+                  type="button"
+                  onClick={toggleLang}
+                  className="inline-flex h-9 items-center justify-center rounded-lg px-2.5 text-xs font-bold text-zinc-500 transition-all duration-150 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/[0.07] dark:hover:text-zinc-200"
+                  title={lang === 'en' ? 'Cambiar a Español' : 'Switch to English'}
+                >
+                  {lang === 'en' ? 'ES' : 'EN'}
+                </button>
+              </>
+            ) : (
+              <span className="text-xs text-zinc-500 sm:text-sm dark:text-zinc-400">{t(lang, 'app.accessRequired')}</span>
+            )}
+          </div>
         </div>
       </nav>
 
@@ -3260,7 +3334,7 @@ function ActionExtractor() {
         {sessionLoading ? (
           <div className="text-center py-16">
             <div className="w-8 h-8 border-2 border-slate-300 border-t-indigo-600 rounded-full animate-spin mx-auto mb-4" />
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">Cargando sesión...</p>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">{t(lang, 'app.loadingSession')}</p>
           </div>
         ) : !user && !reauthRequired ? (
           <div className="flex min-h-[60vh] flex-col items-center justify-center">
@@ -3347,11 +3421,11 @@ function ActionExtractor() {
                 onPointerUp={handleCommunityDrawerHandlePointerUp}
                 onPointerCancel={handleCommunityDrawerHandlePointerCancel}
                 className="pointer-events-auto absolute left-full top-1/2 z-10 -translate-y-1/2 rounded-r-2xl border border-l-0 border-slate-300 bg-white px-2 py-3 shadow-lg shadow-slate-900/15 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:hover:bg-slate-800"
-                aria-label={isCommunityDrawerOpen ? 'Ocultar comunidad' : 'Mostrar comunidad'}
+                aria-label={isCommunityDrawerOpen ? t(lang, 'app.hideCommunity') : t(lang, 'app.showCommunity')}
                 aria-expanded={isCommunityDrawerOpen}
                 aria-controls="community-drawer-panel"
               >
-                <span className="sr-only">Panel de comunidad</span>
+                <span className="sr-only">{t(lang, 'app.communityPanel')}</span>
                 <span className="flex h-2.5 w-4 items-center justify-between" aria-hidden="true">
                   <span className="h-1.5 w-1.5 rounded-full bg-slate-500 dark:bg-slate-300" />
                   <span className="h-1.5 w-1.5 rounded-full bg-slate-500 dark:bg-slate-300" />
@@ -3361,7 +3435,7 @@ function ActionExtractor() {
                   aria-hidden="true"
                   className="mt-1 block text-[10px] font-extrabold uppercase tracking-[0.2em] text-slate-700 [writing-mode:vertical-rl] dark:text-slate-200"
                 >
-                  Comunidad
+                  {t(lang, 'app.communityLabel')}
                 </span>
               </button>
             </div>
@@ -3369,7 +3443,7 @@ function ActionExtractor() {
             {isCommunityDrawerOpen && (
               <button
                 type="button"
-                aria-label="Cerrar panel de comunidad"
+                aria-label={t(lang, 'app.closeCommunity')}
                 onClick={closeCommunityDrawer}
                 className="fixed inset-0 z-[34] bg-slate-950/20 backdrop-blur-[1px]"
               />
@@ -3453,11 +3527,11 @@ function ActionExtractor() {
                   type="button"
                   onClick={toggleHistoryDrawer}
                   className="pointer-events-auto absolute right-full top-1/2 z-10 -translate-y-1/2 rounded-l-2xl border border-r-0 border-slate-300 bg-white px-2 py-3 shadow-lg shadow-slate-900/15 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:hover:bg-slate-800"
-                  aria-label={isHistoryDrawerOpen ? 'Ocultar historial' : 'Mostrar historial'}
+                  aria-label={isHistoryDrawerOpen ? t(lang, 'app.hideHistory') : t(lang, 'app.showHistory')}
                   aria-expanded={isHistoryDrawerOpen}
                   aria-controls="history-drawer-panel"
                 >
-                  <span className="sr-only">Panel de historial</span>
+                  <span className="sr-only">{t(lang, 'app.historyPanel')}</span>
                   <span className="flex h-2.5 w-4 items-center justify-between" aria-hidden="true">
                     <span className="h-1.5 w-1.5 rounded-full bg-slate-500 dark:bg-slate-300" />
                     <span className="h-1.5 w-1.5 rounded-full bg-slate-500 dark:bg-slate-300" />
@@ -3467,7 +3541,7 @@ function ActionExtractor() {
                     aria-hidden="true"
                     className="mt-1 block text-[10px] font-extrabold uppercase tracking-[0.2em] text-slate-700 [writing-mode:vertical-rl] dark:text-slate-200"
                   >
-                    Historial
+                    {t(lang, 'app.historyLabel')}
                   </span>
                 </button>
               </div>
@@ -3476,7 +3550,7 @@ function ActionExtractor() {
             {isHistoryDrawerOpen && historyView === 'list' && (
               <button
                 type="button"
-                aria-label="Cerrar panel de historial"
+                aria-label={t(lang, 'app.closeHistory')}
                 onClick={closeHistoryDrawer}
                 className="fixed inset-0 z-[33] bg-slate-950/20 backdrop-blur-[1px] min-[1728px]:hidden"
               />
@@ -3496,7 +3570,7 @@ function ActionExtractor() {
                   <div className="mb-4 flex items-center justify-center gap-3">
                     <div className="inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-bold uppercase tracking-wider text-indigo-700">
                       <Brain size={12} />
-                      Historial Personal Activo
+                      {t(lang, 'app.activeHistory')}
                     </div>
                     <button
                       type="button"
@@ -3506,10 +3580,10 @@ function ActionExtractor() {
                           ? 'border-violet-200 bg-violet-100 text-violet-700 dark:border-violet-800 dark:bg-violet-900/30 dark:text-violet-300'
                           : 'border-slate-200 bg-white text-slate-500 hover:border-violet-200 hover:bg-violet-50 hover:text-violet-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
                       }`}
-                      title="Extraer múltiples URLs a la vez"
+                      title={t(lang, 'app.batchMultipleUrls')}
                     >
                       <Layers size={11} />
-                      {isBatchMode ? 'Modo Lote' : 'Lote'}
+                      {isBatchMode ? t(lang, 'app.batchMode') : t(lang, 'app.batchLabel')}
                     </button>
                   </div>
 
@@ -3554,7 +3628,7 @@ function ActionExtractor() {
                     setUrl('')
                     setUploadedFile(null)
                     setError(null)
-                      setNotice('Extracción vacía creada. Usa "Editar estructura" para agregar contenido.')
+                      setNotice(t(lang, 'app.emptyCreated'))
                       setShouldScrollToResult(true)
                       void loadHistory()
                     }}
@@ -3608,9 +3682,25 @@ function ActionExtractor() {
                 )}
 
                 {error && (
-                  <div className="mx-auto mt-1 mb-8 w-full max-w-3xl rounded-xl border border-red-200 bg-red-50 p-4 flex items-start gap-3 dark:border-red-800 dark:bg-red-900/20">
+                  <div className="mx-auto mt-1 mb-4 w-full max-w-3xl rounded-xl border border-red-200 bg-red-50 p-4 flex items-start gap-3 dark:border-red-800 dark:bg-red-900/20">
                     <AlertCircle size={20} className="text-red-500 flex-shrink-0 mt-0.5 dark:text-red-400" />
                     <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
+                  </div>
+                )}
+
+                {/* Rate limit exceeded — CTA to buy credits */}
+                {rateLimitExceeded && (
+                  <div className="mx-auto mb-8 w-full max-w-3xl rounded-xl border border-amber-200 bg-amber-50 p-4 flex flex-wrap items-center justify-between gap-3 dark:border-amber-800 dark:bg-amber-900/20">
+                    <p className="text-sm text-amber-700 dark:text-amber-300">
+                      {t(lang, 'app.rateLimitExceeded')}
+                      {extraCredits ? ` ${t(lang, 'app.creditsRemaining')} ${extraCredits} ${t(lang, 'app.creditsSuffix')}` : ` ${t(lang, 'app.buyCreditsPrompt')}`}
+                    </p>
+                    <Link
+                      href="/pricing#credits"
+                      className="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+                    >
+                      {t(lang, 'app.buyCredits')}
+                    </Link>
                   </div>
                 )}
 
@@ -3624,7 +3714,7 @@ function ActionExtractor() {
                       <div className="flex items-center gap-3 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 dark:border-indigo-800 dark:bg-indigo-900/20">
                         <div className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600 dark:border-indigo-700 dark:border-t-indigo-300" />
                         <p className="text-sm font-medium text-indigo-700 dark:text-indigo-300">
-                          {streamStatus ?? 'Procesando con IA...'}
+                          {streamStatus ?? t(lang, 'app.processingAI')}
                         </p>
                       </div>
                       {/* Preview progresivo */}
@@ -3694,7 +3784,7 @@ function ActionExtractor() {
                 <button
                   type="button"
                   onClick={() => setHistoryView('list')}
-                  title="Vista en pestañas"
+                  title={t(lang, 'app.tabsView')}
                   className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
                     historyView === 'list'
                       ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
@@ -3702,12 +3792,12 @@ function ActionExtractor() {
                   }`}
                 >
                   <LayoutList size={13} />
-                  Pestañas
+                  {t(lang, 'app.tabsLabel')}
                 </button>
                 <button
                   type="button"
                   onClick={() => setHistoryView('feed')}
-                  title="Vista en hojas"
+                  title={t(lang, 'app.sheetsView')}
                   className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
                     historyView === 'feed'
                       ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
@@ -3715,7 +3805,7 @@ function ActionExtractor() {
                   }`}
                 >
                   <Newspaper size={13} />
-                  Hojas
+                  {t(lang, 'app.sheetsLabel')}
                 </button>
               </div>
             )}
@@ -3735,7 +3825,7 @@ function ActionExtractor() {
                       if (globalPlaybookSearchHits.length === 0) return
                       openGlobalPlaybookHit(globalPlaybookSearchHits[0])
                     }}
-                    placeholder="Buscador global: tus playbooks + compartidos contigo"
+                    placeholder={t(lang, 'app.globalSearch')}
                     className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 outline-none transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500"
                     aria-label="Buscar playbooks globalmente"
                   />
@@ -3745,20 +3835,20 @@ function ActionExtractor() {
                       onClick={() => setGlobalPlaybookQuery('')}
                       className="inline-flex h-9 shrink-0 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
                     >
-                      Limpiar
+                      {t(lang, 'app.clearSearch')}
                     </button>
                   )}
                 </div>
 
                 <p className="mt-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                  Alcance: {history.length} propios · {sharedWithMe.length} compartidos
+                  {t(lang, 'app.scopeLabel')} {history.length} {t(lang, 'app.scopeOwned')} · {sharedWithMe.length} {t(lang, 'app.scopeShared')}
                 </p>
 
                 {globalPlaybookQuery.trim().length > 0 && (
                   <div className="mt-2.5 max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-800/40">
                     {globalPlaybookSearchHits.length === 0 ? (
                       <p className="px-3 py-2.5 text-sm text-slate-500 dark:text-slate-400">
-                        No hay playbooks que coincidan con tu búsqueda global.
+                        {t(lang, 'app.globalNoResults')}
                       </p>
                     ) : (
                       <ul className="divide-y divide-slate-200 dark:divide-slate-700">
@@ -3774,7 +3864,7 @@ function ActionExtractor() {
                                   {hit.title}
                                 </p>
                                 <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                                  {hit.subtitle || 'Sin URL'}
+                                  {hit.subtitle || t(lang, 'app.noUrl')}
                                 </p>
                                 <p className="mt-0.5 truncate text-[11px] text-slate-500 dark:text-slate-400">
                                   {hit.helper}
@@ -3787,7 +3877,7 @@ function ActionExtractor() {
                                     : 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-900/25 dark:text-sky-300'
                                 }`}
                               >
-                                {hit.source === 'mine' ? 'Propio' : 'Compartido'}
+                                {hit.source === 'mine' ? t(lang, 'app.ownLabel') : t(lang, 'app.sharedLabel')}
                               </span>
                             </button>
                           </li>
@@ -3978,11 +4068,11 @@ function ActionExtractor() {
                               if (item.source === 'mine') {
                                 return handleCopyShareLinkFromHistory(item.historyItem)
                               }
-                              setNotice('Abre este playbook como principal para generar enlace compartible.')
+                              setNotice(t(lang, 'app.openAsMainForShare'))
                             }}
                             onCopyMarkdown={() => handleCopyMarkdown(stackedResult)}
                             onShareVisibilityChange={() => {
-                              setNotice('Abre este playbook como principal para cambiar su visibilidad.')
+                              setNotice(t(lang, 'app.openAsMainForVisibility'))
                             }}
                             onSavePhases={async () => false}
                             onSaveMeta={async () => false}
@@ -4054,7 +4144,7 @@ function ActionExtractor() {
                     <div className="flex items-center gap-2">
                       <History size={16} className="text-slate-400 dark:text-slate-500" />
                       <span className="text-sm font-semibold text-slate-600 dark:text-slate-300">
-                        {history.length} extracción{history.length !== 1 ? 'es' : ''}
+                        {history.length} {history.length !== 1 ? t(lang, 'app.extractionCountPlural') : t(lang, 'app.extractionCount')}
                       </span>
                     </div>
                     <button
@@ -4062,7 +4152,7 @@ function ActionExtractor() {
                       onClick={() => void loadHistory()}
                       className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
                     >
-                      Actualizar
+                      {t(lang, 'app.refresh')}
                     </button>
                   </div>
                   <div className="divide-y divide-slate-100 dark:divide-slate-800/60">

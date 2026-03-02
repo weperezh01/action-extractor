@@ -126,8 +126,10 @@ REGLAS GLOBALES:
 
 export function buildExtractionSystemPrompt(
   mode: ExtractionMode,
-  outputLanguage: ResolvedExtractionOutputLanguage
+  outputLanguage: ResolvedExtractionOutputLanguage,
+  override?: string | null
 ) {
+  if (override) return override
   switch (mode) {
     case 'executive_summary':
       return buildExecutiveSummarySystemPrompt(outputLanguage)
@@ -349,8 +351,14 @@ ${transcript}`
 export function buildExtractionUserPrompt(
   transcript: string,
   mode: ExtractionMode,
-  outputLanguage: ResolvedExtractionOutputLanguage
+  outputLanguage: ResolvedExtractionOutputLanguage,
+  override?: string | null
 ) {
+  if (override) {
+    const languageLabel = outputLanguage === 'en' ? 'English' : 'Español'
+    const header = `MODO SOLICITADO: ${getExtractionModeLabel(mode)}\nIDIOMA DE SALIDA: ${languageLabel}\n\n`
+    return header + override.replace('{{transcript}}', transcript)
+  }
   switch (mode) {
     case 'executive_summary':
       return buildExecutiveSummaryUserPrompt(transcript, outputLanguage)
@@ -365,6 +373,17 @@ export function buildExtractionUserPrompt(
       return buildActionPlanUserPrompt(transcript, mode, outputLanguage)
   }
 }
+
+export function getDefaultExtractionSystemPrompt(mode: ExtractionMode): string {
+  return buildExtractionSystemPrompt(mode, 'es')
+}
+
+export function getDefaultExtractionUserPrompt(mode: ExtractionMode): string {
+  return buildExtractionUserPrompt('{{transcript}}', mode, 'es')
+}
+
+export const CHAT_SYSTEM_PROMPT_DEFAULT =
+  'Eres el asistente de ROI Action Extractor. Responde en español, de forma clara y accionable. Usa exclusivamente el contexto proporcionado del usuario. Si falta información, dilo explícitamente y pide la extracción o dato necesario. No inventes hechos.'
 
 export function extractVideoId(url: string): string | null {
   const patterns = [

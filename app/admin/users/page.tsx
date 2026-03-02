@@ -335,10 +335,28 @@ export default function AdminUsersPage() {
           </div>
           <div className="flex items-center gap-2">
             <Link
+              href="/admin/credits"
+              className="px-3 py-2 text-sm rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-950/60"
+            >
+              Créditos
+            </Link>
+            <Link
+              href="/admin/plans"
+              className="px-3 py-2 text-sm rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300 dark:hover:bg-indigo-950/60"
+            >
+              Planes
+            </Link>
+            <Link
+              href="/admin/prompts"
+              className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
+            >
+              Prompts
+            </Link>
+            <Link
               href="/admin"
               className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
             >
-              Ver métricas
+              Métricas
             </Link>
             <Link
               href="/"

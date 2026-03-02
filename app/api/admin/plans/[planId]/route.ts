@@ -24,6 +24,7 @@ export async function PATCH(
   if (typeof body.priceMonthlyUsd === 'number') input.priceMonthlyUsd = body.priceMonthlyUsd
   if ('stripePriceId' in body) input.stripePriceId = body.stripePriceId as string | null
   if (typeof body.extractionsPerHour === 'number') input.extractionsPerHour = body.extractionsPerHour
+  if (typeof body.chatTokensPerDay === 'number') input.chatTokensPerDay = body.chatTokensPerDay
   if (typeof body.featuresJson === 'string') {
     try { JSON.parse(body.featuresJson) } catch {
       return NextResponse.json({ error: 'featuresJson no es JSON válido.' }, { status: 400 })
@@ -50,9 +51,9 @@ export async function DELETE(
   const { planId } = params
 
   // Protect seed plans from deletion
-  if (['plan_free', 'plan_pro', 'plan_business'].includes(planId)) {
+  if (['plan_free', 'plan_starter', 'plan_pro', 'plan_business'].includes(planId)) {
     return NextResponse.json(
-      { error: 'Los planes predeterminados (Free, Pro, Business) no se pueden eliminar.' },
+      { error: 'Los planes predeterminados (Free, Starter, Pro, Business) no se pueden eliminar.' },
       { status: 400 }
     )
   }

@@ -112,6 +112,10 @@ export interface InteractiveTask {
   status: InteractiveTaskStatus
   dueAt: string | null
   completedAt: string | null
+  scheduledStartAt: string | null
+  scheduledEndAt: string | null
+  durationDays: number
+  predecessorIds: string[]
   createdAt: string
   updatedAt: string
   events: InteractiveTaskEvent[]

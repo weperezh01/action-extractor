@@ -3,6 +3,9 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Building2, Loader2, Plus, X } from 'lucide-react'
+import { useLang } from '@/app/home/hooks/useLang'
+import { t } from '@/app/home/lib/i18n'
 
 interface AccountUser {
   id: string
@@ -112,6 +115,7 @@ function AiDailyBarChart({ data }: { data: AiDailyStat[] }) {
 
 export default function SettingsPageClient() {
   const router = useRouter()
+  const { lang } = useLang()
 
   const [loading, setLoading] = useState(true)
   const [refreshingRateLimit, setRefreshingRateLimit] = useState(false)
@@ -145,6 +149,24 @@ export default function SettingsPageClient() {
   } | null>(null)
   const [savingNotif, setSavingNotif] = useState(false)
 
+  // Workspaces
+  interface WorkspaceItem {
+    id: string
+    name: string
+    slug: string
+    avatar_color: string
+    description: string | null
+    role: string
+    member_count: number
+  }
+  const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([])
+  const [wsLoading, setWsLoading] = useState(false)
+  const [showCreateWs, setShowCreateWs] = useState(false)
+  const [wsName, setWsName] = useState('')
+  const [wsColor, setWsColor] = useState('indigo')
+  const [creatingWs, setCreatingWs] = useState(false)
+  const [wsCreateError, setWsCreateError] = useState<string | null>(null)
+
   const loadAccount = useCallback(
     async (showLoader: boolean) => {
       if (showLoader) {
@@ -168,13 +190,13 @@ export default function SettingsPageClient() {
           const message =
             typeof data?.error === 'string' && data.error.trim()
               ? data.error
-              : 'No se pudo cargar la configuración de cuenta.'
+              : t(lang, 'settings.loadError')
           setPageError(message)
           return
         }
 
         if (!data?.user || !data?.rateLimit) {
-          setPageError('Respuesta inválida del servidor.')
+          setPageError(t(lang, 'settings.invalidResponse'))
           return
         }
 
@@ -182,7 +204,7 @@ export default function SettingsPageClient() {
         setNameInput(data.user.name)
         setDeleteEmail(data.user.email)
       } catch {
-        setPageError('Error de conexión al cargar la configuración de cuenta.')
+        setPageError(t(lang, 'settings.connectionError'))
       } finally {
         setLoading(false)
         setRefreshingRateLimit(false)
@@ -255,6 +277,43 @@ export default function SettingsPageClient() {
     }
   }
 
+  const loadWorkspaces = useCallback(async () => {
+    setWsLoading(true)
+    try {
+      const res = await fetch('/api/workspaces', { cache: 'no-store' })
+      if (res.ok) {
+        const data = await res.json()
+        setWorkspaces(data.workspaces ?? [])
+      }
+    } catch { /* ignore */ } finally {
+      setWsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void loadWorkspaces() }, [loadWorkspaces])
+
+  const handleCreateWorkspace = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!wsName.trim()) return
+    setCreatingWs(true)
+    setWsCreateError(null)
+    try {
+      const res = await fetch('/api/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: wsName.trim(), avatarColor: wsColor }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setWsCreateError(data.error ?? 'Error al crear.'); return }
+      setWsName('')
+      setWsColor('indigo')
+      setShowCreateWs(false)
+      void loadWorkspaces()
+    } finally {
+      setCreatingWs(false)
+    }
+  }
+
   const rateLimitPercent = useMemo(() => {
     const limit = account?.rateLimit.limit ?? 0
     const used = account?.rateLimit.used ?? 0
@@ -268,7 +327,7 @@ export default function SettingsPageClient() {
 
     const nextName = nameInput.trim()
     if (nextName.length < 2) {
-      setPageError('Nombre inválido (mínimo 2 caracteres).')
+      setPageError(t(lang, 'settings.nameInvalid'))
       return
     }
 
@@ -296,7 +355,7 @@ export default function SettingsPageClient() {
         const message =
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
-            : 'No se pudo actualizar el nombre.'
+            : t(lang, 'settings.nameUpdateError')
         setPageError(message)
         return
       }
@@ -313,9 +372,9 @@ export default function SettingsPageClient() {
       }
 
       setNameInput(nextName)
-      setPageNotice('Nombre actualizado correctamente.')
+      setPageNotice(t(lang, 'settings.nameUpdated'))
     } catch {
-      setPageError('Error de conexión al actualizar el nombre.')
+      setPageError(t(lang, 'settings.nameUpdateConnectionError'))
     } finally {
       setSavingName(false)
     }
@@ -326,12 +385,12 @@ export default function SettingsPageClient() {
     if (!account || savingPassword) return
 
     if (newPassword.trim().length < 8) {
-      setPageError('La nueva contraseña debe tener al menos 8 caracteres.')
+      setPageError(t(lang, 'settings.passwordTooShort'))
       return
     }
 
     if (newPassword !== confirmNewPassword) {
-      setPageError('La confirmación de contraseña no coincide.')
+      setPageError(t(lang, 'settings.passwordMismatch'))
       return
     }
 
@@ -357,9 +416,9 @@ export default function SettingsPageClient() {
         const message =
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
-            : 'Tu sesión expiró. Vuelve a iniciar sesión.'
+            : t(lang, 'settings.sessionExpired')
 
-        if (message.toLowerCase().includes('sesión')) {
+        if (message.toLowerCase().includes('sesión') || message.toLowerCase().includes('session')) {
           router.replace('/')
           return
         }
@@ -372,7 +431,7 @@ export default function SettingsPageClient() {
         const message =
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
-            : 'No se pudo actualizar la contraseña.'
+            : t(lang, 'settings.passwordUpdateError')
         setPageError(message)
         return
       }
@@ -380,9 +439,9 @@ export default function SettingsPageClient() {
       setCurrentPassword('')
       setNewPassword('')
       setConfirmNewPassword('')
-      setPageNotice('Contraseña actualizada correctamente.')
+      setPageNotice(t(lang, 'settings.passwordUpdated'))
     } catch {
-      setPageError('Error de conexión al actualizar la contraseña.')
+      setPageError(t(lang, 'settings.passwordUpdateConnectionError'))
     } finally {
       setSavingPassword(false)
     }
@@ -393,19 +452,17 @@ export default function SettingsPageClient() {
     if (!account || deletingAccount) return
 
     if (deleteEmail.trim().toLowerCase() !== account.user.email.toLowerCase()) {
-      setPageError('Debes escribir el correo exacto de tu cuenta para confirmar.')
+      setPageError(t(lang, 'settings.emailMismatch'))
       return
     }
 
-    if (deleteConfirmation.trim() !== 'ELIMINAR') {
-      setPageError('Debes escribir ELIMINAR para confirmar.')
+    if (deleteConfirmation.trim() !== 'ELIMINAR' && deleteConfirmation.trim() !== 'ELIMINATE') {
+      setPageError(t(lang, 'settings.eliminateConfirm'))
       return
     }
 
     if (typeof window !== 'undefined') {
-      const confirmed = window.confirm(
-        'Esta acción eliminará tu cuenta y todos tus datos. No se puede deshacer. ¿Deseas continuar?'
-      )
+      const confirmed = window.confirm(t(lang, 'settings.deleteConfirmDialog'))
       if (!confirmed) return
     }
 
@@ -432,14 +489,14 @@ export default function SettingsPageClient() {
         const message =
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
-            : 'No se pudo eliminar la cuenta.'
+            : t(lang, 'settings.deleteError')
         setPageError(message)
         return
       }
 
       router.replace('/?account_deleted=1')
     } catch {
-      setPageError('Error de conexión al eliminar la cuenta.')
+      setPageError(t(lang, 'settings.deleteConnectionError'))
     } finally {
       setDeletingAccount(false)
     }
@@ -488,10 +545,10 @@ export default function SettingsPageClient() {
       <main className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 p-6 md:p-10">
         <div className="mx-auto max-w-3xl space-y-4">
           <Link href="/" className="text-sm text-indigo-600 hover:text-indigo-700">
-            ← Volver al extractor
+            {t(lang, 'settings.backToExtractor')}
           </Link>
           <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-            {pageError ?? 'No se pudo cargar la cuenta.'}
+            {pageError ?? t(lang, 'settings.loadError')}
           </div>
         </div>
       </main>
@@ -504,11 +561,11 @@ export default function SettingsPageClient() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">
-              Cuenta
+              {t(lang, 'settings.account')}
             </p>
-            <h1 className="text-2xl font-bold">Configuración de Cuenta</h1>
+            <h1 className="text-2xl font-bold">{t(lang, 'settings.title')}</h1>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-              Administra tu perfil, contraseña, consumo y privacidad.
+              {t(lang, 'settings.subtitle')}
             </p>
           </div>
 
@@ -517,7 +574,7 @@ export default function SettingsPageClient() {
               href="/"
               className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
             >
-              Volver al extractor
+              {t(lang, 'settings.backToExtractor')}
             </Link>
           </div>
         </div>
@@ -535,10 +592,10 @@ export default function SettingsPageClient() {
         )}
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <h2 className="text-base font-semibold mb-4">Perfil</h2>
+          <h2 className="text-base font-semibold mb-4">{t(lang, 'settings.profile')}</h2>
           <form className="space-y-4" onSubmit={handleUpdateName}>
             <div>
-              <label className="block text-sm text-slate-600 dark:text-slate-300 mb-1.5">Correo</label>
+              <label className="block text-sm text-slate-600 dark:text-slate-300 mb-1.5">{t(lang, 'settings.emailLabel')}</label>
               <input
                 type="email"
                 value={account.user.email}
@@ -548,7 +605,7 @@ export default function SettingsPageClient() {
             </div>
 
             <div>
-              <label className="block text-sm text-slate-600 dark:text-slate-300 mb-1.5">Nombre</label>
+              <label className="block text-sm text-slate-600 dark:text-slate-300 mb-1.5">{t(lang, 'settings.nameLabel')}</label>
               <input
                 type="text"
                 value={nameInput}
@@ -565,7 +622,7 @@ export default function SettingsPageClient() {
               disabled={savingName}
               className="h-10 px-4 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:bg-slate-400 dark:disabled:bg-slate-700"
             >
-              {savingName ? 'Guardando...' : 'Guardar nombre'}
+              {savingName ? t(lang, 'settings.saving') : t(lang, 'settings.saveName')}
             </button>
           </form>
         </section>
@@ -573,12 +630,12 @@ export default function SettingsPageClient() {
         {/* Plan Actual */}
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-            <h2 className="text-base font-semibold">Plan Actual</h2>
+            <h2 className="text-base font-semibold">{t(lang, 'settings.currentPlan')}</h2>
             <Link
               href="/pricing"
               className="text-sm text-indigo-600 hover:text-indigo-700 dark:text-indigo-400"
             >
-              Ver planes →
+              {t(lang, 'settings.viewPlans')}
             </Link>
           </div>
 
@@ -587,11 +644,11 @@ export default function SettingsPageClient() {
               {planLabel}
             </span>
             <span className="text-sm text-slate-600 dark:text-slate-300">
-              {planSnapshot?.extractionsPerHour ?? 12} extracciones / hora
+              {(planSnapshot as (typeof planSnapshot & { extractionsPerDay?: number }) | null)?.extractionsPerDay ?? planSnapshot?.extractionsPerHour ?? 3} {t(lang, 'settings.extractionsPerDay')}
             </span>
             {planSnapshot?.currentPeriodEnd && planSnapshot.plan !== 'free' && (
               <span className="text-xs text-slate-400 dark:text-slate-500">
-                · Renueva el {formatPlanDate(planSnapshot.currentPeriodEnd)}
+                {t(lang, 'settings.renewsOn')} {formatPlanDate(planSnapshot.currentPeriodEnd)}
               </span>
             )}
           </div>
@@ -601,7 +658,7 @@ export default function SettingsPageClient() {
               href="/pricing"
               className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 inline-flex items-center"
             >
-              Cambiar plan
+              {t(lang, 'settings.changePlan')}
             </Link>
             {planSnapshot?.hasStripeCustomer && planSnapshot.plan !== 'free' && (
               <button
@@ -610,7 +667,7 @@ export default function SettingsPageClient() {
                 disabled={openingPortal}
                 className="h-9 px-4 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
               >
-                {openingPortal ? 'Abriendo...' : 'Gestionar facturación'}
+                {openingPortal ? t(lang, 'settings.openingPortal') : t(lang, 'settings.manageBilling')}
               </button>
             )}
           </div>
@@ -618,24 +675,24 @@ export default function SettingsPageClient() {
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-            <h2 className="text-base font-semibold">Consumo Actual</h2>
+            <h2 className="text-base font-semibold">{t(lang, 'settings.currentUsage')}</h2>
             <button
               type="button"
               onClick={() => void loadAccount(false)}
               disabled={refreshingRateLimit}
               className="h-9 px-3 rounded-lg border border-slate-300 bg-white text-sm hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:hover:bg-slate-800"
             >
-              {refreshingRateLimit ? 'Actualizando...' : 'Actualizar'}
+              {refreshingRateLimit ? t(lang, 'settings.updating') : t(lang, 'settings.update')}
             </button>
           </div>
 
           <div className="space-y-3">
             <div className="flex items-end justify-between gap-2">
               <p className="text-sm text-slate-600 dark:text-slate-300">
-                {account.rateLimit.used} / {account.rateLimit.limit} extracciones usadas
+                {account.rateLimit.used} / {account.rateLimit.limit} {t(lang, 'settings.extractionsUsed')}
               </p>
               <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                Restantes: {account.rateLimit.remaining}
+                {t(lang, 'settings.remaining')} {account.rateLimit.remaining}
               </p>
             </div>
 
@@ -647,15 +704,37 @@ export default function SettingsPageClient() {
             </div>
 
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              El límite se reinicia: {formatDateTime(account.rateLimit.resetAt)}
+              {t(lang, 'settings.limitResets')} {formatDateTime(account.rateLimit.resetAt)}
             </p>
           </div>
         </section>
 
+        {/* Extra Credits */}
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <h2 className="text-base font-semibold mb-1">Exportar Historial</h2>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div>
+              <h2 className="text-base font-semibold">{t(lang, 'settings.extraCredits')}</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                {t(lang, 'settings.creditsDesc')}
+              </p>
+            </div>
+            <Link
+              href="/pricing#credits"
+              className="shrink-0 h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 inline-flex items-center"
+            >
+              {t(lang, 'settings.buyMore')}
+            </Link>
+          </div>
+          <p className="text-2xl font-bold text-slate-800 dark:text-slate-100">
+            {(planSnapshot as (typeof planSnapshot & { creditBalance?: number }) | null)?.creditBalance ?? 0}
+            <span className="ml-2 text-sm font-normal text-slate-500 dark:text-slate-400">{t(lang, 'settings.creditsAvailable')}</span>
+          </p>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <h2 className="text-base font-semibold mb-1">{t(lang, 'settings.exportHistory')}</h2>
           <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
-            Descarga todos tus playbooks en formato JSON o CSV.
+            {t(lang, 'settings.exportDesc')}
           </p>
           <div className="flex flex-wrap gap-3">
             <a
@@ -663,14 +742,14 @@ export default function SettingsPageClient() {
               download
               className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
             >
-              Descargar JSON
+              {t(lang, 'settings.downloadJson')}
             </a>
             <a
               href="/api/account/export?format=csv"
               download
               className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
             >
-              Descargar CSV
+              {t(lang, 'settings.downloadCsv')}
             </a>
           </div>
         </section>
@@ -678,9 +757,9 @@ export default function SettingsPageClient() {
         {/* Notificaciones por Email */}
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="mb-4">
-            <h2 className="text-base font-semibold">Notificaciones por Email</h2>
+            <h2 className="text-base font-semibold">{t(lang, 'settings.notifications')}</h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Recibe alertas cuando colaboradores actualicen tus playbooks compartidos.
+              {t(lang, 'settings.notificationsDesc')}
             </p>
           </div>
 
@@ -690,13 +769,13 @@ export default function SettingsPageClient() {
                 [
                   {
                     key: 'notifyTaskStatusChange' as const,
-                    label: 'Cambios de estado en tareas',
-                    description: 'Cuando alguien mueve una tarea de tu playbook a otra columna del Kanban.',
+                    label: t(lang, 'settings.notifStatusChange'),
+                    description: t(lang, 'settings.notifStatusChangeDesc'),
                   },
                   {
                     key: 'notifyNewComment' as const,
-                    label: 'Nuevos comentarios en tareas',
-                    description: 'Cuando alguien comenta en una tarea de tu playbook o en una que sigues.',
+                    label: t(lang, 'settings.notifNewComment'),
+                    description: t(lang, 'settings.notifNewCommentDesc'),
                   },
                 ] as const
               ).map(({ key, label, description }) => (
@@ -732,7 +811,109 @@ export default function SettingsPageClient() {
           ) : (
             <div className="flex items-center gap-2 py-4 text-sm text-slate-400 dark:text-slate-500">
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-500" />
-              Cargando preferencias...
+              {t(lang, 'settings.loadingPrefs')}
+            </div>
+          )}
+        </section>
+
+        {/* Mis Workspaces */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <div>
+              <h2 className="text-base font-semibold">{t(lang, 'settings.myWorkspaces')}</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                {t(lang, 'settings.workspacesDesc')}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => { setShowCreateWs((v) => !v); setWsCreateError(null) }}
+              className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-slate-300 bg-white text-sm hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+            >
+              <Plus size={14} /> {t(lang, 'settings.createWorkspace')}
+            </button>
+          </div>
+
+          {showCreateWs && (
+            <form onSubmit={handleCreateWorkspace} className="mb-4 p-4 rounded-xl border border-indigo-100 bg-indigo-50 dark:border-indigo-900/50 dark:bg-indigo-950/20 space-y-3">
+              <div>
+                <label className="block text-sm text-slate-600 dark:text-slate-300 mb-1">{t(lang, 'settings.wsNameLabel')}</label>
+                <input
+                  type="text"
+                  value={wsName}
+                  onChange={(e) => setWsName(e.target.value)}
+                  required
+                  maxLength={80}
+                  autoFocus
+                  placeholder={t(lang, 'settings.wsNamePlaceholder')}
+                  className="w-full h-10 rounded-lg border border-slate-300 bg-white px-3 text-slate-900 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-600 dark:text-slate-300 mb-2">{t(lang, 'settings.wsColorLabel')}</label>
+                <div className="flex gap-2 flex-wrap">
+                  {(['indigo','violet','blue','emerald','rose','amber','cyan','slate'] as const).map((c) => {
+                    const cls: Record<string, string> = { indigo:'bg-indigo-500', violet:'bg-violet-500', blue:'bg-blue-500', emerald:'bg-emerald-500', rose:'bg-rose-500', amber:'bg-amber-500', cyan:'bg-cyan-500', slate:'bg-slate-500' }
+                    return (
+                      <button key={c} type="button" onClick={() => setWsColor(c)}
+                        className={`w-7 h-7 rounded-full ${cls[c]} ${wsColor === c ? 'ring-2 ring-offset-2 ring-indigo-500' : ''}`}
+                      />
+                    )
+                  })}
+                </div>
+              </div>
+              {wsCreateError && <p className="text-sm text-rose-600">{wsCreateError}</p>}
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={creatingWs || !wsName.trim()}
+                  className="h-9 px-4 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2"
+                >
+                  {creatingWs && <Loader2 size={13} className="animate-spin" />}
+                  {creatingWs ? t(lang, 'settings.creating') : t(lang, 'settings.create')}
+                </button>
+                <button type="button" onClick={() => setShowCreateWs(false)} className="h-9 px-3 rounded-lg border border-slate-300 text-sm dark:border-slate-700">
+                  {t(lang, 'settings.cancel')}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {wsLoading ? (
+            <div className="flex items-center gap-2 py-4 text-sm text-slate-400">
+              <Loader2 size={14} className="animate-spin" /> {t(lang, 'settings.loadingWorkspaces')}
+            </div>
+          ) : workspaces.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 py-8 text-center">
+              <Building2 className="mx-auto mb-2 text-slate-300" size={28} />
+              <p className="text-sm text-slate-400">{t(lang, 'settings.noWorkspace')}</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {workspaces.map((ws) => {
+                const colorCls: Record<string, string> = { indigo:'bg-indigo-500', violet:'bg-violet-500', blue:'bg-blue-500', emerald:'bg-emerald-500', rose:'bg-rose-500', amber:'bg-amber-500', cyan:'bg-cyan-500', slate:'bg-slate-500' }
+                const roleBadge: Record<string, string> = { owner:'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300', admin:'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300', member:'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300', viewer:'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300' }
+                const roleLabels: Record<string, string> = { owner: 'Owner', admin: 'Admin', member: t(lang, 'ws.roleMember'), viewer: t(lang, 'ws.roleViewer') }
+                const memberWord = ws.member_count !== 1 ? t(lang, 'settings.memberCountPlural') : t(lang, 'settings.memberCount')
+                return (
+                  <Link
+                    key={ws.id}
+                    href={`/workspace/${ws.id}`}
+                    className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-200 dark:hover:border-indigo-800 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/20 transition-colors group"
+                  >
+                    <div className={`${colorCls[ws.avatar_color] ?? colorCls['indigo']} w-9 h-9 rounded-lg flex items-center justify-center text-white font-bold text-sm flex-shrink-0`}>
+                      {ws.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">{ws.name}</p>
+                      <p className="text-xs text-slate-400">{ws.member_count} {memberWord}</p>
+                    </div>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${roleBadge[ws.role] ?? roleBadge['member']}`}>
+                      {roleLabels[ws.role] ?? ws.role}
+                    </span>
+                  </Link>
+                )
+              })}
             </div>
           )}
         </section>
@@ -741,9 +922,9 @@ export default function SettingsPageClient() {
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-5">
             <div>
-              <h2 className="text-base font-semibold">Consumo de IA</h2>
+              <h2 className="text-base font-semibold">{t(lang, 'settings.aiUsage')}</h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Tokens y costo estimado de todas tus llamadas a IA.
+                {t(lang, 'settings.aiUsageDesc')}
               </p>
             </div>
             <button
@@ -752,14 +933,14 @@ export default function SettingsPageClient() {
               disabled={aiUsageLoading}
               className="h-9 px-3 rounded-lg border border-slate-300 bg-white text-sm hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:hover:bg-slate-800"
             >
-              {aiUsageLoading ? 'Cargando...' : 'Actualizar'}
+              {aiUsageLoading ? t(lang, 'settings.loading') : t(lang, 'settings.update')}
             </button>
           </div>
 
           {aiUsageLoading && !aiUsage && (
             <div className="flex items-center gap-2 py-6 text-sm text-slate-400 dark:text-slate-500">
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-500" />
-              Cargando datos de consumo...
+              {t(lang, 'settings.loadingUsage')}
             </div>
           )}
 
@@ -768,13 +949,13 @@ export default function SettingsPageClient() {
               {/* KPI cards */}
               <div className="grid grid-cols-3 gap-3">
                 <div className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-800/60">
-                  <p className="text-xs text-slate-500 dark:text-slate-400">Llamadas totales</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">{t(lang, 'settings.totalCalls')}</p>
                   <p className="mt-1 text-2xl font-bold text-slate-800 dark:text-slate-100">
                     {aiUsage.totals.calls.toLocaleString('es-MX')}
                   </p>
                 </div>
                 <div className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-800/60">
-                  <p className="text-xs text-slate-500 dark:text-slate-400">Tokens usados</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">{t(lang, 'settings.tokensUsed')}</p>
                   <p className="mt-1 text-2xl font-bold text-slate-800 dark:text-slate-100">
                     {aiUsage.totals.totalTokens >= 1000
                       ? `${(aiUsage.totals.totalTokens / 1000).toFixed(1)}k`
@@ -782,7 +963,7 @@ export default function SettingsPageClient() {
                   </p>
                 </div>
                 <div className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-800/60">
-                  <p className="text-xs text-slate-500 dark:text-slate-400">Costo estimado</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">{t(lang, 'settings.estimatedCost')}</p>
                   <p className="mt-1 text-2xl font-bold text-slate-800 dark:text-slate-100">
                     ${aiUsage.totals.costUsd < 0.01 && aiUsage.totals.costUsd > 0
                       ? aiUsage.totals.costUsd.toFixed(4)
@@ -796,7 +977,7 @@ export default function SettingsPageClient() {
               {aiUsage.daily.length > 0 && (
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-3">
-                    Llamadas — últimos 30 días
+                    {t(lang, 'settings.callsLast30')}
                   </p>
                   <AiDailyBarChart data={aiUsage.daily} />
                 </div>
@@ -806,14 +987,14 @@ export default function SettingsPageClient() {
               {aiUsage.byUseType.length > 0 && (
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2">
-                    Por tipo de uso
+                    {t(lang, 'settings.byType')}
                   </p>
                   <ul className="space-y-2">
                     {aiUsage.byUseType.map((entry) => (
                       <li key={entry.useType} className="flex items-center justify-between text-sm">
                         <span className="text-slate-600 dark:text-slate-300">{entry.label}</span>
                         <span className="font-semibold text-slate-800 dark:text-slate-100">
-                          {entry.calls.toLocaleString('es-MX')} llamadas
+                          {entry.calls.toLocaleString('es-MX')} {t(lang, 'settings.calls')}
                           <span className="ml-2 text-xs font-normal text-slate-400 dark:text-slate-500">
                             (${Number(entry.costUsd).toFixed(4)} USD)
                           </span>
@@ -826,7 +1007,7 @@ export default function SettingsPageClient() {
 
               {aiUsage.totals.calls === 0 && (
                 <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Aún no hay registros de uso de IA.
+                  {t(lang, 'settings.noAiUsage')}
                 </p>
               )}
             </div>
@@ -834,25 +1015,25 @@ export default function SettingsPageClient() {
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <h2 className="text-base font-semibold mb-4">Cambiar Contraseña</h2>
+          <h2 className="text-base font-semibold mb-4">{t(lang, 'settings.changePassword')}</h2>
           <form className="space-y-4" onSubmit={handleUpdatePassword}>
             <div>
               <label className="block text-sm text-slate-600 dark:text-slate-300 mb-1.5">
-                Contraseña actual (opcional)
+                {t(lang, 'settings.currentPasswordLabel')}
               </label>
               <input
                 type="password"
                 value={currentPassword}
                 onChange={(event) => setCurrentPassword(event.target.value)}
                 className="w-full h-11 rounded-lg border border-slate-300 bg-white px-3 text-slate-900 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                placeholder="Ingresa tu contraseña actual para mayor seguridad"
+                placeholder={t(lang, 'settings.currentPasswordPlaceholder')}
               />
             </div>
 
             <div className="grid md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm text-slate-600 dark:text-slate-300 mb-1.5">
-                  Nueva contraseña
+                  {t(lang, 'settings.newPasswordLabel')}
                 </label>
                 <input
                   type="password"
@@ -861,13 +1042,13 @@ export default function SettingsPageClient() {
                   minLength={8}
                   required
                   className="w-full h-11 rounded-lg border border-slate-300 bg-white px-3 text-slate-900 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                  placeholder="Mínimo 8 caracteres"
+                  placeholder={t(lang, 'settings.newPasswordPlaceholder')}
                 />
               </div>
 
               <div>
                 <label className="block text-sm text-slate-600 dark:text-slate-300 mb-1.5">
-                  Confirmar nueva contraseña
+                  {t(lang, 'settings.confirmPasswordLabel')}
                 </label>
                 <input
                   type="password"
@@ -885,21 +1066,21 @@ export default function SettingsPageClient() {
               disabled={savingPassword}
               className="h-10 px-4 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:bg-slate-400 dark:disabled:bg-slate-700"
             >
-              {savingPassword ? 'Actualizando...' : 'Actualizar contraseña'}
+              {savingPassword ? t(lang, 'settings.updatingPassword') : t(lang, 'settings.updatePassword')}
             </button>
           </form>
         </section>
 
         <section className="rounded-2xl border border-rose-300 bg-rose-50 p-5 shadow-sm dark:border-rose-900 dark:bg-rose-950/30">
-          <h2 className="text-base font-semibold text-rose-800 dark:text-rose-300 mb-2">Zona de Peligro</h2>
+          <h2 className="text-base font-semibold text-rose-800 dark:text-rose-300 mb-2">{t(lang, 'settings.dangerZone')}</h2>
           <p className="text-sm text-rose-700 dark:text-rose-400 mb-4">
-            Eliminar tu cuenta borrará historial, integraciones y datos asociados. Esta acción no se puede deshacer.
+            {t(lang, 'settings.dangerDesc')}
           </p>
 
           <form className="space-y-4" onSubmit={handleDeleteAccount}>
             <div>
               <label className="block text-sm text-rose-700 dark:text-rose-400 mb-1.5">
-                Confirma tu correo
+                {t(lang, 'settings.confirmEmailLabel')}
               </label>
               <input
                 type="email"
@@ -912,7 +1093,7 @@ export default function SettingsPageClient() {
 
             <div>
               <label className="block text-sm text-rose-700 dark:text-rose-400 mb-1.5">
-                Escribe ELIMINAR para confirmar
+                {t(lang, 'settings.typeEliminate')}
               </label>
               <input
                 type="text"
@@ -925,7 +1106,7 @@ export default function SettingsPageClient() {
 
             <div>
               <label className="block text-sm text-rose-700 dark:text-rose-400 mb-1.5">
-                Contraseña actual (opcional)
+                {t(lang, 'settings.currentPasswordLabel')}
               </label>
               <input
                 type="password"
@@ -940,7 +1121,7 @@ export default function SettingsPageClient() {
               disabled={deletingAccount}
               className="h-10 px-4 rounded-lg bg-rose-600 text-white text-sm font-medium hover:bg-rose-700 disabled:bg-slate-400 dark:disabled:bg-slate-700"
             >
-              {deletingAccount ? 'Eliminando cuenta...' : 'Eliminar cuenta permanentemente'}
+              {deletingAccount ? t(lang, 'settings.deletingAccount') : t(lang, 'settings.deleteAccountBtn')}
             </button>
           </form>
         </section>

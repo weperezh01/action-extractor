@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlignLeft, ChevronDown, Copy, Download, FileText, Folder, Globe, History, PenLine, Play, RotateCcw, Search, Share2, Star, Tag, Trash2 } from 'lucide-react'
+import { AlignLeft, ArrowUpRight, Building2, ChevronDown, Copy, Download, FileText, Folder, Globe, History, PenLine, Play, RotateCcw, Search, Share2, Star, Tag, Trash2 } from 'lucide-react'
 import type { FolderItem } from '@/app/home/components/FolderDock'
 import type { ExtractionTag } from '@/app/home/lib/types'
 import { FOLDER_COLORS } from '@/app/home/components/FolderDock'
@@ -9,6 +9,7 @@ import { getShareVisibilityLabel, isShareVisibilityShareable } from '@/app/home/
 import { formatHistoryDate } from '@/app/home/lib/utils'
 import { resolveSystemExtractionFolderKey } from '@/lib/extraction-folders'
 import type { HistoryItem, SourceType } from '@/app/home/lib/types'
+import { type Lang, t } from '@/app/home/lib/i18n'
 
 function SourceIcon({ sourceType, size = 20 }: { sourceType: SourceType; size?: number }) {
   switch (sourceType) {
@@ -76,6 +77,8 @@ interface HistoryPanelProps {
   allTags?: ExtractionTag[]
   activeTagIds?: string[]
   onToggleTagFilter?: (tagId: string) => void
+  onMoveToWorkspace?: (itemId: string, workspaceId: string | null) => Promise<void>
+  lang?: Lang
 }
 
 export function HistoryPanel({
@@ -133,6 +136,8 @@ export function HistoryPanel({
   allTags = [],
   activeTagIds = [],
   onToggleTagFilter,
+  onMoveToWorkspace,
+  lang = 'en',
 }: HistoryPanelProps) {
   const generalFolderId = folders.find((folder) => resolveSystemExtractionFolderKey(folder.id) === 'general')?.id ?? null
   const hasHistory = history.length > 0
@@ -140,7 +145,7 @@ export function HistoryPanel({
     ? folders.find((f) => f.id === activeFolderIds[0]) ?? null
     : null
   const panelTitle = activeFolderIds.length === 0
-    ? 'Historial'
+    ? t(lang, 'hist.title')
     : activeFolderIds.length === 1
       ? (activeFolder?.name ?? 'General')
       : activeFolderIds
@@ -164,6 +169,38 @@ export function HistoryPanel({
   const [expandedActionsItemId, setExpandedActionsItemId] = useState<string | null>(null)
   const [folderPickerItemId, setFolderPickerItemId] = useState<string | null>(null)
   const folderPickerRef = useRef<HTMLDivElement>(null)
+
+  // Workspace picker
+  interface WsOption { id: string; name: string; avatar_color: string; role: string }
+  const [workspaceOptions, setWorkspaceOptions] = useState<WsOption[]>([])
+  const [wsPickerItemId, setWsPickerItemId] = useState<string | null>(null)
+  const [movingToWs, setMovingToWs] = useState(false)
+  const wsPickerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!onMoveToWorkspace) return
+    fetch('/api/workspaces', { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data?.workspaces) {
+          setWorkspaceOptions(
+            (data.workspaces as WsOption[]).filter((w) => w.role !== 'viewer')
+          )
+        }
+      })
+      .catch(() => undefined)
+  }, [onMoveToWorkspace])
+
+  useEffect(() => {
+    if (!wsPickerItemId) return
+    const handler = (e: MouseEvent) => {
+      if (wsPickerRef.current && !wsPickerRef.current.contains(e.target as Node)) {
+        setWsPickerItemId(null)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [wsPickerItemId])
 
   useEffect(() => {
     if (!folderPickerItemId) return
@@ -244,16 +281,16 @@ export function HistoryPanel({
             disabled={historyLoading || clearingHistory}
             className="text-sm text-indigo-600 hover:text-indigo-700 font-medium disabled:text-slate-400"
           >
-            {historyLoading ? 'Actualizando...' : 'Actualizar'}
+            {historyLoading ? t(lang, 'hist.refreshing') : t(lang, 'hist.refresh')}
           </button>
           <button
             onClick={onClearHistory}
             disabled={!hasHistory || historyLoading || clearingHistory}
             className="inline-flex items-center gap-1.5 text-sm text-rose-600 hover:text-rose-700 font-medium disabled:text-slate-400"
-            aria-label="Limpiar historial"
+            aria-label={t(lang, 'hist.clearAria')}
           >
             <Trash2 size={14} />
-            {clearingHistory ? 'Limpiando...' : 'Limpiar'}
+            {clearingHistory ? t(lang, 'hist.clearing') : t(lang, 'hist.clear')}
           </button>
         </div>
       </div>
@@ -268,14 +305,14 @@ export function HistoryPanel({
               type="text"
               value={historyQuery}
               onChange={(event) => onHistoryQueryChange(event.target.value)}
-              placeholder="Buscar por título, objetivo, URL o fecha..."
+              placeholder={t(lang, 'hist.search')}
               className="w-full h-10 pl-9 pr-3 rounded-lg border border-slate-200 bg-white text-sm text-slate-700 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-200 dark:placeholder:text-slate-500"
             />
           </div>
           <button
             type="button"
             onClick={() => setStarredOnly((v) => !v)}
-            title={starredOnly ? 'Ver todos' : 'Solo favoritos'}
+            title={starredOnly ? t(lang, 'hist.starred.show') : t(lang, 'hist.starred.only')}
             className={`inline-flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border transition-colors ${
               starredOnly
                 ? 'border-amber-300 bg-amber-50 text-amber-600 dark:border-amber-600 dark:bg-amber-900/30 dark:text-amber-300'
@@ -313,13 +350,13 @@ export function HistoryPanel({
 
       {history.length === 0 && !historyLoading && (
         <p className="px-5 py-6 text-sm text-slate-500 dark:text-slate-400">
-          Aún no tienes extracciones guardadas.
+          {t(lang, 'hist.noHistory')}
         </p>
       )}
 
       {history.length > 0 && filteredHistory.length === 0 && !historyLoading && (
         <p className="px-5 py-6 text-sm text-slate-500 dark:text-slate-400">
-          No hay resultados para tu búsqueda.
+          {t(lang, 'hist.noResults')}
         </p>
       )}
 
@@ -346,7 +383,7 @@ export function HistoryPanel({
                     <div className="relative h-14 w-24">
                       <Image
                         src={item.thumbnailUrl}
-                        alt={item.videoTitle ?? 'Miniatura del video'}
+                        alt={item.videoTitle ?? t(lang, 'hist.thumbnail')}
                         fill
                         sizes="96px"
                         className="rounded-md object-cover border border-slate-200 dark:border-slate-700"
@@ -366,7 +403,7 @@ export function HistoryPanel({
                   className="order-3 w-full min-w-0 text-left sm:order-2 sm:w-auto sm:flex-1"
                 >
                   <p className="font-semibold text-slate-800 line-clamp-1 dark:text-slate-100">
-                    {item.videoTitle || item.sourceLabel || item.objective || 'Sin fuente'}
+                    {item.videoTitle || item.sourceLabel || item.objective || t(lang, 'hist.noSource')}
                   </p>
                   <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{item.url ?? item.sourceLabel ?? ''}</p>
                   <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -428,7 +465,7 @@ export function HistoryPanel({
                       <button
                         type="button"
                         onClick={() => setFolderPickerItemId(prev => prev === item.id ? null : item.id)}
-                        title="Mover a carpeta"
+                        title={t(lang, 'hist.moveToFolder')}
                         className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-colors ${
                           item.folderId
                             ? 'border-indigo-200 bg-indigo-50 text-indigo-600 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300'
@@ -440,7 +477,7 @@ export function HistoryPanel({
                       {folderPickerItemId === item.id && (
                         <div className="absolute right-0 top-full z-30 mt-1 min-w-[160px] rounded-xl border border-slate-200 bg-white py-1.5 shadow-lg dark:border-slate-700 dark:bg-slate-900">
                           <p className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                            Mover a carpeta
+                            {t(lang, 'hist.moveToFolder')}
                           </p>
                           <button
                             type="button"
@@ -478,7 +515,7 @@ export function HistoryPanel({
                     <button
                       type="button"
                       onClick={() => onStarItem(item, !item.isStarred)}
-                      title={item.isStarred ? 'Quitar de favoritos' : 'Añadir a favoritos'}
+                      title={item.isStarred ? t(lang, 'hist.unstar') : t(lang, 'hist.star')}
                       className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-colors ${
                         item.isStarred
                           ? 'border-amber-300 bg-amber-50 text-amber-500 hover:bg-amber-100 dark:border-amber-600 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
@@ -494,12 +531,12 @@ export function HistoryPanel({
                     type="button"
                     onClick={() => toggleItemActions(item.id)}
                     aria-expanded={isActionsExpanded}
-                    aria-label={`Mostrar acciones para ${item.videoTitle ?? item.sourceLabel ?? item.url ?? "extracción"}`}
+                    aria-label={`${t(lang, 'hist.showActions')} ${item.videoTitle ?? item.sourceLabel ?? item.url ?? t(lang, 'hist.deleteExtraction')}`}
                     data-history-actions-root="true"
                     data-item-id={item.id}
                     className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
                   >
-                    Acciones
+                    {t(lang, 'hist.actions')}
                     <ChevronDown
                       size={14}
                       className={`transition-transform duration-300 ease-out ${isActionsExpanded ? 'rotate-180' : ''}`}
@@ -522,7 +559,7 @@ export function HistoryPanel({
                   <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-700 dark:bg-slate-800/45">
                     <div>
                       <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
-                        Exportaciones
+                        {t(lang, 'hist.exports')}
                       </p>
                       <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         <button
@@ -530,10 +567,10 @@ export function HistoryPanel({
                           onClick={() => triggerItemAction(item.id, () => onDownloadPdf(item))}
                           disabled={pdfExportLoading}
                           className={`${quickButtonClass} border-slate-200 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800`}
-                          aria-label={`Descargar PDF para ${item.videoTitle ?? item.sourceLabel ?? item.url ?? "extracción"}`}
+                          aria-label={`PDF ${item.videoTitle ?? item.sourceLabel ?? item.url ?? ''}`}
                         >
                           <Download size={12} />
-                          {pdfExportLoading ? 'Generando PDF...' : 'PDF'}
+                          {pdfExportLoading ? t(lang, 'hist.pdfGenerating') : 'PDF'}
                         </button>
 
                         <button
@@ -541,26 +578,26 @@ export function HistoryPanel({
                           onClick={() => triggerItemAction(item.id, () => onCopyShareLink(item))}
                           disabled={historyShareLoadingItemId === item.id || !isShareVisibilityShareable(item.shareVisibility)}
                           className={`${quickButtonClass} border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-950/30 dark:text-violet-300 dark:hover:bg-violet-950/50`}
-                          aria-label={`Compartir extracción ${item.videoTitle ?? item.sourceLabel ?? item.url ?? "extracción"}`}
+                          aria-label={`${t(lang, 'hist.share')} ${item.videoTitle ?? item.sourceLabel ?? item.url ?? ''}`}
                         >
                           <Share2 size={12} />
                           {historyShareLoadingItemId === item.id
-                            ? 'Compartiendo...'
+                            ? t(lang, 'hist.sharing')
                             : !isShareVisibilityShareable(item.shareVisibility)
-                              ? 'Público o enlace'
+                              ? t(lang, 'hist.shareMustBePublic')
                             : historyShareCopiedItemId === item.id
-                              ? 'Enlace copiado'
-                              : 'Compartir'}
+                              ? t(lang, 'hist.linkCopied')
+                              : t(lang, 'hist.share')}
                         </button>
 
                         <button
                           type="button"
                           onClick={() => triggerItemAction(item.id, () => onCopyMarkdown(item))}
                           className={`${quickButtonClass} border-slate-200 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800`}
-                          aria-label={`Copiar extracción ${item.videoTitle ?? item.sourceLabel ?? item.url ?? "extracción"} en Markdown`}
+                          aria-label={`${t(lang, 'hist.copyMarkdown')} ${item.videoTitle ?? item.sourceLabel ?? item.url ?? ''}`}
                         >
                           <Copy size={12} />
-                          Copiar Markdown
+                          {t(lang, 'hist.copyMarkdown')}
                         </button>
 
                         <button
@@ -572,17 +609,17 @@ export function HistoryPanel({
                           }
                           disabled={notionConnected ? notionExportLoading : notionLoading || !notionConfigured}
                           className={`${quickButtonClass} border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300 dark:hover:bg-indigo-950/50`}
-                          aria-label={`${notionConnected ? 'Exportar a Notion' : 'Conectar Notion'} para ${item.videoTitle ?? item.sourceLabel ?? item.url ?? "extracción"}`}
+                          aria-label={`${notionConnected ? 'Notion' : t(lang, 'hist.notionConnect')} ${item.videoTitle ?? item.sourceLabel ?? item.url ?? ''}`}
                         >
                           {notionConnected
                             ? notionExportLoading
                               ? 'Notion...'
                               : 'Notion'
                             : notionLoading
-                              ? 'Conectando Notion...'
+                              ? t(lang, 'hist.notionConnecting')
                               : notionConfigured
-                                ? 'Conectar Notion'
-                                : 'Notion no configurado'}
+                                ? t(lang, 'hist.notionConnect')
+                                : t(lang, 'hist.notionNotConfigured')}
                         </button>
 
                         <button
@@ -594,17 +631,17 @@ export function HistoryPanel({
                           }
                           disabled={trelloConnected ? trelloExportLoading : trelloLoading || !trelloConfigured}
                           className={`${quickButtonClass} border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-950/30 dark:text-sky-300 dark:hover:bg-sky-950/50`}
-                          aria-label={`${trelloConnected ? 'Exportar a Trello' : 'Conectar Trello'} para ${item.videoTitle ?? item.sourceLabel ?? item.url ?? "extracción"}`}
+                          aria-label={`${trelloConnected ? 'Trello' : t(lang, 'hist.trelloConnect')} ${item.videoTitle ?? item.sourceLabel ?? item.url ?? ''}`}
                         >
                           {trelloConnected
                             ? trelloExportLoading
                               ? 'Trello...'
                               : 'Trello'
                             : trelloLoading
-                              ? 'Conectando Trello...'
+                              ? t(lang, 'hist.trelloConnecting')
                               : trelloConfigured
-                                ? 'Conectar Trello'
-                                : 'Trello no configurado'}
+                                ? t(lang, 'hist.trelloConnect')
+                                : t(lang, 'hist.trelloNotConfigured')}
                         </button>
 
                         <button
@@ -616,17 +653,17 @@ export function HistoryPanel({
                           }
                           disabled={todoistConnected ? todoistExportLoading : todoistLoading || !todoistConfigured}
                           className={`${quickButtonClass} border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 dark:border-rose-700 dark:bg-rose-950/30 dark:text-rose-300 dark:hover:bg-rose-950/50`}
-                          aria-label={`${todoistConnected ? 'Exportar a Todoist' : 'Conectar Todoist'} para ${item.videoTitle ?? item.sourceLabel ?? item.url ?? "extracción"}`}
+                          aria-label={`${todoistConnected ? 'Todoist' : t(lang, 'hist.todoistConnect')} ${item.videoTitle ?? item.sourceLabel ?? item.url ?? ''}`}
                         >
                           {todoistConnected
                             ? todoistExportLoading
                               ? 'Todoist...'
                               : 'Todoist'
                             : todoistLoading
-                              ? 'Conectando Todoist...'
+                              ? t(lang, 'hist.todoistConnecting')
                               : todoistConfigured
-                                ? 'Conectar Todoist'
-                                : 'Todoist no configurado'}
+                                ? t(lang, 'hist.todoistConnect')
+                                : t(lang, 'hist.todoistNotConfigured')}
                         </button>
 
                         <button
@@ -642,17 +679,17 @@ export function HistoryPanel({
                               : googleDocsLoading || !googleDocsConfigured
                           }
                           className={`${quickButtonClass} border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300 dark:hover:bg-emerald-950/50`}
-                          aria-label={`${googleDocsConnected ? 'Exportar a Google Docs' : 'Conectar Google Docs'} para ${item.videoTitle ?? item.sourceLabel ?? item.url ?? "extracción"}`}
+                          aria-label={`${googleDocsConnected ? 'Google Docs' : t(lang, 'hist.googleDocsConnect')} ${item.videoTitle ?? item.sourceLabel ?? item.url ?? ''}`}
                         >
                           {googleDocsConnected
                             ? googleDocsExportLoading
                               ? 'Google Docs...'
                               : 'Google Docs'
                             : googleDocsLoading
-                              ? 'Conectando Google Docs...'
+                              ? t(lang, 'hist.googleDocsConnecting')
                               : googleDocsConfigured
-                                ? 'Conectar Google Docs'
-                                : 'Google Docs no configurado'}
+                                ? t(lang, 'hist.googleDocsConnect')
+                                : t(lang, 'hist.googleDocsNotConfigured')}
                         </button>
                       </div>
                     </div>
@@ -660,7 +697,7 @@ export function HistoryPanel({
                     {onReExtractMode && (
                       <div className="mt-3 border-t border-slate-200 pt-3 dark:border-slate-700">
                         <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
-                          Re-extraer como
+                          {t(lang, 'hist.reExtract')}
                         </p>
                         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
                           {EXTRACTION_MODE_OPTIONS.filter((opt) => opt.value !== normalizeExtractionMode(item.mode)).map((opt) => (
@@ -681,18 +718,53 @@ export function HistoryPanel({
 
                     <div className="mt-3 border-t border-slate-200 pt-3 dark:border-slate-700">
                       <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
-                        Gestión
+                        {t(lang, 'hist.management')}
                       </p>
                       <div className="mt-2 grid grid-cols-1 gap-2 sm:w-56">
+                        {onMoveToWorkspace && workspaceOptions.length > 0 && (
+                          <div className="relative" ref={wsPickerItemId === item.id ? wsPickerRef : undefined}>
+                            <button
+                              type="button"
+                              onClick={() => setWsPickerItemId((prev) => prev === item.id ? null : item.id)}
+                              disabled={movingToWs}
+                              className={`${quickButtonClass} border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300 dark:hover:bg-indigo-950/50`}
+                            >
+                              <Building2 size={12} />
+                              {t(lang, 'hist.moveToWorkspace')}
+                            </button>
+                            {wsPickerItemId === item.id && (
+                              <div className="absolute left-0 bottom-full mb-1 z-30 min-w-[180px] rounded-xl border border-slate-200 bg-white py-1.5 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+                                <p className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                  {t(lang, 'hist.selectWorkspace')}
+                                </p>
+                                {workspaceOptions.map((ws) => (
+                                  <button
+                                    key={ws.id}
+                                    type="button"
+                                    onClick={async () => {
+                                      setWsPickerItemId(null)
+                                      setMovingToWs(true)
+                                      try { await onMoveToWorkspace(item.id, ws.id) } finally { setMovingToWs(false) }
+                                    }}
+                                    className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                                  >
+                                    <Building2 size={11} className="text-indigo-500" />
+                                    {ws.name}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                         <button
                           type="button"
                           onClick={() => triggerItemAction(item.id, () => onDeleteItem(item))}
                           disabled={isDeleting || clearingHistory}
                           className={`${quickButtonClass} border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 dark:border-rose-700 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40`}
-                          aria-label={`Eliminar extracción ${item.videoTitle ?? item.sourceLabel ?? item.url ?? "extracción"}`}
+                          aria-label={`${t(lang, 'hist.deleteAria')} ${item.videoTitle ?? item.sourceLabel ?? item.url ?? ''}`}
                         >
                           <Trash2 size={12} />
-                          {isDeleting ? 'Borrando...' : 'Borrar extracción'}
+                          {isDeleting ? t(lang, 'hist.deleting') : t(lang, 'hist.deleteExtraction')}
                         </button>
                       </div>
                     </div>

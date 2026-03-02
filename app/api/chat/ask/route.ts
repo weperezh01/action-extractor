@@ -3,14 +3,18 @@ import { getUserFromRequest } from '@/lib/auth'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
 import { flattenItemsAsText, normalizePlaybookPhases } from '@/lib/playbook-tree'
 import {
+  consumeChatTokens,
   createChatMessageForUser,
   findExtractionByIdForUser,
   getAppSetting,
+  getChatTokenSnapshot,
+  getPromptOverride,
   listChatMessagesForUser,
   listExtractionsByUser,
   listExtractionTasksWithEventsForUser,
   logAiUsage,
 } from '@/lib/db'
+import { CHAT_SYSTEM_PROMPT_DEFAULT } from '@/lib/extract-core'
 import { type AiProvider, callAi, estimateCostUsd, isProviderAvailable } from '@/lib/ai-client'
 
 export const runtime = 'nodejs'
@@ -220,6 +224,18 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const chatTokenSnapshot = await getChatTokenSnapshot(user.id)
+    if (!chatTokenSnapshot.allowed) {
+      return NextResponse.json(
+        {
+          error: `Has alcanzado tu límite diario de ${chatTokenSnapshot.limit.toLocaleString('es-MX')} tokens de chat. Vuelve mañana.`,
+          chatTokensExhausted: true,
+          resetAt: chatTokenSnapshot.reset_at,
+        },
+        { status: 429 }
+      )
+    }
+
     const activeExtractionId = normalizeExtractionId(
       (body as { activeExtractionId?: unknown })?.activeExtractionId
     )
@@ -340,11 +356,11 @@ export async function POST(req: NextRequest) {
       { role: 'user' as const, content: userPrompt },
     ]
 
+    const chatSystemOverride = await getPromptOverride('chat:system').catch(() => null)
     const chatAiResult = await callAi({
       provider: resolvedChatProvider,
       model: resolvedChatModel,
-      system:
-        'Eres el asistente de ROI Action Extractor. Responde en español, de forma clara y accionable. Usa exclusivamente el contexto proporcionado del usuario. Si falta información, dilo explícitamente y pide la extracción o dato necesario. No inventes hechos.',
+      system: chatSystemOverride ?? CHAT_SYSTEM_PROMPT_DEFAULT,
       messages: anthropicMessages.map((m) => ({
         role: m.role as 'user' | 'assistant',
         content: typeof m.content === 'string' ? m.content : '',
@@ -361,6 +377,7 @@ export async function POST(req: NextRequest) {
       outputTokens: chatAiResult.outputTokens,
       costUsd: estimateCostUsd(resolvedChatModel, chatAiResult.inputTokens, chatAiResult.outputTokens),
     })
+    void consumeChatTokens(user.id, chatAiResult.inputTokens + chatAiResult.outputTokens).catch(() => undefined)
 
     if (!rawText.trim()) {
       return NextResponse.json(

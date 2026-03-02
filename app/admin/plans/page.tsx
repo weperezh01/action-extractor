@@ -44,6 +44,8 @@ interface DbPlan {
   price_monthly_usd: number
   stripe_price_id: string | null
   extractions_per_hour: number
+  extractions_per_day: number
+  chat_tokens_per_day: number
   features_json: string
   is_active: boolean
   display_order: number
@@ -95,7 +97,7 @@ export default function AdminPlansPage() {
 
   // Inline edit state for value ladder table
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [editDraft, setEditDraft] = useState<Partial<DbPlan> & { displayName?: string; priceMonthlyUsd?: number; extractionsPerHour?: number; stripePriceId?: string | null; isActive?: boolean; displayOrder?: number }>({})
+  const [editDraft, setEditDraft] = useState<Partial<DbPlan> & { displayName?: string; priceMonthlyUsd?: number; extractionsPerHour?: number; chatTokensPerDay?: number; stripePriceId?: string | null; isActive?: boolean; displayOrder?: number }>({})
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
@@ -149,6 +151,7 @@ export default function AdminPlansPage() {
       displayName: plan.display_name,
       priceMonthlyUsd: plan.price_monthly_usd,
       extractionsPerHour: plan.extractions_per_hour,
+      chatTokensPerDay: plan.chat_tokens_per_day,
       stripePriceId: plan.stripe_price_id ?? '',
       isActive: plan.is_active,
       displayOrder: plan.display_order,
@@ -171,6 +174,7 @@ export default function AdminPlansPage() {
           displayName: editDraft.displayName,
           priceMonthlyUsd: editDraft.priceMonthlyUsd,
           extractionsPerHour: editDraft.extractionsPerHour,
+          chatTokensPerDay: editDraft.chatTokensPerDay,
           stripePriceId: editDraft.stripePriceId || null,
           isActive: editDraft.isActive,
           displayOrder: editDraft.displayOrder,
@@ -316,8 +320,17 @@ export default function AdminPlansPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Link href="/admin/credits" className="px-3 py-2 text-sm rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-950/60">
+              Créditos
+            </Link>
+            <Link href="/admin/users" className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800">
+              Usuarios
+            </Link>
+            <Link href="/admin/prompts" className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800">
+              Prompts
+            </Link>
             <Link href="/admin" className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800">
-              ← Panel Admin
+              Métricas
             </Link>
             <Link href="/" className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800">
               Volver al extractor
@@ -465,7 +478,9 @@ export default function AdminPlansPage() {
                 <tr className="border-b border-slate-100 dark:border-slate-800 text-xs uppercase tracking-wider text-slate-400 dark:text-slate-500">
                   <th className="px-5 py-3 text-left font-semibold">Plan</th>
                   <th className="px-4 py-3 text-right font-semibold">Precio/mes</th>
-                  <th className="px-4 py-3 text-right font-semibold">Extr./hora</th>
+                  <th className="px-4 py-3 text-right font-semibold">Extr./día</th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-400">Extr./hora</th>
+                  <th className="px-4 py-3 text-right font-semibold">Tokens chat/día</th>
                   <th className="px-4 py-3 text-left font-semibold">Stripe Price ID</th>
                   <th className="px-4 py-3 text-center font-semibold">Orden</th>
                   <th className="px-4 py-3 text-center font-semibold">Activo</th>
@@ -515,7 +530,13 @@ export default function AdminPlansPage() {
                         )}
                       </td>
 
-                      {/* Extractions/hr */}
+                      {/* Extractions/día */}
+                      <td className="px-4 py-3 text-right">
+                        <span className="tabular-nums font-semibold">{plan.extractions_per_day}</span>
+                        <p className="text-[10px] text-slate-400">por día</p>
+                      </td>
+
+                      {/* Extractions/hr (legacy) */}
                       <td className="px-4 py-3 text-right">
                         {isEditing ? (
                           <input
@@ -526,7 +547,23 @@ export default function AdminPlansPage() {
                             className="h-8 w-20 rounded border border-indigo-300 bg-white px-2 text-sm text-right dark:border-indigo-700 dark:bg-slate-950 dark:text-slate-100"
                           />
                         ) : (
-                          <span className="tabular-nums">{plan.extractions_per_hour}</span>
+                          <span className="tabular-nums text-slate-500">{plan.extractions_per_hour}</span>
+                        )}
+                      </td>
+
+                      {/* Chat tokens/día */}
+                      <td className="px-4 py-3 text-right">
+                        {isEditing ? (
+                          <input
+                            type="number"
+                            min={1000}
+                            step={1000}
+                            value={editDraft.chatTokensPerDay ?? plan.chat_tokens_per_day}
+                            onChange={(e) => setEditDraft((d) => ({ ...d, chatTokensPerDay: Number(e.target.value) }))}
+                            className="h-8 w-28 rounded border border-indigo-300 bg-white px-2 text-sm text-right dark:border-indigo-700 dark:bg-slate-950 dark:text-slate-100"
+                          />
+                        ) : (
+                          <span className="tabular-nums font-semibold">{plan.chat_tokens_per_day.toLocaleString('es-MX')}</span>
                         )}
                       </td>
 
