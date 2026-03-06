@@ -75,7 +75,11 @@ export async function POST(req: NextRequest) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const subscription = await stripe.subscriptions.retrieve(subscriptionId) as any
       const priceId = subscription.items?.data[0]?.price?.id ?? ''
-      const plan = planFromPriceId(priceId) ?? 'pro'
+      const plan = planFromPriceId(priceId)
+      if (!plan) {
+        console.error(`[Stripe] checkout.session.completed — unrecognized price ID: ${priceId} for user ${userId} — no plan assigned`)
+        return NextResponse.json({ received: true })
+      }
       const extractionsPerHour = PLAN_LIMITS[plan] ?? 40
       const { periodStart, periodEnd } = extractPeriodDates(subscription)
 
@@ -103,7 +107,11 @@ export async function POST(req: NextRequest) {
       }
 
       const priceId = subscription.items?.data[0]?.price?.id ?? ''
-      const plan = planFromPriceId(priceId) ?? 'pro'
+      const plan = planFromPriceId(priceId)
+      if (!plan) {
+        console.error(`[Stripe] subscription.updated — unrecognized price ID: ${priceId} for customer ${customerId} — no plan assigned`)
+        return NextResponse.json({ received: true })
+      }
       const extractionsPerHour = PLAN_LIMITS[plan] ?? 40
       const status: string = subscription.status
       const { periodStart, periodEnd } = extractPeriodDates(subscription)

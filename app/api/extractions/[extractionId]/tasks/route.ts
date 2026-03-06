@@ -68,6 +68,7 @@ function toGuestClientTask(task: GuestTask, extractionId: string) {
     scheduledEndAt: null,
     durationDays: 1,
     predecessorIds: [],
+    flowNodeType: 'process' as const,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     events: task.events.map((e) => ({
@@ -107,6 +108,7 @@ function toClientTask(task: Awaited<ReturnType<typeof listExtractionTasksWithEve
     scheduledEndAt: task.scheduled_end_at,
     durationDays: task.duration_days,
     predecessorIds: [],  // populated by getTasksResponse after merging depsMap
+    flowNodeType: (task.flow_node_type ?? 'process') as 'process' | 'decision',
     createdAt: task.created_at,
     updatedAt: task.updated_at,
     events: task.events.map((event) => ({

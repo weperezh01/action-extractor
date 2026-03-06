@@ -60,7 +60,7 @@ const dict = {
     'landing.hero.headline1': 'Stop watching,',
     'landing.hero.headline2': 'start executing.',
     'landing.hero.sub':
-      'Paste a YouTube URL and get a structured action plan, executive summary, business ideas, or key quotes — powered by Claude AI — in seconds.',
+      'Paste a YouTube link, upload a PDF or Word document, or add plain text to get a structured action plan, executive summary, business ideas, or key quotes in seconds.',
     'landing.hero.cta': 'Start for free',
     'landing.hero.signin': 'Already have an account?',
     'landing.hero.signinLink': 'Sign in',
@@ -69,10 +69,10 @@ const dict = {
     'landing.how.title': 'How it works',
     'landing.how.step1.title': 'Paste any URL',
     'landing.how.step1.desc':
-      'YouTube video, web article, or upload a file. We extract the full content automatically.',
+      'YouTube video, web article, PDF, Word document, or plain text. We extract the full content automatically.',
     'landing.how.step2.title': 'AI extracts the action',
     'landing.how.step2.desc':
-      'Claude AI reads the full transcript and structures it into the format you choose.',
+      'Our AI reads the full content and structures it into the format you choose.',
     'landing.how.step3.title': 'Export & execute',
     'landing.how.step3.desc':
       'One click to Notion, Trello, Todoist or Google Docs. Copy as Markdown. Done.',
@@ -529,6 +529,67 @@ const dict = {
     'ws.invite.expires': 'Expires',
     'ws.invite.decline': 'Decline',
     'ws.invite.accept': 'Accept invitation',
+
+    // ── Playbook view tabs ──
+    'playbook.view.list': 'List',
+    'playbook.view.kanban': 'Kanban',
+    'playbook.view.calendar': 'Calendar',
+    'playbook.view.gantt': 'Gantt',
+    'playbook.view.cpm': 'CPM',
+    'playbook.view.mindmap': 'Mind map',
+    'playbook.view.hierarchy': 'Hierarchy',
+    'playbook.view.flowchart': 'Flowchart',
+    'playbook.view.slides': 'Slides',
+    'playbook.view.list.tooltip': 'List view',
+    'playbook.view.kanban.tooltip': 'Kanban view',
+    'playbook.view.calendar.tooltip': 'Calendar view',
+    'playbook.view.gantt.tooltip': 'Gantt view',
+    'playbook.view.cpm.tooltip': 'CPM view',
+    'playbook.view.mindmap.tooltip': 'Mind map view',
+    'playbook.view.hierarchy.tooltip': 'Hierarchy view',
+    'playbook.view.flowchart.tooltip': 'Flowchart view',
+    'playbook.view.slides.tooltip': 'Slides view',
+
+    // ── Common actions ──
+    'common.save': 'Save',
+    'common.saveChanges': 'Save changes',
+    'common.cancel': 'Cancel',
+    'common.close': 'Close',
+    'common.delete': 'Delete',
+    'common.edit': 'Edit',
+    'common.loading': 'Loading...',
+    'common.generating': 'Generating...',
+
+    // ── Playbook actions ──
+    'playbook.editContent': 'Edit content',
+    'playbook.favorite': 'Favorite',
+    'playbook.save': 'Save',
+    'playbook.savePdf': 'Save PDF',
+    'playbook.mustBePersistedToSave': 'To save progress, this extraction must be saved in history.',
+    'playbook.saveFailedTryAgain': 'Could not save. Please try again.',
+    'playbook.saveContentEditFailed': 'Could not save the content edit.',
+
+    // ── Calendar ──
+    'calendar.prevMonth': 'Previous month',
+    'calendar.nextMonth': 'Next month',
+    'calendar.unscheduled': 'Unscheduled',
+    'calendar.allUnscheduledEmpty': 'All tasks are unscheduled.',
+    'calendar.clickToSchedule': 'Click to schedule',
+
+    // ── Schedule modal ──
+    'schedule.title': 'Schedule task',
+    'schedule.start': 'Start',
+    'schedule.end': 'End',
+    'schedule.clearDates': 'Clear dates',
+    'schedule.save': 'Save',
+    'schedule.cancel': 'Cancel',
+    'schedule.invalidRange': 'End date must be on or after start date.',
+
+    // ── Task notes / links ──
+    'task.note.save': 'Save note',
+    'task.note.placeholder': 'Write a note...',
+    'task.link.saveError': 'Could not save the link.',
+    'task.note.saveError': 'Could not save the note.',
   },
   es: {
     // ── nav ──
@@ -582,7 +643,7 @@ const dict = {
     'landing.hero.headline1': 'Deja de ver,',
     'landing.hero.headline2': 'empieza a ejecutar.',
     'landing.hero.sub':
-      'Pega una URL de YouTube y obtén un plan de acción estructurado, resumen ejecutivo, ideas de negocio o frases clave — con Claude AI — en segundos.',
+      'Pega un enlace de YouTube, sube un PDF o documento de Word, o agrega texto plano para obtener un plan de acción estructurado, resumen ejecutivo, ideas de negocio o frases clave en segundos.',
     'landing.hero.cta': 'Comenzar gratis',
     'landing.hero.signin': '¿Ya tienes cuenta?',
     'landing.hero.signinLink': 'Inicia sesión',
@@ -591,10 +652,10 @@ const dict = {
     'landing.how.title': 'Cómo funciona',
     'landing.how.step1.title': 'Pega cualquier URL',
     'landing.how.step1.desc':
-      'Video de YouTube, artículo web o sube un archivo. Extraemos el contenido completo automáticamente.',
+      'Video de YouTube, artículo web, PDF, documento de Word o texto plano. Extraemos el contenido completo automáticamente.',
     'landing.how.step2.title': 'La IA extrae la acción',
     'landing.how.step2.desc':
-      'Claude AI lee la transcripción completa y la estructura en el formato que eliges.',
+      'Nuestra IA analiza todo el contenido y lo estructura en el formato que eliges.',
     'landing.how.step3.title': 'Exporta y ejecuta',
     'landing.how.step3.desc':
       'Un clic a Notion, Trello, Todoist o Google Docs. Copia como Markdown. Listo.',
@@ -1051,6 +1112,67 @@ const dict = {
     'ws.invite.expires': 'Expira',
     'ws.invite.decline': 'Rechazar',
     'ws.invite.accept': 'Aceptar invitación',
+
+    // ── Playbook view tabs ──
+    'playbook.view.list': 'Lista',
+    'playbook.view.kanban': 'Kanban',
+    'playbook.view.calendar': 'Calendario',
+    'playbook.view.gantt': 'Gantt',
+    'playbook.view.cpm': 'CPM',
+    'playbook.view.mindmap': 'Mapa',
+    'playbook.view.hierarchy': 'Estructura',
+    'playbook.view.flowchart': 'Proceso',
+    'playbook.view.slides': 'Slides',
+    'playbook.view.list.tooltip': 'Vista de lista',
+    'playbook.view.kanban.tooltip': 'Vista Kanban',
+    'playbook.view.calendar.tooltip': 'Vista Calendario',
+    'playbook.view.gantt.tooltip': 'Vista Gantt',
+    'playbook.view.cpm.tooltip': 'Vista CPM',
+    'playbook.view.mindmap.tooltip': 'Vista mapa',
+    'playbook.view.hierarchy.tooltip': 'Vista estructura',
+    'playbook.view.flowchart.tooltip': 'Vista proceso',
+    'playbook.view.slides.tooltip': 'Vista slides',
+
+    // ── Common actions ──
+    'common.save': 'Guardar',
+    'common.saveChanges': 'Guardar cambios',
+    'common.cancel': 'Cancelar',
+    'common.close': 'Cerrar',
+    'common.delete': 'Eliminar',
+    'common.edit': 'Editar',
+    'common.loading': 'Cargando...',
+    'common.generating': 'Generando...',
+
+    // ── Playbook actions ──
+    'playbook.editContent': 'Editar contenido',
+    'playbook.favorite': 'Favorito',
+    'playbook.save': 'Guardar',
+    'playbook.savePdf': 'Guardar PDF',
+    'playbook.mustBePersistedToSave': 'Para guardar el avance necesitas una extracción persistida en historial.',
+    'playbook.saveFailedTryAgain': 'No se pudo guardar. Intenta de nuevo.',
+    'playbook.saveContentEditFailed': 'No se pudo guardar la edición del contenido.',
+
+    // ── Calendar ──
+    'calendar.prevMonth': 'Mes anterior',
+    'calendar.nextMonth': 'Mes siguiente',
+    'calendar.unscheduled': 'Sin fecha',
+    'calendar.allUnscheduledEmpty': 'Todas las tareas están sin fecha.',
+    'calendar.clickToSchedule': 'Clic para programar',
+
+    // ── Schedule modal ──
+    'schedule.title': 'Programar tarea',
+    'schedule.start': 'Inicio',
+    'schedule.end': 'Fin',
+    'schedule.clearDates': 'Quitar fecha',
+    'schedule.save': 'Guardar',
+    'schedule.cancel': 'Cancelar',
+    'schedule.invalidRange': 'La fecha de fin debe ser igual o posterior a la de inicio.',
+
+    // ── Task notes / links ──
+    'task.note.save': 'Guardar nota',
+    'task.note.placeholder': 'Escribe una nota...',
+    'task.link.saveError': 'No se pudo guardar el enlace.',
+    'task.note.saveError': 'No se pudo guardar la nota.',
   },
 } as const
 

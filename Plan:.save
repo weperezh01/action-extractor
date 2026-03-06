@@ -1,0 +1,1082 @@
+
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Plan: Roadmap de Funcionalidades — Action Extractor (ROI)
+
+ Contexto
+
+ El análisis profundo del codebase revela una app con infraestructura avanzada (community, tasks,
+ sharing, chat) que no está completamente expuesta en la UI. El producto tiene todos los cimientos
+ para ser una herramienta de productividad de primer nivel, pero le faltan features clave de
+ retención, monetización y reducción de fricción.
+
+ Stack: Next.js 14 App Router, TypeScript, PostgreSQL (pg pool), Claude SDK
+ Dev: Docker con hot reload en https://roi.welltechnologies.net
+
+ ---
+ Tier 1 — Alto Impacto / Gaps Centrales
+
+ T1.1 — Dashboard de Progreso Personal ("Mi ROI")
+
+ Problema: El usuario no percibe el valor acumulado. No sabe cuántas tareas completó, cuánto tiempo
+ "ahorró", ni sus patrones de uso.
+ Solución: Página /app/dashboard con KPIs (playbooks generados, tareas completadas, tiempo ahorrado),
+  heatmap de actividad tipo GitHub, breakdown por modo.
+ Reutiliza: extractions, extraction_tasks, ai_usage_log (ya tiene costo por usuario)
+ Nuevo endpoint: GET /api/account/stats
+ Esfuerzo: ~4 días
+
+ T1.2 — Batch: Extraer Múltiples Fuentes a la Vez
+
+ Problema: El usuario con 5 videos de una conferencia debe extraerlos uno por uno.
+ Solución: Input que acepta hasta 5 URLs/archivos. Frontend encola y ejecuta secuencialmente usando
+ POST /api/extract/stream existente. Queue visual con estado por ítem. Selector de carpeta destino.
+ Reutiliza: POST /api/extract/stream (sin cambios en backend), extraction_folders
+ Esfuerzo: ~3 días (100% frontend)
+
+ T1.3 — Nuevo Modo: "Mapa Conceptual"
+
+ Problema: Los 4 modos actuales son lineales. Contenido educativo/conceptual necesita un árbol de
+ ideas, no un plan de ejecución.
+ Solución: Nuevo modo concept_map en ExtractionMode. Nuevo system prompt en lib/extract-core.ts. La
+ estructura PlaybookNode ya soporta jerarquía — solo cambia el prompt y el renderizado.
+ Archivos: lib/extract-core.ts, lib/extraction-modes.ts, ResultPanel.tsx
+ Esfuerzo: ~2 días (principalmente prompt engineering)
+
+ T1.4 — Planes de Pago por Tiers (Stripe)
+
+ Problema: Todos los usuarios tienen el mismo flat quota. Sin monetización, el crecimiento de
+ usuarios es un costo puro.
+ Solución:
+ - Nueva tabla user_plans: user_id, plan (free/pro/business), extractions_per_hour,
+ stripe_subscription_id, valid_until
+ - Modificar resolveExtractionRateLimitPerHour() en lib/rate-limit.ts para leer de user_plans primero
+ - Plan Free: 12/hr | Pro ~$15/mes: 60/hr + batch | Business ~$49/mes: 200/hr + API pública
+ - Stripe Checkout + webhooks para activar/desactivar
+ Tablas nuevas: user_plans, stripe_events
+ Esfuerzo: ~1 semana
+
+ T1.5 — Extracción de Playlists de YouTube
+
+ Problema: Solo se procesa un video a la vez. Usuarios heavy-use quieren procesar todo un
+ canal/playlist.
+ Solución: lib/source-detector.ts detecta URLs de playlist. Nueva función que usa YouTube Data API v3
+  para obtener IDs. Se integra con la queue de batch (T1.2). Auto-crea carpeta con nombre de la
+ playlist.
+ Reutiliza: video_cache (videos cacheados no cuestan tokens), batch queue de T1.2
+ Dependencia: YouTube Data API v3 key (gratuita hasta 10k requests/día)
+ Esfuerzo: ~4 días
+
+ T1.6 — Re-extracción Multi-Modo desde el Historial
+
+ Problema: Sacarle 4 perspectivas a un video requiere 5 pasos manuales. Desde el historial no hay
+ botón de re-extracción.
+ Solución: Añadir "Re-extraer como..." al menú de acciones de cada ítem en HistoryPanel.tsx. Carga la
+  URL/contenido, cambia el modo, lanza extracción. Asigna automáticamente a la misma carpeta del
+ original.
+ Archivos: HistoryPanel.tsx, lógica en app/(main)/app/page.tsx
+ Esfuerzo: ~1 día
+
+ ---
+ Tier 2 — Engagement y Retención
+
+ T2.1 — Tablero Kanban para Tareas del Playbook
+
+ Problema: Las tablas extraction_tasks tienen toda la infraestructura (status, due_at, position_path)
+  pero la UI solo muestra lista.
+ Solución: Toggle "Lista / Kanban" en ResultPanel. 4 columnas por status. Drag & drop via dnd-kit
+ actualiza status en PATCH /api/extractions/[id]/tasks/[taskId] existente.
+ Reutiliza: extraction_tasks, extraction_task_events, el endpoint PATCH existente
+ Esfuerzo: ~4 días
+
+ T2.2 — Tags Libres en Playbooks
+
+ Problema: Con 50+ playbooks, las carpetas anidadas son laberínticas. Los tags permiten dimensión
+ ortogonal.
+ Solución: Tablas extraction_tags y extraction_tag_assignments. Chip input en ResultPanel e
+ HistoryPanel. Filtro por tag en panel lateral.
+ Tablas nuevas: extraction_tags, extraction_tag_assignments
+ Rutas nuevas: GET/POST /api/tags, POST/DELETE /api/extractions/[id]/tags
+ Esfuerzo: ~3 días
+
+ T2.3 — Notificaciones por Email para Actividad Colaborativa
+
+ Problema: El sistema de compartición es rico pero silencioso. Nadie sabe cuando un colaborador
+ cambia el estado de una tarea.
+ Solución: Tabla notification_preferences. Al cambiar estado de tarea o comentar en playbook
+ compartido, enviar email via Resend (ya configurado). Modo "daily digest" para evitar spam.
+ Tablas nuevas: notification_preferences, notification_queue
+ Reutiliza: Resend (ya configurado para password reset)
+ Esfuerzo: ~3 días
+
+ T2.4 — Chat de Conocimiento con Múltiples Conversaciones
+
+ Problema: chat_conversations tiene user_id UNIQUE — solo 1 conversación por usuario. Todo se mezcla.
+ Solución: Remover constraint UNIQUE. Agregar context_type (global/folder/extraction) y context_id.
+ UI muestra lista de conversaciones. Prompt del sistema se adapta al contexto.
+ Archivos: lib/db.ts (INIT_SQL), app/api/chat/ask/route.ts, KnowledgeChat.tsx
+ Esfuerzo: ~2 días
+
+ T2.5 — Panel de Consumo de IA por Usuario
+
+ Problema: Admin puede ver costos en /admin. Los usuarios no ven su propio consumo. ai_usage_log
+ tiene la data pero solo el admin la usa.
+ Solución: Sección en /settings con cards: llamadas totales, tokens, costo estimado, tiempo ahorrado.
+  Gráfico de uso por día (últimos 30 días).
+ Reutiliza: ai_usage_log (ya tiene user_id), extractions.metadata_json.savedTime
+ Nuevo endpoint: GET /api/account/usage
+ Esfuerzo: ~2 días
+
+ T2.6 — Atajos de Teclado
+
+ Problema: Sin shortcuts, la herramienta no es eficiente para uso diario.
+ Solución: Hook useKeyboardShortcuts(). Atajos: Cmd+K (foco input), Cmd+Enter (extraer), 1-4 (cambiar
+  modo), Cmd+D (PDF), Cmd+Shift+C (markdown), ? (ayuda).
+ Archivos: nuevo useKeyboardShortcuts.ts, app/(main)/app/page.tsx
+ Esfuerzo: ~2 días
+
+ ---
+ Tier 3 — Crecimiento y Monetización
+
+ T3.1 — API Pública para Desarrolladores (Plan Business)
+
+ Tabla api_keys. Endpoint POST /api/v1/extract con Authorization: Bearer. Panel en /settings para
+ gestionar keys. Documentación en /docs/api.
+ Esfuerzo: ~1 semana
+
+ T3.2 — Workspaces de Equipo
+
+ Tablas workspaces y workspace_members. Las extracciones pueden pertenecer a un workspace. Pool de
+ rate limit compartido. Prerequisito para vender a empresas.
+ Esfuerzo: ~2 semanas (cambio de modelo de datos significativo)
+
+ T3.3 — Extensión de Navegador (Chrome/Firefox)
+
+ Manifest V3. Detecta YouTube automáticamente. Llama a POST /api/extract/stream. Popup con resultado
+ y "Abrir en app completa". Autenticación via cookie compartida o API key.
+ Esfuerzo: ~2 semanas
+
+ T3.4 — Integraciones con Linear / GitHub Issues / Jira
+
+ Mismo patrón de *_connections que Notion/Trello/Todoist. Fases → ciclos/milestones, ítems →
+ issues/tasks. Abre segmento de desarrolladores y PMs.
+ Esfuerzo: ~1 semana por integración
+
+ ---
+ Quick Wins (< 1 día cada uno)
+
+ ┌──────┬────────────────────────┬───────────────────────────────────────────────────────────────┐
+ │  #   │        Feature         │                            Detalle                            │
+ ├──────┼────────────────────────┼───────────────────────────────────────────────────────────────┤
+ │ QW.1 │ Indicador de rate      │ Badge "X de 12 disponibles" usando datos que ya llegan en     │
+ │      │ limit en header        │ useAuth. 4 horas.                                             │
+ ├──────┼────────────────────────┼───────────────────────────────────────────────────────────────┤
+ │ QW.2 │ Favoritos / Estrella   │ Columna is_starred en extractions. Botón estrella en          │
+ │      │                        │ historial + ResultPanel. Filtro "Mis favoritos". 1 día.       │
+ ├──────┼────────────────────────┼───────────────────────────────────────────────────────────────┤
+ │ QW.3 │ Copiar fase individual │ Opción "Copiar esta fase" en menú ... de cada fase en         │
+ │      │  como markdown         │ ResultPanel. 3 horas.                                         │
+ ├──────┼────────────────────────┼───────────────────────────────────────────────────────────────┤
+ │ QW.4 │ Pantalla completa para │ Botón en ResultPanel usa Fullscreen API del navegador. 3      │
+ │      │  lectura               │ horas.                                                        │
+ ├──────┼────────────────────────┼───────────────────────────────────────────────────────────────┤
+ │ QW.5 │ Exportar historial     │ GET /api/account/export → descarga directa. Botón en          │
+ │      │ como CSV/JSON          │ /settings. 1 día.                                             │
+ └──────┴────────────────────────┴───────────────────────────────────────────────────────────────┘
+
+ ---
+ Orden de Ejecución Recomendado (próximo mes)
+
+ 1. Semana 1: Quick Wins QW.1–QW.5 (valor inmediato, sin dependencias)
+ 2. Semana 2: T1.6 + T1.3 + T2.6 (extienden lo existente, sin cambios de DB)
+ 3. Semana 3: T2.4 + T2.5 + T1.2 Batch (T1.2 prerequisito para T1.5)
+ 4. Semana 4: T1.4 Monetización Stripe (crítico para sostenibilidad)
+ 5. Mes 2+: T1.1 Dashboard, T1.5 Playlists, T2.1 Kanban, T2.2 Tags, T2.3 Notificaciones
+ 6. Mes 3+: T3.1 API, T3.3 Extensión, T3.2 Workspaces
+
+ ---
+ Archivos Críticos
+
+ ┌──────────────────────────────────────┬─────────────────────────────────────────────────────────┐
+ │               Archivo                │                       Relevancia                        │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ lib/db.ts                            │ Schema central — todas las tablas nuevas van aquí via   │
+ │                                      │ INIT_SQL                                                │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ lib/extract-core.ts                  │ Prompts de IA — nuevo modo concept_map va aquí          │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ lib/rate-limit.ts                    │ resolveExtractionRateLimitPerHour() — modificar para    │
+ │                                      │ leer de user_plans                                      │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ app/home/components/HistoryPanel.tsx │ T1.6, QW.2 — menú de acciones por ítem                  │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ app/home/components/ResultPanel.tsx  │ T2.1 Kanban, QW.3, QW.4 — vistas del playbook           │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ app/(main)/app/page.tsx              │ Orquestador — T1.2 queue, T2.6 shortcuts, QW.1 badge    │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ lib/extraction-modes.ts              │ Agregar concept_map al enum y labels                    │
+ └──────────────────────────────────────┴─────────────────────────────────────────────────────────┘
+
+ ---
+ Verificación
+
+ Para validar cualquier feature implementado:
+ 1. docker logs -f action-extractor — observar hot reload y errores
+ 2. Abrir https://roi.welltechnologies.net — probar en navegador
+ 3. Para cambios de DB: verificar que el DB_INIT_SIGNATURE en lib/db.ts fue actualizado (fuerza
+ re-init del schema)
+ 4. Para nuevos endpoints: probar con curl o el panel de Admin
+
+
+
+
+
+
+
+
+
+
+
+ Implemented Features
+
+  Quick Wins (Week 1)
+
+  QW.1 — Rate Limit Badge in Header
+  - New state rateLimitUsed / rateLimitTotal in page.tsx
+  - useEffect fetches GET /api/account/rate-limit on login
+  - Badge shows "X / Y" with color coding: green (ok), amber (low), red (critical ≤2)
+  - Counter increments after each non-cached extraction
+  - New endpoint app/api/account/rate-limit/route.ts already existed from prior session
+
+  QW.2 — Favorites / Star
+  - is_starred BOOLEAN NOT NULL DEFAULT FALSE column added to extractions table
+  - DB_INIT_SIGNATURE bumped to '2026-02-27-starred-v1'
+  - setExtractionStarredForUser() function in lib/db.ts
+  - New endpoint PATCH /api/extractions/[extractionId]/star with { starred: boolean } body
+  - Star button in ResultPanel.tsx (top action bar) — filled amber when starred
+  - Star button in HistoryPanel.tsx — with onStarItem callback wired in page.tsx
+  - "Mis favoritos" filter toggle in HistoryPanel.tsx
+  - mapHistoryItemToResult updated to carry isStarred
+
+  QW.3 — Copy Phase as Markdown
+  - "Copiar fase" button added to the bottom of each expanded phase section in ResultPanel.tsx
+  - Uses handleCopyPhase() which formats ## Title + - item lines
+  - Shows "Copiado" with green checkmark for 2 seconds after click
+
+  QW.4 — Fullscreen Reading Mode
+  - "Ampliar" / "Reducir" button in ResultPanel.tsx header
+  - Uses Fullscreen API on panelRef (root div of ResultPanel)
+  - fullscreenchange event listener keeps isFullscreen state in sync
+
+  QW.5 — Export History as CSV/JSON
+  - New endpoint GET /api/account/export?format=json|csv
+  - "Exportar Historial" section added to /settings page with download links
+
+  Week 2
+
+  T1.3 — Mapa Conceptual Mode
+  - concept_map added to ExtractionMode type in lib/extraction-modes.ts
+  - New system + user prompts in lib/extract-core.ts for concept tree extraction
+  - Mode appears in the mode selector UI
+
+  T1.6 — Re-extract from History
+  - "Re-extraer como..." section in HistoryPanel.tsx expanded actions panel
+  - Shows mode buttons for all other modes (not the current one)
+  - Wired via onReExtractMode prop in page.tsx → closes drawer, scrolls to extractor, starts
+  extraction
+
+
+
+
+
+
+● Sí, todo eso fue implementado en sesiones anteriores. Déjame verificar rápidamente que los archivos
+  clave existan:
+
+● Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● Todo confirmado. Sí, todo fue implementado:
+
+  ┌────────────────────────────────┬────────┬─────────────────────────────────────────────────────┐
+  │            Feature             │ Estado │                     Verificado                      │
+  ├────────────────────────────────┼────────┼─────────────────────────────────────────────────────┤
+  │ QW.1 Rate limit badge          │ ✅     │ app/api/account/rate-limit/route.ts existe          │
+  ├────────────────────────────────┼────────┼─────────────────────────────────────────────────────┤
+  │ QW.2 Favoritos / estrella      │ ✅     │ star/route.ts existe + is_starred en db.ts          │
+  ├────────────────────────────────┼────────┼─────────────────────────────────────────────────────┤
+  │ QW.3 Copiar fase como markdown │ ✅     │ En ResultPanel.tsx (sesión anterior)                │
+  ├────────────────────────────────┼────────┼─────────────────────────────────────────────────────┤
+  │ QW.4 Pantalla completa         │ ✅     │ En ResultPanel.tsx (sesión anterior)                │
+  ├────────────────────────────────┼────────┼─────────────────────────────────────────────────────┤
+  │ QW.5 Exportar CSV/JSON         │ ✅     │ account/export/route.ts existe                      │
+  ├────────────────────────────────┼────────┼─────────────────────────────────────────────────────┤
+  │ T1.3 Mapa Conceptual           │ ✅     │ concept_map en extraction-modes.ts                  │
+  ├────────────────────────────────┼────────┼─────────────────────────────────────────────────────┤
+  │ T1.6 Re-extraer desde          │ ✅     │ onReExtractMode en HistoryPanel.tsx (5              │
+  │ historial                      │        │ coincidencias)                                      │
+  ├────────────────────────────────┼────────┼─────────────────────────────────────────────────────┤
+  │ T2.6 Atajos de teclado         │ ✅     │ lib/hooks/useKeyboardShortcuts.ts existe            │
+  ├────────────────────────────────┼────────┼─────────────────────────────────────────────────────┤
+  │ T2.4 Chat multi-conversación   │ ✅     │ Implementado en esta sesión                         │
+  └────────────────────────────────┴────────┴─────────────────────────────────────────────────────┘
+
+  Lo que queda del plan (Semana 3-4):
+  - T2.5 — Panel de consumo de IA en /settings
+  - T1.2 — Batch extraction (múltiples URLs)
+  - T1.4 — Stripe / planes de pago
+
+
+
+
+
+
+
+
+● Todo compilando limpio. Esto es lo que se implementó en T2.6:
+
+  ---
+  T2.6 — Atajos de Teclado ✅
+
+  Archivos creados/modificados:
+
+  ┌────────────────────────────────────────────────┬───────────────────────────────────────────┐
+  │                    Archivo                     │                  Cambio                   │
+  ├────────────────────────────────────────────────┼───────────────────────────────────────────┤
+  │ lib/hooks/useKeyboardShortcuts.ts              │ Hook con toda la lógica de atajos         │
+  ├────────────────────────────────────────────────┼───────────────────────────────────────────┤
+  │ app/home/components/KeyboardShortcutsModal.tsx │ Modal de ayuda con lista de atajos        │
+  ├────────────────────────────────────────────────┼───────────────────────────────────────────┤
+  │ app/home/components/ExtractionForm.tsx         │ data-extraction-input="true" al input URL │
+  ├────────────────────────────────────────────────┼───────────────────────────────────────────┤
+  │ app/(main)/app/page.tsx                        │ Hook wired up + modal + botón ? en nav    │
+  └────────────────────────────────────────────────┴───────────────────────────────────────────┘
+
+  Atajos disponibles:
+
+  ┌────────────────┬───────────────────────────────────────────────────────────────────────┐
+  │     Atajo      │                                Acción                                 │
+  ├────────────────┼───────────────────────────────────────────────────────────────────────┤
+  │ ⌘/Ctrl + K     │ Enfocar el campo de entrada (y selecciona el texto)                   │
+  ├────────────────┼───────────────────────────────────────────────────────────────────────┤
+  │ ⌘/Ctrl + ↵     │ Iniciar extracción                                                    │
+  ├────────────────┼───────────────────────────────────────────────────────────────────────┤
+  │ 1 – 5          │ Cambiar modo (fuera de inputs): plan → resumen → ideas → citas → mapa │
+  ├────────────────┼───────────────────────────────────────────────────────────────────────┤
+  │ ⌘/Ctrl + D     │ Descargar PDF (solo si hay resultado)                                 │
+  ├────────────────┼───────────────────────────────────────────────────────────────────────┤
+  │ ⌘/Ctrl + ⇧ + C │ Copiar como Markdown (solo si hay resultado)                          │
+  ├────────────────┼───────────────────────────────────────────────────────────────────────┤
+  │ ?              │ Abrir modal de ayuda                                                  │
+  └────────────────┴───────────────────────────────────────────────────────────────────────┘
+
+  El botón ? aparece en el nav de escritorio junto a Configuración. El modal detecta automáticamente
+  Mac vs PC para mostrar ⌘ o Ctrl.
+
+
+
+
+
+
+
+
+
+● Siguiendo el orden del roadmap, estamos en Semana 3:
+
+  ✅ T2.4 — Chat Multi-Conversación (listo)
+
+  Quedan dos más de esta semana:
+
+  ---
+  T2.5 — Panel de Consumo de IA
+
+  Sección en /settings con:
+  - Tarjetas: llamadas totales, tokens usados, costo estimado, tiempo ahorrado
+  - Gráfico de uso por día (últimos 30 días)
+  - Nuevo endpoint GET /api/account/usage
+  - Reutiliza ai_usage_log que ya tiene user_id, tokens, costo
+
+  ~2 días estimado
+
+  ---
+  T1.2 — Batch: Extraer Múltiples Fuentes
+
+  - Input que acepta hasta 5 URLs/archivos
+  - Queue visual con estado por ítem (pendiente / procesando / listo / error)
+  - Ejecuta secuencialmente usando el endpoint existente
+  - Selector de carpeta destino
+  - 100% frontend, sin cambios de backend
+
+  ~3 días estimado
+
+
+
+
+
+
+
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Plan: T1.4 — Monetización con Stripe
+
+ Contexto
+
+ Agregar planes de pago por tiers al Action Extractor. El usuario ya tiene cuenta Stripe pero
+ sin productos configurados. Se usará Stripe Checkout (redirect) como flujo de pago.
+
+ Planes:
+
+ ┌──────────┬─────────┬───────────────────┐
+ │   Plan   │ Precio  │ Extracciones/hora │
+ ├──────────┼─────────┼───────────────────┤
+ │ Free     │ $0      │ 12 (default env)  │
+ ├──────────┼─────────┼───────────────────┤
+ │ Pro      │ $15/mes │ 60                │
+ ├──────────┼─────────┼───────────────────┤
+ │ Business │ $49/mes │ 200               │
+ └──────────┴─────────┴───────────────────┘
+
+ Stack: Next.js 14 App Router, TypeScript, PostgreSQL (pg pool)
+ Nuevo paquete: stripe npm package
+
+ ---
+ Paso 0 — Setup previo en Stripe Dashboard (usuario hace esto manualmente)
+
+ 1. Crear producto "Pro" → precio recurrente $15/mes → copiar Price ID
+ 2. Crear producto "Business" → precio recurrente $49/mes → copiar Price ID
+ 3. Agregar vars en docker-stack/docker-compose.yaml (servicio action-extractor):
+ STRIPE_SECRET_KEY=sk_test_...
+ STRIPE_WEBHOOK_SECRET=whsec_...
+ STRIPE_PRICE_PRO_MONTHLY=price_...
+ STRIPE_PRICE_BUSINESS_MONTHLY=price_...
+ 4. Para webhooks en dev: stripe listen --forward-to
+ https://roi.welltechnologies.net/api/stripe/webhook
+
+ ---
+ Paso 1 — Instalar Stripe SDK
+
+ docker compose exec action-extractor npm install stripe
+
+ ---
+ Paso 2 — DB (lib/db.ts)
+
+ DB_INIT_SIGNATURE → '2026-02-28-stripe-v1'
+
+ Nuevas ALTERs y tablas en INIT_SQL:
+ -- Agregar stripe_customer_id a users
+ ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
+ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_stripe_customer_id
+   ON users(stripe_customer_id) WHERE stripe_customer_id IS NOT NULL;
+
+ -- Tabla de planes por usuario
+ CREATE TABLE IF NOT EXISTS user_plans (
+   id TEXT PRIMARY KEY,
+   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+   plan TEXT NOT NULL DEFAULT 'free',           -- 'free' | 'pro' | 'business'
+   extractions_per_hour INTEGER NOT NULL DEFAULT 12,
+   stripe_subscription_id TEXT,
+   stripe_price_id TEXT,
+   status TEXT NOT NULL DEFAULT 'active',       -- 'active' | 'canceled' | 'past_due'
+   current_period_start TIMESTAMPTZ,
+   current_period_end TIMESTAMPTZ,
+   canceled_at TIMESTAMPTZ,
+   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ );
+ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_plans_user_active
+   ON user_plans(user_id) WHERE status = 'active';
+ CREATE INDEX IF NOT EXISTS idx_user_plans_stripe_sub
+   ON user_plans(stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL;
+
+ -- Log de eventos Stripe (idempotencia)
+ CREATE TABLE IF NOT EXISTS stripe_events (
+   id TEXT PRIMARY KEY,
+   event_type TEXT NOT NULL,
+   user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+   processed BOOLEAN NOT NULL DEFAULT FALSE,
+   raw_json TEXT NOT NULL,
+   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ );
+ CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_events(event_type);
+
+ Nuevas funciones DB (lib/db.ts):
+ - getUserActivePlan(userId) → SELECT FROM user_plans WHERE user_id=$1 AND status='active' LIMIT 1
+ - getUserPlanRateLimit(userId) → async: llama getUserActivePlan, retorna extractions_per_hour o
+ resolveExtractionRateLimitPerHour() si no hay plan
+ - upsertUserActivePlan(input: { userId, plan, extractionsPerHour, subscriptionId, priceId,
+ periodStart, periodEnd }) → INSERT ... ON CONFLICT(user_id) WHERE status='active' DO UPDATE
+ - deactivateUserPlan(userId, subscriptionId) → UPDATE user_plans SET status='canceled',
+ canceled_at=NOW()
+ - setUserStripeCustomerId(userId, stripeCustomerId) → UPDATE users SET stripe_customer_id=$2
+ - getUserByStripeCustomerId(stripeCustomerId) → SELECT FROM users WHERE stripe_customer_id=$1
+ - logStripeEvent(id, eventType, userId, rawJson) → INSERT INTO stripe_events ON CONFLICT DO NOTHING
+
+ ---
+ Paso 3 — Stripe client (lib/stripe.ts, nuevo)
+
+ import Stripe from 'stripe'
+
+ if (!process.env.STRIPE_SECRET_KEY) {
+   throw new Error('STRIPE_SECRET_KEY is not set')
+ }
+
+ export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+   apiVersion: '2024-06-20',
+ })
+
+ export const PLAN_PRICE_IDS = {
+   pro: process.env.STRIPE_PRICE_PRO_MONTHLY ?? '',
+   business: process.env.STRIPE_PRICE_BUSINESS_MONTHLY ?? '',
+ }
+
+ export const PLAN_LIMITS: Record<string, number> = {
+   free: 12,   // will be overridden by resolveExtractionRateLimitPerHour() at runtime
+   pro: 60,
+   business: 200,
+ }
+
+ export function planFromPriceId(priceId: string): 'pro' | 'business' | null {
+   if (priceId === PLAN_PRICE_IDS.pro) return 'pro'
+   if (priceId === PLAN_PRICE_IDS.business) return 'business'
+   return null
+ }
+
+ ---
+ Paso 4 — Modificar lib/rate-limit.ts
+
+ consumeUserExtractionRateLimit(userId) y getUserExtractionRateLimitSnapshot(userId) actualmente
+ llaman resolveExtractionRateLimitPerHour(). Cambiar a llamar getUserPlanRateLimit(userId):
+
+ // Antes:
+ const limit = resolveExtractionRateLimitPerHour()
+
+ // Después (en ambas funciones):
+ const limit = await getUserPlanRateLimit(userId)  // importado de lib/db
+
+ ---
+ Paso 5 — API Routes
+
+ POST /api/stripe/checkout/route.ts
+
+ 1. Auth requerida
+ 2. Body: { planId: 'pro' | 'business' }
+ 3. Obtener priceId de PLAN_PRICE_IDS[planId]
+ 4. Buscar si user tiene stripe_customer_id → usar como customer, si no usar customer_email
+ 5. stripe.checkout.sessions.create({ mode:'subscription', line_items, success_url, cancel_url,
+ metadata: { userId } })
+ 6. Retornar { url: session.url }
+
+ POST /api/stripe/portal/route.ts
+
+ 1. Auth requerida
+ 2. Requiere que user tenga stripe_customer_id
+ 3. stripe.billingPortal.sessions.create({ customer, return_url })
+ 4. Retornar { url }
+
+ POST /api/stripe/webhook/route.ts
+
+ - NO auth — valida con firma Stripe
+ - export const runtime = 'nodejs'
+ - Leer body como texto: const rawBody = await req.text()
+ - stripe.webhooks.constructEvent(rawBody, sig, STRIPE_WEBHOOK_SECRET)
+ - Eventos:
+   - checkout.session.completed:
+       - Obtener subscription via stripe.subscriptions.retrieve(session.subscription)
+     - setUserStripeCustomerId(userId, session.customer)
+     - upsertUserActivePlan({ userId, plan, extractionsPerHour, subscriptionId, priceId, ... })
+   - customer.subscription.updated:
+       - Buscar userId via getUserByStripeCustomerId(event.data.object.customer)
+     - Actualizar estado del plan
+   - customer.subscription.deleted:
+       - deactivateUserPlan(userId, subscriptionId)
+ - Log idempotente con logStripeEvent
+
+ GET /api/account/plan/route.ts
+
+ 1. Auth requerida
+ 2. getUserActivePlan(userId) → si null, retornar plan free
+ 3. Retorna: { plan, extractionsPerHour, status, currentPeriodEnd, hasStripeCustomer }
+
+ ---
+ Paso 6 — UI
+
+ app/pricing/page.tsx (nuevo, Server Component)
+
+ - 3 cards: Free / Pro / Business
+ - Botones: "Actual" (plan corriente), "Upgrade" (POST checkout → redirect), "Gestionar" (POST portal
+  → redirect)
+ - Precios, features por tier, CTA clara
+ - Link al navbar en page.tsx: "Precios" (solo visible para usuarios logueados)
+
+ app/settings/SettingsPageClient.tsx
+
+ - Nueva sección "Plan Actual" entre "Perfil" y "Consumo Actual"
+ - Llama GET /api/account/plan al cargar
+ - Muestra: badge con plan, extracciones/hora, renovación
+ - Botón "Cambiar plan" → /pricing
+ - Botón "Gestionar facturación" → POST /api/stripe/portal → redirect (solo si tiene customer)
+
+ ---
+ Archivos críticos
+
+ ┌─────────────────────────────────────┬──────────────────────────────────────────────────────────┐
+ │               Archivo               │                          Acción                          │
+ ├─────────────────────────────────────┼──────────────────────────────────────────────────────────┤
+ │ lib/db.ts                           │ ALTER users, 3 nuevas tablas, 7 nuevas funciones         │
+ ├─────────────────────────────────────┼──────────────────────────────────────────────────────────┤
+ │ lib/rate-limit.ts                   │ 2 funciones usan getUserPlanRateLimit en lugar de        │
+ │                                     │ resolveExtractionRateLimitPerHour                        │
+ ├─────────────────────────────────────┼──────────────────────────────────────────────────────────┤
+ │ lib/stripe.ts                       │ NUEVO — cliente singleton + helpers                      │
+ ├─────────────────────────────────────┼──────────────────────────────────────────────────────────┤
+ │ app/api/stripe/checkout/route.ts    │ NUEVO                                                    │
+ ├─────────────────────────────────────┼──────────────────────────────────────────────────────────┤
+ │ app/api/stripe/portal/route.ts      │ NUEVO                                                    │
+ ├─────────────────────────────────────┼──────────────────────────────────────────────────────────┤
+ │ app/api/stripe/webhook/route.ts     │ NUEVO                                                    │
+ ├─────────────────────────────────────┼──────────────────────────────────────────────────────────┤
+ │ app/api/account/plan/route.ts       │ NUEVO                                                    │
+ ├─────────────────────────────────────┼──────────────────────────────────────────────────────────┤
+ │ app/pricing/page.tsx                │ NUEVO                                                    │
+ ├─────────────────────────────────────┼──────────────────────────────────────────────────────────┤
+ │ app/settings/SettingsPageClient.tsx │ Sección Plan Actual                                      │
+ ├─────────────────────────────────────┼──────────────────────────────────────────────────────────┤
+ │ app/(main)/app/page.tsx             │ Link "Precios" en navbar                                 │
+ └─────────────────────────────────────┴──────────────────────────────────────────────────────────┘
+
+ ---
+ Verificación
+
+ 1. Crear productos en Stripe Dashboard → copiar Price IDs → agregar al docker-compose
+ 2. docker compose exec action-extractor npm install stripe
+ 3. Rebuild imagen dev si es necesario
+ 4. Navegar a /pricing → click "Upgrade Pro"
+ 5. Completar pago test con tarjeta 4242 4242 4242 4242
+ 6. Verificar redirect a /app?upgrade=success
+ 7. Ir a /settings → Plan debe mostrar "Pro · 60/hr"
+ 8. Comprobar extracción respeta nuevo límite
+ 9. "Gestionar facturación" → cancelar → plan vuelve a Free
+
+ Tier 1 — Alto Impacto / Gaps Centrales
+
+ T1.1 — Dashboard de Progreso Personal ("Mi ROI")
+
+ Problema: El usuario no percibe el valor acumulado. No sabe cuántas tareas completó, cuánto tiempo
+ "ahorró", ni sus patrones de uso.
+ Solución: Página /app/dashboard con KPIs (playbooks generados, tareas completadas, tiempo ahorrado),
+  heatmap de actividad tipo GitHub, breakdown por modo.
+ Reutiliza: extractions, extraction_tasks, ai_usage_log (ya tiene costo por usuario)
+ Nuevo endpoint: GET /api/account/stats
+ Esfuerzo: ~4 días
+
+ T1.2 — Batch: Extraer Múltiples Fuentes a la Vez
+
+ Problema: El usuario con 5 videos de una conferencia debe extraerlos uno por uno.
+ Solución: Input que acepta hasta 5 URLs/archivos. Frontend encola y ejecuta secuencialmente usando
+ POST /api/extract/stream existente. Queue visual con estado por ítem. Selector de carpeta destino.
+ Reutiliza: POST /api/extract/stream (sin cambios en backend), extraction_folders
+ Esfuerzo: ~3 días (100% frontend)
+
+ T1.3 — Nuevo Modo: "Mapa Conceptual"
+
+ Problema: Los 4 modos actuales son lineales. Contenido educativo/conceptual necesita un árbol de
+ ideas, no un plan de ejecución.
+ Solución: Nuevo modo concept_map en ExtractionMode. Nuevo system prompt en lib/extract-core.ts. La
+ estructura PlaybookNode ya soporta jerarquía — solo cambia el prompt y el renderizado.
+ Archivos: lib/extract-core.ts, lib/extraction-modes.ts, ResultPanel.tsx
+ Esfuerzo: ~2 días (principalmente prompt engineering)
+
+ T1.4 — Planes de Pago por Tiers (Stripe)
+
+ Problema: Todos los usuarios tienen el mismo flat quota. Sin monetización, el crecimiento de
+ usuarios es un costo puro.
+ Solución:
+ - Nueva tabla user_plans: user_id, plan (free/pro/business), extractions_per_hour,
+ stripe_subscription_id, valid_until
+ - Modificar resolveExtractionRateLimitPerHour() en lib/rate-limit.ts para leer de user_plans primero
+ - Plan Free: 12/hr | Pro ~$15/mes: 60/hr + batch | Business ~$49/mes: 200/hr + API pública
+ - Stripe Checkout + webhooks para activar/desactivar
+ Tablas nuevas: user_plans, stripe_events
+ Esfuerzo: ~1 semana
+
+ T1.5 — Extracción de Playlists de YouTube
+
+ Problema: Solo se procesa un video a la vez. Usuarios heavy-use quieren procesar todo un
+ canal/playlist.
+ Solución: lib/source-detector.ts detecta URLs de playlist. Nueva función que usa YouTube Data API v3
+  para obtener IDs. Se integra con la queue de batch (T1.2). Auto-crea carpeta con nombre de la
+ playlist.
+ Reutiliza: video_cache (videos cacheados no cuestan tokens), batch queue de T1.2
+ Dependencia: YouTube Data API v3 key (gratuita hasta 10k requests/día)
+ Esfuerzo: ~4 días
+
+ T1.6 — Re-extracción Multi-Modo desde el Historial
+
+ Problema: Sacarle 4 perspectivas a un video requiere 5 pasos manuales. Desde el historial no hay
+ botón de re-extracción.
+ Solución: Añadir "Re-extraer como..." al menú de acciones de cada ítem en HistoryPanel.tsx. Carga la
+  URL/contenido, cambia el modo, lanza extracción. Asigna automáticamente a la misma carpeta del
+ original.
+ Archivos: HistoryPanel.tsx, lógica en app/(main)/app/page.tsx
+ Esfuerzo: ~1 día
+
+ ---
+ Tier 2 — Engagement y Retención
+
+ T2.1 — Tablero Kanban para Tareas del Playbook
+
+ Problema: Las tablas extraction_tasks tienen toda la infraestructura (status, due_at, position_path)
+  pero la UI solo muestra lista.
+ Solución: Toggle "Lista / Kanban" en ResultPanel. 4 columnas por status. Drag & drop via dnd-kit
+ actualiza status en PATCH /api/extractions/[id]/tasks/[taskId] existente.
+ Reutiliza: extraction_tasks, extraction_task_events, el endpoint PATCH existente
+ Esfuerzo: ~4 días
+
+ T2.2 — Tags Libres en Playbooks
+
+ Problema: Con 50+ playbooks, las carpetas anidadas son laberínticas. Los tags permiten dimensión
+ ortogonal.
+ Solución: Tablas extraction_tags y extraction_tag_assignments. Chip input en ResultPanel e
+ HistoryPanel. Filtro por tag en panel lateral.
+ Tablas nuevas: extraction_tags, extraction_tag_assignments
+ Rutas nuevas: GET/POST /api/tags, POST/DELETE /api/extractions/[id]/tags
+ Esfuerzo: ~3 días
+
+ T2.3 — Notificaciones por Email para Actividad Colaborativa
+
+ Problema: El sistema de compartición es rico pero silencioso. Nadie sabe cuando un colaborador
+ cambia el estado de una tarea.
+ Solución: Tabla notification_preferences. Al cambiar estado de tarea o comentar en playbook
+ compartido, enviar email via Resend (ya configurado). Modo "daily digest" para evitar spam.
+ Tablas nuevas: notification_preferences, notification_queue
+ Reutiliza: Resend (ya configurado para password reset)
+ Esfuerzo: ~3 días
+
+ T2.4 — Chat de Conocimiento con Múltiples Conversaciones
+
+ Problema: chat_conversations tiene user_id UNIQUE — solo 1 conversación por usuario. Todo se mezcla.
+ Solución: Remover constraint UNIQUE. Agregar context_type (global/folder/extraction) y context_id.
+ UI muestra lista de conversaciones. Prompt del sistema se adapta al contexto.
+ Archivos: lib/db.ts (INIT_SQL), app/api/chat/ask/route.ts, KnowledgeChat.tsx
+ Esfuerzo: ~2 días
+
+ T2.5 — Panel de Consumo de IA por Usuario
+
+ Problema: Admin puede ver costos en /admin. Los usuarios no ven su propio consumo. ai_usage_log
+ tiene la data pero solo el admin la usa.
+ Solución: Sección en /settings con cards: llamadas totales, tokens, costo estimado, tiempo ahorrado.
+  Gráfico de uso por día (últimos 30 días).
+ Reutiliza: ai_usage_log (ya tiene user_id), extractions.metadata_json.savedTime
+ Nuevo endpoint: GET /api/account/usage
+ Esfuerzo: ~2 días
+
+ T2.6 — Atajos de Teclado
+
+ Problema: Sin shortcuts, la herramienta no es eficiente para uso diario.
+ Solución: Hook useKeyboardShortcuts(). Atajos: Cmd+K (foco input), Cmd+Enter (extraer), 1-4 (cambiar
+  modo), Cmd+D (PDF), Cmd+Shift+C (markdown), ? (ayuda).
+ Archivos: nuevo useKeyboardShortcuts.ts, app/(main)/app/page.tsx
+ Esfuerzo: ~2 días
+
+ ---
+ Tier 3 — Crecimiento y Monetización
+
+ T3.1 — API Pública para Desarrolladores (Plan Business)
+
+ Tabla api_keys. Endpoint POST /api/v1/extract con Authorization: Bearer. Panel en /settings para
+ gestionar keys. Documentación en /docs/api.
+ Esfuerzo: ~1 semana
+
+ T3.2 — Workspaces de Equipo
+
+ Tablas workspaces y workspace_members. Las extracciones pueden pertenecer a un workspace. Pool de
+ rate limit compartido. Prerequisito para vender a empresas.
+ Esfuerzo: ~2 semanas (cambio de modelo de datos significativo)
+
+ T3.3 — Extensión de Navegador (Chrome/Firefox)
+
+ Manifest V3. Detecta YouTube automáticamente. Llama a POST /api/extract/stream. Popup con resultado
+ y "Abrir en app completa". Autenticación via cookie compartida o API key.
+ Esfuerzo: ~2 semanas
+
+ T3.4 — Integraciones con Linear / GitHub Issues / Jira
+
+ Mismo patrón de *_connections que Notion/Trello/Todoist. Fases → ciclos/milestones, ítems →
+ issues/tasks. Abre segmento de desarrolladores y PMs.
+ Esfuerzo: ~1 semana por integración
+
+ ---
+ Quick Wins (< 1 día cada uno)
+
+ ┌──────┬────────────────────────┬───────────────────────────────────────────────────────────────┐
+ │  #   │        Feature         │                            Detalle                            │
+ ├──────┼────────────────────────┼───────────────────────────────────────────────────────────────┤
+ │ QW.1 │ Indicador de rate      │ Badge "X de 12 disponibles" usando datos que ya llegan en     │
+ │      │ limit en header        │ useAuth. 4 horas.                                             │
+ ├──────┼────────────────────────┼───────────────────────────────────────────────────────────────┤
+ │ QW.2 │ Favoritos / Estrella   │ Columna is_starred en extractions. Botón estrella en          │
+ │      │                        │ historial + ResultPanel. Filtro "Mis favoritos". 1 día.       │
+ ├──────┼────────────────────────┼───────────────────────────────────────────────────────────────┤
+ │ QW.3 │ Copiar fase individual │ Opción "Copiar esta fase" en menú ... de cada fase en         │
+ │      │  como markdown         │ ResultPanel. 3 horas.                                         │
+ ├──────┼────────────────────────┼───────────────────────────────────────────────────────────────┤
+ │ QW.4 │ Pantalla completa para │ Botón en ResultPanel usa Fullscreen API del navegador. 3      │
+ │      │  lectura               │ horas.                                                        │
+ ├──────┼────────────────────────┼───────────────────────────────────────────────────────────────┤
+ │ QW.5 │ Exportar historial     │ GET /api/account/export → descarga directa. Botón en          │
+ │      │ como CSV/JSON          │ /settings. 1 día.                                             │
+ └──────┴────────────────────────┴───────────────────────────────────────────────────────────────┘
+
+ ---
+ Orden de Ejecución Recomendado (próximo mes)
+
+ 1. Semana 1: Quick Wins QW.1–QW.5 (valor inmediato, sin dependencias)
+ 2. Semana 2: T1.6 + T1.3 + T2.6 (extienden lo existente, sin cambios de DB)
+ 3. Semana 3: T2.4 + T2.5 + T1.2 Batch (T1.2 prerequisito para T1.5)
+ 4. Semana 4: T1.4 Monetización Stripe (crítico para sostenibilidad)
+ 5. Mes 2+: T1.1 Dashboard, T1.5 Playlists, T2.1 Kanban, T2.2 Tags, T2.3 Notificaciones
+ 6. Mes 3+: T3.1 API, T3.3 Extensión, T3.2 Workspaces
+
+ ---
+ Archivos Críticos
+
+ ┌──────────────────────────────────────┬─────────────────────────────────────────────────────────┐
+ │               Archivo                │                       Relevancia                        │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ lib/db.ts                            │ Schema central — todas las tablas nuevas van aquí via   │
+ │                                      │ INIT_SQL                                                │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ lib/extract-core.ts                  │ Prompts de IA — nuevo modo concept_map va aquí          │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ lib/rate-limit.ts                    │ resolveExtractionRateLimitPerHour() — modificar para    │
+ │                                      │ leer de user_plans                                      │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ app/home/components/HistoryPanel.tsx │ T1.6, QW.2 — menú de acciones por ítem                  │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ app/home/components/ResultPanel.tsx  │ T2.1 Kanban, QW.3, QW.4 — vistas del playbook           │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ app/(main)/app/page.tsx              │ Orquestador — T1.2 queue, T2.6 shortcuts, QW.1 badge    │
+ ├──────────────────────────────────────┼─────────────────────────────────────────────────────────┤
+ │ lib/extraction-modes.ts              │ Agregar concept_map al enum y labels                    │
+ └──────────────────────────────────────┴─────────────────────────────────────────────────────────┘
+
+ ---
+ Verificación
+
+ Para validar cualquier feature implementado:
+ 1. docker logs -f action-extractor — observar hot reload y errores
+ 2. Abrir https://roi.welltechnologies.net — probar en navegador
+ 3. Para cambios de DB: verificar que el DB_INIT_SIGNATURE en lib/db.ts fue actualizado (fuerza
+ re-init del schema)
+ 4. Para nuevos endpoints: probar con curl o el panel de Admin
+
+
+
+
+  T1.4 — Monetización con Stripe ✓
+
+  Archivos creados/modificados
+
+  ┌─────────────────────────────────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │               Archivo               │                                                                      Cambio                                                                       │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ lib/db.ts                           │ DB_INIT_SIGNATURE → '2026-02-28-stripe-v1'; nuevas tablas user_plans + stripe_events + ALTER users para stripe_customer_id; 7 nuevas funciones DB │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ lib/stripe.ts                       │ NUEVO — cliente singleton Stripe, PLAN_PRICE_IDS, PLAN_LIMITS, planFromPriceId()                                                                  │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ lib/rate-limit.ts                   │ consumeUserExtractionRateLimit y getUserExtractionRateLimitSnapshot ahora usan getUserPlanRateLimit(userId) en lugar del env var fijo             │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ app/api/stripe/checkout/route.ts    │ NUEVO — POST, crea Stripe Checkout Session                                                                                                        │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ app/api/stripe/portal/route.ts      │ NUEVO — POST, abre Stripe Billing Portal                                                                                                          │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ app/api/stripe/webhook/route.ts     │ NUEVO — POST, procesa checkout.session.completed, subscription.updated/deleted                                                                    │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ app/api/account/plan/route.ts       │ NUEVO — GET, retorna plan activo del usuario                                                                                                      │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ app/pricing/page.tsx                │ NUEVO — Página de precios con 3 cards (Free / Pro / Business)                                                                                     │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ app/settings/SettingsPageClient.tsx │ Nueva sección "Plan Actual" con badge, límite y botones                                                                                           │
+  ├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ app/(main)/app/page.tsx             │ Link "Planes" en la navbar                                                                                                                        │
+  └─────────────────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  Próximos pasos manuales (Paso 0 del plan)
+
+  1. En Stripe Dashboard: crear productos Pro ($15/mes) y Business ($49/mes) → copiar Price IDs
+  2. Agregar en docker-stack/docker-compose.yaml (servicio action-extractor):
+  STRIPE_SECRET_KEY: sk_test_...
+  STRIPE_WEBHOOK_SECRET: whsec_...
+  STRIPE_PRICE_PRO_MONTHLY: price_...
+  STRIPE_PRICE_BUSINESS_MONTHLY: price_...
+  3. Configurar webhook en Stripe Dashboard apuntando a https://roi.welltechnologies.net/api/stripe/webhook
+  4. Para dev local: stripe listen --forward-to 	https://roi.welltechnologies.net/api/stripe/webhook
+
+
+  Eventos a seleccionar
+
+  ┌───────────┬───────────────────────────────┐
+  │ Categoría │            Evento             │
+  ├───────────┼───────────────────────────────┤
+  │ Checkout  │ checkout.session.completed    │
+  ├───────────┼───────────────────────────────┤
+  │ Customer  │ customer.subscription.updated │
+  ├───────────┼───────────────────────────────┤
+  │ Customer  │ customer.subscription.deleted │
+  └───────────┴───────────────────────────────┘
+
+  ---
+  Pasos
+
+  1. Cambia de "All events" → "Selected events"
+  2. En el buscador escribe checkout.session.completed → selecciónalo
+  3. Busca customer.subscription.updated → selecciónalo
+  4. Busca customer.subscription.deleted → selecciónalo
+  5. Click Continue
+  6. En el siguiente paso elige "Webhook endpoint"
+  7. URL: https://roi.welltechnologies.net/api/stripe/webhook
+  8. Stripe te dará el Webhook Secret (whsec_...) → cópialo para el docker-compose
+
+
+
+
+
+  Contexto: Escalera de valor actual
+
+  ┌──────────┬─────────┬─────────────────┬──────────────────────┐
+  │   Plan   │ Precio  │ Extracciones/hr │  Ratio valor/precio  │
+  ├──────────┼─────────┼─────────────────┼──────────────────────┤
+  │ Free     │ $0      │ 12              │ —                    │
+  ├──────────┼─────────┼─────────────────┼──────────────────────┤
+  │ Nuevo    │ $5/mes  │ ?               │ ?                    │
+  ├──────────┼─────────┼─────────────────┼──────────────────────┤
+  │ Pro      │ $15/mes │ 60              │ $0.25/extracción·hr  │
+  ├──────────┼─────────┼─────────────────┼──────────────────────┤
+  │ Business │ $49/mes │ 200             │ $0.245/extracción·hr │
+  └──────────┴─────────┴─────────────────┴──────────────────────┘
+
+  El plan de $5 tiene que cumplir dos funciones opuestas:
+  1. Convertir usuarios Free → debe ofrecer algo que duela perder cuando se vence
+  2. No canibalizar Pro → un usuario "power user" debe seguir necesitando el salto a $15
+
+  ---
+  Propuesta: Plan "Starter" — $5/mes
+
+  Límite central: 25 extracciones/hora
+
+  Lógica: Free→Starter es ×2.1x de capacidad por $5. Starter→Pro es ×2.4x por $10 más. La curva es consistente y motiva el upgrade.
+
+  Tabla completa de limitaciones
+
+  ┌───────────────────────────┬───────────┬────────────┬──────────┬──────────────┐
+  │         Dimensión         │   Free    │ Starter $5 │ Pro $15  │ Business $49 │
+  ├───────────────────────────┼───────────┼────────────┼──────────┼──────────────┤
+  │ Extracciones/hora         │ 12        │ 25         │ 60       │ 200          │
+  ├───────────────────────────┼───────────┼────────────┼──────────┼──────────────┤
+  │ Modos disponibles         │ Todos (5) │ Todos (5)  │ Todos    │ Todos        │
+  ├───────────────────────────┼───────────┼────────────┼──────────┼──────────────┤
+  │ Batch (multi-URL)         │ ✗         │ ✗          │ ✓        │ ✓            │
+  ├───────────────────────────┼───────────┼────────────┼──────────┼──────────────┤
+  │ Exportar integraciones    │ ✓         │ ✓          │ ✓        │ ✓            │
+  ├───────────────────────────┼───────────┼────────────┼──────────┼──────────────┤
+  │ Carpetas                  │ ✓         │ ✓          │ ✓        │ ✓            │
+  ├───────────────────────────┼───────────┼────────────┼──────────┼──────────────┤
+  │ Chat de conocimiento      │ ✓         │ ✓          │ ✓        │ ✓            │
+  ├───────────────────────────┼───────────┼────────────┼──────────┼──────────────┤
+  │ Historial de extracciones │ Completo  │ Completo   │ Completo │ Completo     │
+  ├───────────────────────────┼───────────┼────────────┼──────────┼──────────────┤
+  │ Compartir playbooks       │ ✓         │ ✓          │ ✓        │ ✓            │
+  ├───────────────────────────┼───────────┼────────────┼──────────┼──────────────┤
+  │ Badge "Starter"           │ —         │ ✓          │ —        │ —            │
+  ├───────────────────────────┼───────────┼────────────┼──────────┼──────────────┤
+  │ Soporte prioritario       │ ✗         │ ✗          │ ✓        │ ✓            │
+  └───────────────────────────┴───────────┴────────────┴──────────┴──────────────┘
+
+  Razonamiento de cada decisión
+
+  Modos: todos incluidos — Restringir modos en $5 se siente mezquino y frustrante. El valor está en la frecuencia, no en el tipo de uso.
+
+  Batch: excluido — El batch es una feature de productividad profesional. Excluirla en Starter crea una razón clara para el salto a Pro ($15), sin que el usuario de $5 se sienta "bloqueado" en el uso cotidiano.
+
+  Historial: completo — Reducir el historial genera fricción de retención (el usuario pierde trabajo pasado). Malo para LTV.
+
+  Soporte prioritario: excluido — Es un diferenciador legítimo de Pro que no tiene costo de implementación explícito hoy.
+
+
+
+
+
+
+
+
+
+
+  Panel de Admin — Gestión de Planes
+
+  Qué puedes hacer en /admin/plans
+
+  Tabla 1 — Escalera de Valor:
+
+  ┌─────────────────────┬───────────────────────────────────────┐
+  │        Campo        │               Editable                │
+  ├─────────────────────┼───────────────────────────────────────┤
+  │ Nombre visible      │ ✓ inline                              │
+  ├─────────────────────┼───────────────────────────────────────┤
+  │ Precio / mes        │ ✓ inline                              │
+  ├─────────────────────┼───────────────────────────────────────┤
+  │ Extracciones / hora │ ✓ inline                              │
+  ├─────────────────────┼───────────────────────────────────────┤
+  │ Stripe Price ID     │ ✓ inline                              │
+  ├─────────────────────┼───────────────────────────────────────┤
+  │ Orden de aparición  │ ✓ inline                              │
+  ├─────────────────────┼───────────────────────────────────────┤
+  │ Activo / Inactivo   │ ✓ checkbox                            │
+  ├─────────────────────┼───────────────────────────────────────┤
+  │ Agregar plan nuevo  │ ✓ formulario                          │
+  ├─────────────────────┼───────────────────────────────────────┤
+  │ Eliminar plan       │ ✓ (solo planes nuevos, no los 3 base) │
+  └─────────────────────┴───────────────────────────────────────┘
+
+  Tabla 2 — Limitaciones por Plan:
+  - Celdas clickeables (toggle ✓ / ✗) para cada feature × plan
+  - Las celdas modificadas se resaltan en amarillo
+  - Botón "Guardar" por columna (por plan), con botón "Revertir" si hay cambios sin guardar
+  - Features: Batch, Exportar, Carpetas, Chat IA, Mapa Conceptual, Soporte prioritario, API
+
+  Flujo completo
+
+  1. Entras a /admin → click "Gestionar planes" (botón indigo en el header)
+  2. En Tabla 1: editas precio, extr./hora y el Stripe Price ID que copiaste del dashboard
+  3. En Tabla 2: activas/desactivas features por plan → Guardar por columna
+  4. /pricing lee los planes desde la DB automáticamente — los cambios se reflejan al instante
+  5. El checkout usa el Stripe Price ID de la DB (ya no necesitas env vars para los Price IDs)
+
+
+
+
+
+  Completado:
+  - QW.2 Favoritos · QW.5 Export CSV/JSON · QW.6 Atajos de teclado
+  - T1.2 Batch · T1.3 Mapa Conceptual · T1.4 Stripe · T2.4 Chat multi-conversaciones · T2.5 Consumo de
+  IA
+
+  Pendiente:
+
+  ┌──────┬────────────────────────────────────────────┬──────────┐
+  │  #   │                  Feature                   │ Esfuerzo │
+  ├──────┼────────────────────────────────────────────┼──────────┤
+  │ QW.1 │ Badge de rate limit en el header           │ 4 horas  │
+  ├──────┼────────────────────────────────────────────┼──────────┤
+  │ QW.3 │ Copiar fase individual como markdown       │ 3 horas  │
+  ├──────┼────────────────────────────────────────────┼──────────┤
+  │ QW.4 │ Pantalla completa para lectura             │ 3 horas  │
+  ├──────┼────────────────────────────────────────────┼──────────┤
+  │ T1.1 │ Dashboard "Mi ROI" (/app/dashboard)        │ ~4 días  │
+  ├──────┼────────────────────────────────────────────┼──────────┤
+  │ T1.5 │ Playlists de YouTube                       │ ~4 días  │
+  ├──────┼────────────────────────────────────────────┼──────────┤
+  │ T1.6 │ Re-extraer en otro modo desde el historial │ ~1 día   │
+  ├──────┼────────────────────────────────────────────┼──────────┤
+  │ T2.1 │ Kanban para tareas del playbook            │ ~4 días  │
+  ├──────┼────────────────────────────────────────────┼──────────┤
+  │ T2.2 │ Tags libres en playbooks                   │ ~3 días  │
+  ├──────┼────────────────────────────────────────────┼──────────┤
+  │ T2.3 │ Notificaciones por email (colaboración)    │ ~3 días  │
+  └──────┴────────────────────────────────────────────┴──────────┘

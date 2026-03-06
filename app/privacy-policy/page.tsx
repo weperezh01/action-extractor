@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 
 export const metadata: Metadata = {
-  title: 'Política de Privacidad | Roi Action Extractor App',
-  description: 'Política de privacidad temporal para Roi Action Extractor App.',
+  title: 'Política de Privacidad | Notes Aide',
+  description: 'Política de privacidad temporal para Notes Aide.',
 }
 
 export default function PrivacyPolicyPage() {
@@ -14,7 +14,7 @@ export default function PrivacyPolicyPage() {
         <h1 className="text-3xl font-bold tracking-tight mb-6">Política de Privacidad (Temporal)</h1>
 
         <p className="text-slate-700 leading-relaxed mb-5">
-          Esta política describe cómo Roi Action Extractor App recopila, usa y protege la información de los usuarios.
+          Esta política describe cómo Notes Aide recopila, usa y protege la información de los usuarios.
           Este documento es temporal y será reemplazado por una versión legal final.
         </p>
 

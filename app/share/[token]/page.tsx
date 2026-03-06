@@ -14,7 +14,7 @@ import { SharePageContent } from './SharePageContent'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const DEFAULT_APP_URL = 'https://roi.welltechnologies.net'
+const DEFAULT_APP_URL = 'https://notesaide.com'
 const DEFAULT_SHARE_DESCRIPTION =
   'Shared Result – Roi Action Extractor. Convierte videos de YouTube en planes accionables.'
 const DEFAULT_SOCIAL_IMAGE = '/roi-logo.png'
@@ -134,6 +134,7 @@ function mapSharedTasksToInteractiveTasks(
     scheduledEndAt: task.scheduled_end_at,
     durationDays: task.duration_days,
     predecessorIds: [],
+    flowNodeType: (task.flow_node_type ?? 'process') as 'process' | 'decision',
     createdAt: task.created_at,
     updatedAt: task.updated_at,
     events: task.events.map((event) => ({

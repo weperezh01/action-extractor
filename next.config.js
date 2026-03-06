@@ -1,5 +1,10 @@
 const isDevelopment = process.env.NODE_ENV !== 'production'
 
+const withBundleAnalyzer =
+  process.env.ANALYZE === 'true'
+    ? require('@next/bundle-analyzer')({ enabled: true })
+    : (config) => config
+
 const SECURITY_HEADERS = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'X-Frame-Options', value: 'DENY' },
@@ -26,12 +31,19 @@ const SECURITY_HEADERS = [
     ].join('; '),
   },
 ]
+
+const createNextIntlPlugin = require('next-intl/plugin')
+const withNextIntl = createNextIntlPlugin('./i18n/request.ts')
+
 const { withSentryConfig } = require('@sentry/nextjs')
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
+  experimental: {
+    serverComponentsExternalPackages: ['pdf-parse', 'mammoth'],
+  },
   images: {
     remotePatterns: [
       {
@@ -66,7 +78,9 @@ const nextConfig = {
   },
 }
 
-const sentryConfig = withSentryConfig(nextConfig, {
+const withNextIntlConfig = withNextIntl(nextConfig)
+
+const sentryConfig = withSentryConfig(withNextIntlConfig, {
   silent: true,
   telemetry: false,
   webpack: {
@@ -76,4 +90,6 @@ const sentryConfig = withSentryConfig(nextConfig, {
   },
 })
 
-module.exports = isDevelopment ? nextConfig : sentryConfig
+module.exports = isDevelopment
+  ? withBundleAnalyzer(withNextIntlConfig)
+  : withBundleAnalyzer(sentryConfig)

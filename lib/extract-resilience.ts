@@ -6,6 +6,7 @@ import {
   YoutubeTranscriptTooManyRequestError,
   YoutubeTranscriptVideoUnavailableError,
 } from '@danielxceron/youtube-transcript'
+import { YoutubeTranscriptTemporarilyUnavailableError } from '@/lib/youtube-transcript-fallback'
 
 const DEFAULT_MAX_ATTEMPTS = 3
 const DEFAULT_BASE_DELAY_MS = 1200
@@ -160,11 +161,41 @@ export function classifyTranscriptError(error: unknown): ExtractionUserFacingErr
     }
   }
 
+  if (error instanceof YoutubeTranscriptTemporarilyUnavailableError) {
+    const languages =
+      error.availableLanguages.length > 0 ? ` (detected: ${error.availableLanguages.join(', ')})` : ''
+    const fallbackNote = error.audioFallbackAttempted
+      ? ' Automatic audio fallback was attempted but did not succeed.'
+      : ' Automatic audio fallback is not configured on this server.'
+    return {
+      status: 503,
+      retryable: true,
+      message:
+        `YouTube has captions for this video${languages}, but transcript downloads are temporarily blocked from the server.${fallbackNote} Wait 2-5 minutes and try again.`,
+    }
+  }
+
+  if (error instanceof YoutubeTranscriptEmptyError) {
+    return {
+      status: 503,
+      retryable: true,
+      message:
+        'YouTube returned an empty transcript payload. This is usually temporary. Wait 2-5 minutes and try again.',
+    }
+  }
+
+  if (error instanceof YoutubeTranscriptNotAvailableLanguageError) {
+    return {
+      status: 422,
+      retryable: false,
+      message:
+        'Captions exist, but not in a supported language for this request. Try another video or subtitles language.',
+    }
+  }
+
   if (
     error instanceof YoutubeTranscriptDisabledError ||
-    error instanceof YoutubeTranscriptNotAvailableError ||
-    error instanceof YoutubeTranscriptNotAvailableLanguageError ||
-    error instanceof YoutubeTranscriptEmptyError
+    error instanceof YoutubeTranscriptNotAvailableError
   ) {
     return {
       status: 422,

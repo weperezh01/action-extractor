@@ -3,18 +3,11 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 import { Check, X, Plus, Pencil, Trash2, Save, RotateCcw, ChevronUp, ChevronDown } from 'lucide-react'
+import { formatStorageBytes } from '@/lib/storage-limits'
 
 // ── Feature definitions ──────────────────────────────────────────────────────
 
-export const FEATURE_KEYS = [
-  { key: 'batch_extraction',    label: 'Extracción Batch (múltiples URLs)' },
-  { key: 'export_integrations', label: 'Exportar (Notion, Trello, Todoist, Google Docs)' },
-  { key: 'folders',             label: 'Carpetas y organización' },
-  { key: 'knowledge_chat',      label: 'Chat de conocimiento IA' },
-  { key: 'concept_map_mode',    label: 'Modo Mapa Conceptual' },
-  { key: 'priority_support',    label: 'Soporte prioritario' },
-  { key: 'api_access',          label: 'Acceso API pública' },
-] as const
+import { FEATURE_KEYS } from './feature-keys'
 
 type FeatureKey = typeof FEATURE_KEYS[number]['key']
 
@@ -46,6 +39,7 @@ interface DbPlan {
   extractions_per_hour: number
   extractions_per_day: number
   chat_tokens_per_day: number
+  storage_limit_bytes: number
   features_json: string
   is_active: boolean
   display_order: number
@@ -97,7 +91,7 @@ export default function AdminPlansPage() {
 
   // Inline edit state for value ladder table
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [editDraft, setEditDraft] = useState<Partial<DbPlan> & { displayName?: string; priceMonthlyUsd?: number; extractionsPerHour?: number; chatTokensPerDay?: number; stripePriceId?: string | null; isActive?: boolean; displayOrder?: number }>({})
+  const [editDraft, setEditDraft] = useState<Partial<DbPlan> & { displayName?: string; priceMonthlyUsd?: number; extractionsPerHour?: number; chatTokensPerDay?: number; storageLimitBytes?: number; stripePriceId?: string | null; isActive?: boolean; displayOrder?: number }>({})
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
@@ -152,6 +146,7 @@ export default function AdminPlansPage() {
       priceMonthlyUsd: plan.price_monthly_usd,
       extractionsPerHour: plan.extractions_per_hour,
       chatTokensPerDay: plan.chat_tokens_per_day,
+      storageLimitBytes: plan.storage_limit_bytes,
       stripePriceId: plan.stripe_price_id ?? '',
       isActive: plan.is_active,
       displayOrder: plan.display_order,
@@ -175,6 +170,7 @@ export default function AdminPlansPage() {
           priceMonthlyUsd: editDraft.priceMonthlyUsd,
           extractionsPerHour: editDraft.extractionsPerHour,
           chatTokensPerDay: editDraft.chatTokensPerDay,
+          storageLimitBytes: editDraft.storageLimitBytes,
           stripePriceId: editDraft.stripePriceId || null,
           isActive: editDraft.isActive,
           displayOrder: editDraft.displayOrder,
@@ -481,6 +477,7 @@ export default function AdminPlansPage() {
                   <th className="px-4 py-3 text-right font-semibold">Extr./día</th>
                   <th className="px-4 py-3 text-right font-semibold text-slate-400">Extr./hora</th>
                   <th className="px-4 py-3 text-right font-semibold">Tokens chat/día</th>
+                  <th className="px-4 py-3 text-right font-semibold">Almacenamiento</th>
                   <th className="px-4 py-3 text-left font-semibold">Stripe Price ID</th>
                   <th className="px-4 py-3 text-center font-semibold">Orden</th>
                   <th className="px-4 py-3 text-center font-semibold">Activo</th>
@@ -564,6 +561,24 @@ export default function AdminPlansPage() {
                           />
                         ) : (
                           <span className="tabular-nums font-semibold">{plan.chat_tokens_per_day.toLocaleString('es-MX')}</span>
+                        )}
+                      </td>
+
+                      {/* Storage */}
+                      <td className="px-4 py-3 text-right">
+                        {isEditing ? (
+                          <input
+                            type="number"
+                            min={1048576}
+                            step={1048576}
+                            value={editDraft.storageLimitBytes ?? plan.storage_limit_bytes}
+                            onChange={(e) => setEditDraft((d) => ({ ...d, storageLimitBytes: Number(e.target.value) }))}
+                            className="h-8 w-32 rounded border border-indigo-300 bg-white px-2 text-sm text-right dark:border-indigo-700 dark:bg-slate-950 dark:text-slate-100"
+                          />
+                        ) : (
+                          <span className="tabular-nums font-semibold">
+                            {formatStorageBytes(plan.storage_limit_bytes)}
+                          </span>
                         )}
                       </td>
 

@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { YoutubeTranscript } from '@danielxceron/youtube-transcript'
 import { getUserFromRequest } from '@/lib/auth'
 import {
   createExtraction,
@@ -37,6 +36,7 @@ import { resolveVideoPreview } from '@/lib/video-preview'
 import { detectSourceType } from '@/lib/source-detector'
 import { extractWebContent, truncateForAi } from '@/lib/content-extractor'
 import { flattenItemsAsText, normalizePlaybookPhases } from '@/lib/playbook-tree'
+import { fetchYoutubeTranscriptWithFallback } from '@/lib/youtube-transcript-fallback'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -259,6 +259,16 @@ export async function POST(req: NextRequest) {
     const bodySourceType = body?.sourceType
     const bodySourceLabel: string | null =
       typeof body?.sourceLabel === 'string' ? body.sourceLabel : null
+    const bodySourceFileUrl: string | null =
+      typeof body?.sourceFileUrl === 'string' &&
+      (body.sourceFileUrl.startsWith('https://') || body.sourceFileUrl.startsWith('/api/uploads/'))
+        ? body.sourceFileUrl : null
+    const bodySourceFileName: string | null =
+      typeof body?.sourceFileName === 'string' ? body.sourceFileName.slice(0, 500) : null
+    const bodySourceFileSizeBytes: number | null =
+      typeof body?.sourceFileSizeBytes === 'number' && body.sourceFileSizeBytes > 0 ? body.sourceFileSizeBytes : null
+    const bodySourceFileMimeType: string | null =
+      typeof body?.sourceFileMimeType === 'string' ? body.sourceFileMimeType.slice(0, 200) : null
 
     const mode = normalizeExtractionMode(body?.mode)
     const outputLanguage = normalizeExtractionOutputLanguage(body?.outputLanguage)
@@ -380,6 +390,7 @@ export async function POST(req: NextRequest) {
         sourceType,
         sourceLabel: saved.source_label,
         folderId: saved.folder_id,
+        hasSourceText: false,
       })
     }
 
@@ -409,7 +420,7 @@ export async function POST(req: NextRequest) {
 
       if (!transcriptText) {
         try {
-          const segments = await retryWithBackoff(() => YoutubeTranscript.fetchTranscript(videoId!), {
+          const segments = await retryWithBackoff(() => fetchYoutubeTranscriptWithFallback(videoId!), {
             maxAttempts: 3,
             shouldRetry: (transcriptError) => classifyTranscriptError(transcriptError).retryable,
           })
@@ -541,6 +552,9 @@ export async function POST(req: NextRequest) {
       ? (videoPreview.videoTitle ?? bodySourceLabel)
       : (contentTitle ?? bodySourceLabel)
 
+    // Store the full source text for non-YouTube sources (YouTube transcript lives in video_cache)
+    const sourceTextToStore = sourceType !== 'youtube' ? contentText || null : null
+
     const saved = await createExtraction({
       userId: user.id,
       url: rawUrl || null,
@@ -554,6 +568,11 @@ export async function POST(req: NextRequest) {
       metadataJson: JSON.stringify(responsePayload.metadata),
       sourceType,
       sourceLabel: resolvedSourceLabel,
+      sourceText: sourceTextToStore,
+      sourceFileUrl: bodySourceFileUrl,
+      sourceFileName: bodySourceFileName,
+      sourceFileSizeBytes: bodySourceFileSizeBytes,
+      sourceFileMimeType: bodySourceFileMimeType,
     })
     const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
 
@@ -573,6 +592,11 @@ export async function POST(req: NextRequest) {
       sourceType,
       sourceLabel: saved.source_label,
       folderId: saved.folder_id,
+      sourceFileUrl: saved.source_file_url,
+      sourceFileName: saved.source_file_name,
+      sourceFileSizeBytes: saved.source_file_size_bytes,
+      sourceFileMimeType: saved.source_file_mime_type,
+      hasSourceText: !!sourceTextToStore,
     })
   } catch (err: unknown) {
     console.error('[ActionExtractor] extract error:', err)

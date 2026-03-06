@@ -88,15 +88,15 @@ export async function extractPdfContent(
   buffer: Buffer,
   filename: string
 ): Promise<ExtractedContent> {
-  // pdf-parse is CommonJS only, use require
+  // pdf-parse v2 uses PDFParse class with buffer option
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const pdfParse = require('pdf-parse') as (
-    buf: Buffer
-  ) => Promise<{ text: string; info?: { Title?: string } }>
-  const data = await pdfParse(buffer)
+  const { PDFParse } = require('pdf-parse') as {
+    PDFParse: new (opts: { buffer: Buffer }) => { getText(): Promise<{ text: string }> }
+  }
+  const parser = new PDFParse({ data: buffer })
+  const data = await parser.getText()
   const text = (data.text ?? '').replace(/\s{3,}/g, '\n\n').trim()
-  const titleFromMeta = data.info?.Title?.trim() ?? null
-  return { text, title: titleFromMeta || filename, charCount: text.length }
+  return { text, title: filename, charCount: text.length }
 }
 
 export async function extractDocxContent(
@@ -104,7 +104,8 @@ export async function extractDocxContent(
   filename: string
 ): Promise<ExtractedContent> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const mammoth = require('mammoth') as {
+  const mammothModule = require('mammoth')
+  const mammoth = (mammothModule.default ?? mammothModule) as {
     extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }>
   }
   const result = await mammoth.extractRawText({ buffer })

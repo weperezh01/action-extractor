@@ -25,6 +25,10 @@ export interface UploadedFileState {
   text: string
   charCount: number
   sourceLabel: string
+  sourceFileName: string
+  sourceFileSizeBytes: number | null
+  sourceFileMimeType: string | null
+  sourceFileUrl: string | null
 }
 
 interface ExtractionFormProps {
@@ -44,6 +48,7 @@ interface ExtractionFormProps {
   // Manual extraction
   onManualResult: (result: ExtractResult) => void
   onManualToggle?: (open: boolean) => void
+  onSearchToggle?: (open: boolean) => void
   // Public playbook search
   onOpenPublicPlaybook?: (extractionId: string) => Promise<void> | void
 }
@@ -127,6 +132,7 @@ export function ExtractionForm({
   onClearFile,
   onManualResult,
   onManualToggle,
+  onSearchToggle,
   onOpenPublicPlaybook,
 }: ExtractionFormProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -218,6 +224,10 @@ export function ExtractionForm({
   useEffect(() => {
     onManualToggle?.(showManualForm)
   }, [onManualToggle, showManualForm])
+
+  useEffect(() => {
+    onSearchToggle?.(isSearchMode)
+  }, [onSearchToggle, isSearchMode])
 
   useEffect(() => {
     if (!isSearchMode) return

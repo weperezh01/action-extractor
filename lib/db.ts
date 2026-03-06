@@ -53,6 +53,12 @@ export interface DbExtraction {
   folder_id: string | null
   is_starred: boolean
   tags: DbExtractionTag[]
+  source_text: string | null
+  source_file_url: string | null
+  source_file_name: string | null
+  source_file_size_bytes: number | null
+  source_file_mime_type: string | null
+  has_source_text: boolean
 }
 
 export interface DbExtractionFolder {
@@ -322,6 +328,28 @@ export interface DbExtractionTask {
   scheduled_start_at: string | null
   scheduled_end_at: string | null
   duration_days: number
+  flow_node_type: string
+  created_at: string
+  updated_at: string
+}
+
+export interface DbExtractionTaskEdge {
+  id: string
+  extraction_id: string
+  from_task_id: string
+  to_task_id: string
+  edge_type: 'and' | 'xor' | 'loop'
+  label: string | null
+  expected_extra_days: number | null
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+export interface DbExtractionTaskDecisionSelection {
+  extraction_id: string
+  decision_task_id: string
+  selected_to_task_id: string
   created_at: string
   updated_at: string
 }
@@ -536,6 +564,12 @@ interface DbExtractionRow {
   folder_id?: string | null
   is_starred?: boolean | null
   tags_json?: string | null
+  source_text?: string | null
+  source_file_url?: string | null
+  source_file_name?: string | null
+  source_file_size_bytes?: number | null
+  source_file_mime_type?: string | null
+  has_source_text?: boolean | null
 }
 
 interface DbExtractionFolderRow {
@@ -689,6 +723,7 @@ interface DbExtractionTaskRow {
   scheduled_start_at: Date | string | null
   scheduled_end_at: Date | string | null
   duration_days: number | string
+  flow_node_type: string | null
   created_at: Date | string
   updated_at: Date | string
 }
@@ -908,12 +943,19 @@ interface DbAdminUserListRow {
 
 const globalForDb = globalThis as unknown as GlobalDb
 
+const POOL_SHARED_CONFIG = {
+  max: 20,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+}
+
 export const pool =
   globalForDb.__actionExtractorPgPool ??
   new Pool(
     process.env.ACTION_EXTRACTOR_DATABASE_URL
       ? {
           connectionString: process.env.ACTION_EXTRACTOR_DATABASE_URL,
+          ...POOL_SHARED_CONFIG,
         }
       : {
           host: process.env.ACTION_EXTRACTOR_DB_HOST ?? 'postgres-db',
@@ -921,6 +963,7 @@ export const pool =
           database: process.env.ACTION_EXTRACTOR_DB_NAME ?? 'action_extractor_db',
           user: process.env.ACTION_EXTRACTOR_DB_USER ?? 'well',
           password: process.env.ACTION_EXTRACTOR_DB_PASSWORD ?? '',
+          ...POOL_SHARED_CONFIG,
         }
   )
 
@@ -1415,6 +1458,14 @@ const INIT_SQL = `
     PRIMARY KEY (guest_id, window_date)
   );
 
+  CREATE TABLE IF NOT EXISTS login_rate_limits (
+    key          TEXT NOT NULL,
+    window_start TIMESTAMPTZ NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (key, window_start)
+  );
+
   CREATE TABLE IF NOT EXISTS guest_tasks (
     id TEXT PRIMARY KEY,
     guest_id TEXT NOT NULL,
@@ -1721,6 +1772,12 @@ const INIT_SQL = `
 
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL;
 
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_text TEXT;
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_file_url TEXT;
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_file_name TEXT;
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_file_size_bytes INTEGER;
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_file_mime_type TEXT;
+
   CREATE INDEX IF NOT EXISTS idx_workspaces_owner ON workspaces(owner_user_id);
   CREATE INDEX IF NOT EXISTS idx_workspaces_slug ON workspaces(slug);
   CREATE INDEX IF NOT EXISTS idx_workspace_members_user ON workspace_members(user_id);
@@ -1787,9 +1844,81 @@ const INIT_SQL = `
   );
   CREATE INDEX IF NOT EXISTS idx_daily_chat_tokens_user ON daily_chat_token_counts(user_id);
   CREATE INDEX IF NOT EXISTS idx_daily_chat_tokens_date ON daily_chat_token_counts(date);
+
+  -- ── Flowchart / Process Graph ─────────────────────────────────────────────
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS flow_node_type TEXT NOT NULL DEFAULT 'process';
+
+  CREATE TABLE IF NOT EXISTS extraction_task_edges (
+    id TEXT PRIMARY KEY,
+    extraction_id TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+    from_task_id TEXT NOT NULL REFERENCES extraction_tasks(id) ON DELETE CASCADE,
+    to_task_id TEXT NOT NULL REFERENCES extraction_tasks(id) ON DELETE CASCADE,
+    edge_type TEXT NOT NULL DEFAULT 'and',
+    label TEXT,
+    expected_extra_days DOUBLE PRECISION,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (extraction_id, from_task_id, to_task_id, edge_type),
+    CONSTRAINT extraction_task_edges_type_check CHECK (edge_type IN ('and', 'xor', 'loop'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_ete_extraction ON extraction_task_edges(extraction_id);
+  CREATE INDEX IF NOT EXISTS idx_ete_from_task ON extraction_task_edges(from_task_id);
+  CREATE INDEX IF NOT EXISTS idx_ete_to_task ON extraction_task_edges(to_task_id);
+
+  CREATE TABLE IF NOT EXISTS extraction_task_decision_selection (
+    extraction_id TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+    decision_task_id TEXT NOT NULL REFERENCES extraction_tasks(id) ON DELETE CASCADE,
+    selected_to_task_id TEXT NOT NULL REFERENCES extraction_tasks(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (extraction_id, decision_task_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_etds_extraction ON extraction_task_decision_selection(extraction_id);
+
+  CREATE TABLE IF NOT EXISTS extraction_presentations (
+    extraction_id TEXT PRIMARY KEY REFERENCES extractions(id) ON DELETE CASCADE,
+    deck_json TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE TABLE IF NOT EXISTS extraction_presentation_states (
+    extraction_id TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    last_slide_id TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (extraction_id, user_id)
+  );
+
+  -- ── Flowchart custom node positions ─────────────────────────────
+  CREATE TABLE IF NOT EXISTS flow_node_positions (
+    task_id        TEXT NOT NULL REFERENCES extraction_tasks(id) ON DELETE CASCADE,
+    extraction_id  TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+    cx             DOUBLE PRECISION NOT NULL,
+    cy             DOUBLE PRECISION NOT NULL,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (task_id, extraction_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_fnp_extraction ON flow_node_positions(extraction_id);
+
+  -- ── Per-user storage tracking ─────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS user_storage (
+    user_id    TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    used_bytes BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  -- ── Storage limit per plan + per-user admin override ──────────────────────
+  ALTER TABLE plans ADD COLUMN IF NOT EXISTS storage_limit_bytes BIGINT NOT NULL DEFAULT 104857600;
+  -- Seed correct limits for built-in plans only if still at the default (idempotent, respects admin edits)
+  UPDATE plans SET storage_limit_bytes = 104857600   WHERE name = 'free'     AND storage_limit_bytes = 104857600;
+  UPDATE plans SET storage_limit_bytes = 524288000   WHERE name = 'starter'  AND storage_limit_bytes = 104857600;
+  UPDATE plans SET storage_limit_bytes = 2147483648  WHERE name = 'pro'      AND storage_limit_bytes = 104857600;
+  UPDATE plans SET storage_limit_bytes = 10737418240 WHERE name = 'business' AND storage_limit_bytes = 104857600;
+  ALTER TABLE user_storage ADD COLUMN IF NOT EXISTS storage_limit_override_bytes BIGINT;
 `
 
-const DB_INIT_SIGNATURE = '2026-03-02-cpm-v2'
+const DB_INIT_SIGNATURE = '2026-03-04-source-access-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -2036,6 +2165,12 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
         return []
       }
     })(),
+    source_text: row.source_text ?? null,
+    source_file_url: row.source_file_url ?? null,
+    source_file_name: row.source_file_name ?? null,
+    source_file_size_bytes: row.source_file_size_bytes != null ? Number(row.source_file_size_bytes) : null,
+    source_file_mime_type: row.source_file_mime_type ?? null,
+    has_source_text: row.has_source_text === true || !!(row.source_text && row.source_text.length > 0),
   }
 }
 
@@ -2209,6 +2344,7 @@ function mapExtractionTaskRow(row: DbExtractionTaskRow): DbExtractionTask {
     scheduled_start_at: row.scheduled_start_at ? toIso(row.scheduled_start_at) : null,
     scheduled_end_at: row.scheduled_end_at ? toIso(row.scheduled_end_at) : null,
     duration_days: typeof row.duration_days === 'number' ? row.duration_days : (Number.parseInt(String(row.duration_days ?? '1'), 10) || 1),
+    flow_node_type: row.flow_node_type ?? 'process',
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   }
@@ -2647,6 +2783,14 @@ export async function deleteSessionsByUserId(userId: string) {
   await pool.query('DELETE FROM sessions WHERE user_id = $1', [userId])
 }
 
+export async function deleteOtherSessionsByUserId(userId: string, currentTokenHash: string) {
+  await ensureDbReady()
+  await pool.query(
+    'DELETE FROM sessions WHERE user_id = $1 AND token_hash != $2',
+    [userId, currentTokenHash]
+  )
+}
+
 export async function deleteExpiredSessions() {
   await ensureDbReady()
   await pool.query('DELETE FROM sessions WHERE expires_at <= NOW()')
@@ -2665,6 +2809,11 @@ export async function createExtraction(input: {
   metadataJson: string
   sourceType?: string
   sourceLabel?: string | null
+  sourceText?: string | null
+  sourceFileUrl?: string | null
+  sourceFileName?: string | null
+  sourceFileSizeBytes?: number | null
+  sourceFileMimeType?: string | null
 }) {
   await ensureDbReady()
   await ensureDefaultExtractionFoldersForUser(input.userId)
@@ -2690,9 +2839,14 @@ export async function createExtraction(input: {
         metadata_json,
         source_type,
         source_label,
-        folder_id
+        folder_id,
+        source_text,
+        source_file_url,
+        source_file_name,
+        source_file_size_bytes,
+        source_file_mime_type
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
       RETURNING
         id,
         user_id,
@@ -2709,7 +2863,12 @@ export async function createExtraction(input: {
         created_at,
         source_type,
         source_label,
-        folder_id
+        folder_id,
+        source_text,
+        source_file_url,
+        source_file_name,
+        source_file_size_bytes,
+        source_file_mime_type
     `,
     [
       id,
@@ -2726,10 +2885,114 @@ export async function createExtraction(input: {
       sourceType,
       input.sourceLabel ?? null,
       defaultFolderId,
+      input.sourceText ?? null,
+      input.sourceFileUrl ?? null,
+      input.sourceFileName ?? null,
+      input.sourceFileSizeBytes ?? null,
+      input.sourceFileMimeType ?? null,
     ]
   )
 
   return mapExtractionRow(rows[0])
+}
+
+// Returns source metadata for an extraction, checking access permissions.
+// Access is granted if: user is owner, user is a circle member, or visibility is public/unlisted.
+export async function getExtractionSourceData(input: {
+  extractionId: string
+  requestingUserId: string | null
+}): Promise<{
+  sourceType: string
+  sourceLabel: string | null
+  url: string | null
+  videoId: string | null
+  thumbnailUrl: string | null
+  videoTitle: string | null
+  sourceText: string | null
+  sourceFileUrl: string | null
+  sourceFileName: string | null
+  sourceFileSizeBytes: number | null
+  sourceFileMimeType: string | null
+  shareVisibility: ExtractionShareVisibility
+  userId: string
+} | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{
+    id: string
+    user_id: string
+    url: string | null
+    video_id: string | null
+    video_title: string | null
+    thumbnail_url: string | null
+    share_visibility: string | null
+    source_type: string | null
+    source_label: string | null
+    source_text: string | null
+    source_file_url: string | null
+    source_file_name: string | null
+    source_file_size_bytes: number | null
+    source_file_mime_type: string | null
+    has_access: boolean
+  }>(
+    `
+      SELECT
+        e.id,
+        e.user_id,
+        e.url,
+        e.video_id,
+        e.video_title,
+        e.thumbnail_url,
+        e.share_visibility,
+        e.source_type,
+        e.source_label,
+        e.source_text,
+        e.source_file_url,
+        e.source_file_name,
+        e.source_file_size_bytes,
+        e.source_file_mime_type,
+        (
+          e.user_id = $2
+          OR e.share_visibility IN ('public', 'unlisted')
+          OR EXISTS (
+            SELECT 1 FROM extraction_members m
+            WHERE m.extraction_id = e.id AND m.user_id = $2
+          )
+        ) AS has_access
+      FROM extractions e
+      WHERE e.id = $1
+      LIMIT 1
+    `,
+    [input.extractionId, input.requestingUserId ?? '']
+  )
+
+  if (!rows[0] || !rows[0].has_access) return null
+
+  const row = rows[0]
+  return {
+    sourceType: row.source_type ?? 'youtube',
+    sourceLabel: row.source_label ?? null,
+    url: row.url ?? null,
+    videoId: row.video_id ?? null,
+    thumbnailUrl: row.thumbnail_url ?? null,
+    videoTitle: row.video_title ?? null,
+    sourceText: row.source_text ?? null,
+    sourceFileUrl: row.source_file_url ?? null,
+    sourceFileName: row.source_file_name ?? null,
+    sourceFileSizeBytes: row.source_file_size_bytes != null ? Number(row.source_file_size_bytes) : null,
+    sourceFileMimeType: row.source_file_mime_type ?? null,
+    shareVisibility: normalizeExtractionShareVisibility(row.share_visibility),
+    userId: row.user_id,
+  }
+}
+
+// Returns the full transcript for a YouTube video from the shared cache.
+export async function getVideoCacheTranscript(videoId: string): Promise<string | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ transcript_text: string | null }>(
+    `SELECT transcript_text FROM video_cache WHERE video_id = $1 LIMIT 1`,
+    [videoId]
+  )
+  return rows[0]?.transcript_text ?? null
 }
 
 export async function listExtractionsByUser(userId: string, limit = 30) {
@@ -2755,6 +3018,9 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
         ranked.folder_id,
         ranked.order_number,
         ranked.is_starred,
+        ranked.source_file_url,
+        ranked.source_file_name,
+        ranked.has_source_text,
         (
           SELECT COALESCE(
             jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'color', t.color) ORDER BY t.name),
@@ -2783,6 +3049,9 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
           source_label,
           folder_id,
           is_starred,
+          source_file_url,
+          source_file_name,
+          (source_text IS NOT NULL AND source_text <> '') AS has_source_text,
           ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC)::int AS order_number
         FROM extractions
         WHERE user_id = $1
@@ -2858,6 +3127,11 @@ export async function listCircleExtractionsForMember(userId: string, limit = 30)
         e.source_type,
         e.source_label,
         e.folder_id,
+        e.source_file_url,
+        e.source_file_name,
+        e.source_file_size_bytes,
+        e.source_file_mime_type,
+        (e.source_text IS NOT NULL AND e.source_text <> '') AS has_source_text,
         m.role AS access_role,
         owner.name AS owner_name,
         owner.email AS owner_email
@@ -2931,6 +3205,11 @@ export async function listExtractionsSharedViaFoldersForMember(userId: string, l
           e.source_type,
           e.source_label,
           e.folder_id,
+          e.source_file_url,
+          e.source_file_name,
+          e.source_file_size_bytes,
+          e.source_file_mime_type,
+          (e.source_text IS NOT NULL AND e.source_text <> '') AS has_source_text,
           st.root_folder_id,
           st.depth
         FROM extractions e
@@ -2957,6 +3236,11 @@ export async function listExtractionsSharedViaFoldersForMember(userId: string, l
           ve.source_type,
           ve.source_label,
           ve.folder_id,
+          ve.source_file_url,
+          ve.source_file_name,
+          ve.source_file_size_bytes,
+          ve.source_file_mime_type,
+          ve.has_source_text,
           ve.root_folder_id
         FROM visible_extractions ve
         ORDER BY ve.id, ve.depth ASC, ve.created_at DESC
@@ -2978,6 +3262,11 @@ export async function listExtractionsSharedViaFoldersForMember(userId: string, l
         d.source_type,
         d.source_label,
         d.folder_id,
+        d.source_file_url,
+        d.source_file_name,
+        d.source_file_size_bytes,
+        d.source_file_mime_type,
+        d.has_source_text,
         'viewer'::text AS access_role,
         owner.name AS owner_name,
         owner.email AS owner_email,
@@ -4378,6 +4667,7 @@ export async function listExtractionTasksWithEventsForUser(input: { extractionId
         scheduled_start_at,
         scheduled_end_at,
         duration_days,
+        flow_node_type,
         created_at,
         updated_at
       FROM extraction_tasks
@@ -4451,6 +4741,7 @@ export async function listExtractionTasksWithEventsForSharedExtraction(extractio
         scheduled_start_at,
         scheduled_end_at,
         duration_days,
+        flow_node_type,
         created_at,
         updated_at
       FROM extraction_tasks
@@ -4526,6 +4817,7 @@ export async function findExtractionTaskByIdForUser(input: {
         scheduled_start_at,
         scheduled_end_at,
         duration_days,
+        flow_node_type,
         created_at,
         updated_at
       FROM extraction_tasks
@@ -4598,7 +4890,7 @@ export async function updateExtractionTaskScheduleForUser(input: {
      WHERE id = $3 AND extraction_id = $4
      RETURNING id, extraction_id, user_id, phase_id, phase_title, item_index, item_text,
        node_id, parent_node_id, depth, position_path, checked, status,
-       due_at, completed_at, scheduled_start_at, scheduled_end_at, duration_days, created_at, updated_at`,
+       due_at, completed_at, scheduled_start_at, scheduled_end_at, duration_days, flow_node_type, created_at, updated_at`,
     [input.scheduledStartAt || null, input.scheduledEndAt || null, input.taskId, input.extractionId]
   )
   return rows[0] ? mapExtractionTaskRow(rows[0]) : null
@@ -6101,6 +6393,148 @@ export async function unfollowCommunityUser(input: {
   )
 
   return (result.rowCount ?? 0) > 0
+}
+
+export interface DbCommunityUserCard {
+  userId: string
+  name: string | null
+  email: string | null
+  postCount: number
+  followerCount: number
+  followingCount: number
+  isFollowing: boolean
+}
+
+export async function searchCommunityUsers(input: {
+  currentUserId: string
+  q: string
+  limit: number
+  offset: number
+}): Promise<DbCommunityUserCard[]> {
+  await ensureDbReady()
+
+  const { currentUserId, q, limit, offset } = input
+  const qTrimmed = q.trim()
+  const qLike = `%${qTrimmed}%`
+
+  const { rows } = await pool.query<{
+    user_id: string
+    name: string | null
+    email: string | null
+    post_count: string
+    follower_count: string
+    following_count: string
+    is_following: boolean
+  }>(
+    `
+      SELECT
+        u.id AS user_id,
+        u.name,
+        u.email,
+        COUNT(DISTINCT cp.id) AS post_count,
+        COUNT(DISTINCT cf_in.follower_user_id) AS follower_count,
+        COUNT(DISTINCT cf_out.following_user_id) AS following_count,
+        CASE WHEN me.follower_user_id IS NOT NULL THEN true ELSE false END AS is_following
+      FROM users u
+      LEFT JOIN community_posts cp ON cp.user_id = u.id AND cp.visibility != 'private'
+      LEFT JOIN community_follows cf_in ON cf_in.following_user_id = u.id
+      LEFT JOIN community_follows cf_out ON cf_out.follower_user_id = u.id
+      LEFT JOIN community_follows me ON me.follower_user_id = $1 AND me.following_user_id = u.id
+      WHERE u.id != $1
+        AND ($2 = '' OR u.name ILIKE $3 OR u.email ILIKE $3)
+      GROUP BY u.id, me.follower_user_id
+      ORDER BY COUNT(DISTINCT cp.id) DESC, COUNT(DISTINCT cf_in.follower_user_id) DESC
+      LIMIT $4 OFFSET $5
+    `,
+    [currentUserId, qTrimmed, qLike, limit, offset]
+  )
+
+  return rows.map((row) => ({
+    userId: row.user_id,
+    name: row.name,
+    email: row.email,
+    postCount: Number(row.post_count),
+    followerCount: Number(row.follower_count),
+    followingCount: Number(row.following_count),
+    isFollowing: row.is_following,
+  }))
+}
+
+export async function getCommunityUserProfile(
+  currentUserId: string,
+  targetUserId: string
+): Promise<(DbCommunityUserCard & { createdAt: string }) | null> {
+  await ensureDbReady()
+
+  const { rows } = await pool.query<{
+    user_id: string
+    name: string | null
+    email: string | null
+    post_count: string
+    follower_count: string
+    following_count: string
+    is_following: boolean
+    created_at: string
+  }>(
+    `
+      SELECT
+        u.id AS user_id,
+        u.name,
+        u.email,
+        COUNT(DISTINCT cp.id) AS post_count,
+        COUNT(DISTINCT cf_in.follower_user_id) AS follower_count,
+        COUNT(DISTINCT cf_out.following_user_id) AS following_count,
+        CASE WHEN me.follower_user_id IS NOT NULL THEN true ELSE false END AS is_following,
+        u.created_at
+      FROM users u
+      LEFT JOIN community_posts cp ON cp.user_id = u.id AND cp.visibility != 'private'
+      LEFT JOIN community_follows cf_in ON cf_in.following_user_id = u.id
+      LEFT JOIN community_follows cf_out ON cf_out.follower_user_id = u.id
+      LEFT JOIN community_follows me ON me.follower_user_id = $1 AND me.following_user_id = u.id
+      WHERE u.id = $2
+      GROUP BY u.id, me.follower_user_id
+    `,
+    [currentUserId, targetUserId]
+  )
+
+  const row = rows[0]
+  if (!row) return null
+
+  return {
+    userId: row.user_id,
+    name: row.name,
+    email: row.email,
+    postCount: Number(row.post_count),
+    followerCount: Number(row.follower_count),
+    followingCount: Number(row.following_count),
+    isFollowing: row.is_following,
+    createdAt: toIso(row.created_at),
+  }
+}
+
+export async function listCommunityUserPosts(input: {
+  currentUserId: string
+  targetUserId: string
+  limit: number
+  offset: number
+}): Promise<DbCommunityPost[]> {
+  await ensureDbReady()
+  const safeLimit = normalizeQueryLimit(input.limit, 20, 100)
+  const safeOffset = Math.max(0, input.offset)
+
+  const { rows } = await pool.query<DbCommunityPostRow>(
+    `
+      ${COMMUNITY_POST_SELECT_SQL}
+      WHERE
+        p.user_id = $2
+        AND ${COMMUNITY_POST_CAN_VIEW_SQL}
+      ORDER BY p.created_at DESC, p.id DESC
+      LIMIT $3 OFFSET $4
+    `,
+    [input.currentUserId, input.targetUserId, safeLimit, safeOffset]
+  )
+
+  return rows.map(mapCommunityPostRow)
 }
 
 export async function findNotionConnectionByUserId(userId: string) {
@@ -7674,6 +8108,7 @@ export interface DbPlan {
   extractions_per_hour: number
   extractions_per_day: number
   chat_tokens_per_day: number
+  storage_limit_bytes: number
   features_json: string
   is_active: boolean
   display_order: number
@@ -7690,6 +8125,7 @@ interface DbPlanRow {
   extractions_per_hour: string | number
   extractions_per_day: string | number | null
   chat_tokens_per_day: string | number | null
+  storage_limit_bytes: string | number | null
   features_json: string
   is_active: boolean
   display_order: string | number
@@ -7707,6 +8143,7 @@ function mapPlanRow(row: DbPlanRow): DbPlan {
     extractions_per_hour: parseDbInteger(row.extractions_per_hour),
     extractions_per_day: parseDbInteger(row.extractions_per_day ?? 3),
     chat_tokens_per_day: parseDbInteger(row.chat_tokens_per_day ?? 10000),
+    storage_limit_bytes: row.storage_limit_bytes != null ? Number(row.storage_limit_bytes) : 104857600,
     features_json: row.features_json,
     is_active: Boolean(row.is_active),
     display_order: parseDbInteger(row.display_order),
@@ -7719,7 +8156,7 @@ export async function listPlans(): Promise<DbPlan[]> {
   await ensureDbReady()
   const { rows } = await pool.query<DbPlanRow>(
     `SELECT id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-            extractions_per_day, chat_tokens_per_day, features_json, is_active, display_order, created_at, updated_at
+            extractions_per_day, chat_tokens_per_day, storage_limit_bytes, features_json, is_active, display_order, created_at, updated_at
      FROM plans
      ORDER BY display_order ASC, created_at ASC`
   )
@@ -7730,7 +8167,7 @@ export async function getPlanByName(name: string): Promise<DbPlan | null> {
   await ensureDbReady()
   const { rows } = await pool.query<DbPlanRow>(
     `SELECT id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-            extractions_per_day, chat_tokens_per_day, features_json, is_active, display_order, created_at, updated_at
+            extractions_per_day, chat_tokens_per_day, storage_limit_bytes, features_json, is_active, display_order, created_at, updated_at
      FROM plans WHERE name = $1 LIMIT 1`,
     [name]
   )
@@ -7743,6 +8180,7 @@ export async function createPlan(input: {
   priceMonthlyUsd: number
   stripePriceId: string | null
   extractionsPerHour: number
+  storageLimitBytes?: number
   featuresJson: string
   isActive: boolean
   displayOrder: number
@@ -7752,10 +8190,10 @@ export async function createPlan(input: {
   const { rows } = await pool.query<DbPlanRow>(
     `INSERT INTO plans
        (id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-        features_json, is_active, display_order)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        storage_limit_bytes, features_json, is_active, display_order)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-               extractions_per_day, chat_tokens_per_day, features_json, is_active, display_order, created_at, updated_at`,
+               extractions_per_day, chat_tokens_per_day, storage_limit_bytes, features_json, is_active, display_order, created_at, updated_at`,
     [
       id,
       input.name.toLowerCase().trim(),
@@ -7763,6 +8201,7 @@ export async function createPlan(input: {
       input.priceMonthlyUsd,
       input.stripePriceId || null,
       input.extractionsPerHour,
+      input.storageLimitBytes ?? 104857600,
       input.featuresJson,
       input.isActive,
       input.displayOrder,
@@ -7780,6 +8219,7 @@ export async function updatePlan(
     stripePriceId: string | null
     extractionsPerHour: number
     chatTokensPerDay: number
+    storageLimitBytes: number
     featuresJson: string
     isActive: boolean
     displayOrder: number
@@ -7797,6 +8237,7 @@ export async function updatePlan(
   if ('stripePriceId' in input) { setClauses.push(`stripe_price_id = $${idx++}`); values.push(input.stripePriceId || null) }
   if (input.extractionsPerHour !== undefined) { setClauses.push(`extractions_per_hour = $${idx++}`); values.push(input.extractionsPerHour) }
   if (input.chatTokensPerDay !== undefined) { setClauses.push(`chat_tokens_per_day = $${idx++}`); values.push(input.chatTokensPerDay) }
+  if (input.storageLimitBytes !== undefined) { setClauses.push(`storage_limit_bytes = $${idx++}`); values.push(input.storageLimitBytes) }
   if (input.featuresJson !== undefined) { setClauses.push(`features_json = $${idx++}`); values.push(input.featuresJson) }
   if (input.isActive !== undefined) { setClauses.push(`is_active = $${idx++}`); values.push(input.isActive) }
   if (input.displayOrder !== undefined) { setClauses.push(`display_order = $${idx++}`); values.push(input.displayOrder) }
@@ -7808,7 +8249,7 @@ export async function updatePlan(
     `UPDATE plans SET ${setClauses.join(', ')}
      WHERE id = $${idx}
      RETURNING id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-               extractions_per_day, chat_tokens_per_day, features_json, is_active, display_order, created_at, updated_at`,
+               extractions_per_day, chat_tokens_per_day, storage_limit_bytes, features_json, is_active, display_order, created_at, updated_at`,
     values
   )
   return rows[0] ? mapPlanRow(rows[0]) : null
@@ -8515,6 +8956,122 @@ export async function consumeGuestExtractionRateLimit(guestId: string): Promise<
   )
   const used = Number(rows[0]?.request_count ?? 4)
   return { allowed: used <= 3, used }
+}
+
+// ── Login rate limit ─────────────────────────────────────────────────────────
+
+export async function consumeLoginRateLimit(
+  key: string,
+  limitPerWindow: number,
+  windowMinutes: number
+): Promise<{ allowed: boolean; used: number; resetAt: string }> {
+  await ensureDbReady()
+  const { rows } = await pool.query(
+    `WITH current_window AS (
+       SELECT to_timestamp(
+         floor(extract(epoch from NOW()) / ($2::int * 60)) * ($2::int * 60)
+       ) AS window_start
+     )
+     INSERT INTO login_rate_limits (key, window_start, attempt_count)
+     SELECT $1, cw.window_start, 1 FROM current_window cw
+     ON CONFLICT (key, window_start)
+     DO UPDATE SET attempt_count = login_rate_limits.attempt_count + 1, updated_at = NOW()
+     RETURNING window_start, attempt_count`,
+    [key, windowMinutes]
+  )
+  const row = rows[0]
+  const used = Number(row?.attempt_count ?? 1)
+  const windowStart = row?.window_start ? new Date(row.window_start) : new Date()
+  const resetAt = new Date(windowStart.getTime() + windowMinutes * 60 * 1000).toISOString()
+  return { allowed: used <= limitPerWindow, used, resetAt }
+}
+
+// ── User storage tracking ────────────────────────────────────────────────────
+
+/** Returns used bytes, effective limit bytes, and plan name for a user. Single query. */
+export async function getUserStorageInfo(userId: string): Promise<{
+  usedBytes: number
+  limitBytes: number
+  plan: string
+}> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{
+    used_bytes: string
+    override_bytes: string | null
+    plan: string | null
+    plan_limit_bytes: string | null
+  }>(
+    `SELECT
+       COALESCE(us.used_bytes, 0)                       AS used_bytes,
+       us.storage_limit_override_bytes                  AS override_bytes,
+       COALESCE(up.plan, 'free')                        AS plan,
+       p.storage_limit_bytes                            AS plan_limit_bytes
+     FROM users u
+     LEFT JOIN user_storage us   ON us.user_id = u.id
+     LEFT JOIN user_plans up     ON up.user_id = u.id AND up.status = 'active'
+     LEFT JOIN plans p           ON p.name = COALESCE(up.plan, 'free')
+     WHERE u.id = $1`,
+    [userId]
+  )
+  const row = rows[0]
+  const usedBytes = Number(row?.used_bytes ?? 0)
+  const plan = row?.plan ?? 'free'
+  const limitBytes =
+    row?.override_bytes != null
+      ? Number(row.override_bytes)
+      : row?.plan_limit_bytes != null
+      ? Number(row.plan_limit_bytes)
+      : 104857600 // 100 MB fallback
+  return { usedBytes, limitBytes, plan }
+}
+
+/** Admin: set a per-user storage limit override (null removes the override). */
+export async function setUserStorageLimitOverride(userId: string, bytes: number | null): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `INSERT INTO user_storage (user_id, used_bytes, storage_limit_override_bytes, updated_at)
+     VALUES ($1, 0, $2, NOW())
+     ON CONFLICT (user_id)
+     DO UPDATE SET storage_limit_override_bytes = $2, updated_at = NOW()`,
+    [userId, bytes]
+  )
+}
+
+export async function getUserStorageUsed(userId: string): Promise<number> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ used_bytes: string }>(
+    `SELECT used_bytes FROM user_storage WHERE user_id = $1`,
+    [userId]
+  )
+  return Number(rows[0]?.used_bytes ?? 0)
+}
+
+export async function incrementUserStorageUsed(userId: string, bytes: number): Promise<number> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ used_bytes: string }>(
+    `INSERT INTO user_storage (user_id, used_bytes, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (user_id)
+     DO UPDATE SET
+       used_bytes = user_storage.used_bytes + $2,
+       updated_at = NOW()
+     RETURNING used_bytes`,
+    [userId, bytes]
+  )
+  return Number(rows[0]?.used_bytes ?? 0)
+}
+
+export async function decrementUserStorageUsed(userId: string, bytes: number): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `INSERT INTO user_storage (user_id, used_bytes, updated_at)
+     VALUES ($1, 0, NOW())
+     ON CONFLICT (user_id)
+     DO UPDATE SET
+       used_bytes = GREATEST(0, user_storage.used_bytes - $2),
+       updated_at = NOW()`,
+    [userId, bytes]
+  )
 }
 
 // ─── Notification Preferences ─────────────────────────────────────────────────
@@ -9256,4 +9813,219 @@ export async function adminGetChatTokenStats(): Promise<
     limit: parseDbInteger(row.limit),
     date: typeof row.date === 'string' ? row.date : (row.date as Date).toISOString().slice(0, 10),
   }))
+}
+
+// ── Flowchart / Process Graph helpers ─────────────────────────────────────────
+
+interface DbExtractionTaskEdgeRow {
+  id: string
+  extraction_id: string
+  from_task_id: string
+  to_task_id: string
+  edge_type: string
+  label: string | null
+  expected_extra_days: number | string | null
+  sort_order: number | string
+  created_at: Date | string
+  updated_at: Date | string
+}
+
+interface DbDecisionSelectionRow {
+  extraction_id: string
+  decision_task_id: string
+  selected_to_task_id: string
+  created_at: Date | string
+  updated_at: Date | string
+}
+
+function mapEdgeRow(row: DbExtractionTaskEdgeRow): DbExtractionTaskEdge {
+  return {
+    id: row.id,
+    extraction_id: row.extraction_id,
+    from_task_id: row.from_task_id,
+    to_task_id: row.to_task_id,
+    edge_type: row.edge_type as 'and' | 'xor' | 'loop',
+    label: row.label ?? null,
+    expected_extra_days: row.expected_extra_days != null ? Number(row.expected_extra_days) : null,
+    sort_order: typeof row.sort_order === 'number' ? row.sort_order : Number.parseInt(String(row.sort_order), 10),
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  }
+}
+
+export async function listExtractionTaskEdges(extractionId: string): Promise<DbExtractionTaskEdge[]> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskEdgeRow>(
+    `SELECT id, extraction_id, from_task_id, to_task_id, edge_type, label, expected_extra_days, sort_order, created_at, updated_at
+     FROM extraction_task_edges WHERE extraction_id = $1 ORDER BY sort_order, created_at`,
+    [extractionId]
+  )
+  return rows.map(mapEdgeRow)
+}
+
+export async function listDecisionSelections(extractionId: string): Promise<DbExtractionTaskDecisionSelection[]> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbDecisionSelectionRow>(
+    `SELECT extraction_id, decision_task_id, selected_to_task_id, created_at, updated_at
+     FROM extraction_task_decision_selection WHERE extraction_id = $1`,
+    [extractionId]
+  )
+  return rows.map((row) => ({
+    extraction_id: row.extraction_id,
+    decision_task_id: row.decision_task_id,
+    selected_to_task_id: row.selected_to_task_id,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  }))
+}
+
+export async function upsertTaskEdge(input: {
+  extractionId: string
+  fromTaskId: string
+  toTaskId: string
+  edgeType: 'and' | 'xor' | 'loop'
+  label: string | null
+  expectedExtraDays: number | null
+  sortOrder?: number
+}): Promise<DbExtractionTaskEdge> {
+  await ensureDbReady()
+  const id = randomUUID()
+  const { rows } = await pool.query<DbExtractionTaskEdgeRow>(
+    `INSERT INTO extraction_task_edges (id, extraction_id, from_task_id, to_task_id, edge_type, label, expected_extra_days, sort_order)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ON CONFLICT (extraction_id, from_task_id, to_task_id, edge_type) DO UPDATE
+       SET label = EXCLUDED.label,
+           expected_extra_days = EXCLUDED.expected_extra_days,
+           updated_at = NOW()
+     RETURNING id, extraction_id, from_task_id, to_task_id, edge_type, label, expected_extra_days, sort_order, created_at, updated_at`,
+    [id, input.extractionId, input.fromTaskId, input.toTaskId, input.edgeType, input.label, input.expectedExtraDays, input.sortOrder ?? 0]
+  )
+  return mapEdgeRow(rows[0])
+}
+
+export async function deleteTaskEdge(input: {
+  extractionId: string
+  fromTaskId: string
+  toTaskId: string
+  edgeType: 'and' | 'xor' | 'loop'
+}): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `DELETE FROM extraction_task_edges WHERE extraction_id = $1 AND from_task_id = $2 AND to_task_id = $3 AND edge_type = $4`,
+    [input.extractionId, input.fromTaskId, input.toTaskId, input.edgeType]
+  )
+}
+
+export async function upsertDecisionSelection(input: {
+  extractionId: string
+  decisionTaskId: string
+  selectedToTaskId: string
+}): Promise<DbExtractionTaskDecisionSelection> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbDecisionSelectionRow>(
+    `INSERT INTO extraction_task_decision_selection (extraction_id, decision_task_id, selected_to_task_id)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (extraction_id, decision_task_id) DO UPDATE
+       SET selected_to_task_id = EXCLUDED.selected_to_task_id, updated_at = NOW()
+     RETURNING extraction_id, decision_task_id, selected_to_task_id, created_at, updated_at`,
+    [input.extractionId, input.decisionTaskId, input.selectedToTaskId]
+  )
+  return {
+    extraction_id: rows[0].extraction_id,
+    decision_task_id: rows[0].decision_task_id,
+    selected_to_task_id: rows[0].selected_to_task_id,
+    created_at: toIso(rows[0].created_at),
+    updated_at: toIso(rows[0].updated_at),
+  }
+}
+
+export async function updateExtractionTaskFlowNodeType(input: {
+  taskId: string
+  extractionId: string
+  flowNodeType: 'process' | 'decision'
+}): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `UPDATE extraction_tasks SET flow_node_type = $1, updated_at = NOW() WHERE id = $2 AND extraction_id = $3`,
+    [input.flowNodeType, input.taskId, input.extractionId]
+  )
+}
+
+// ── Presentation Deck ─────────────────────────────────────────────────────────
+
+export async function getPresentationDeck(
+  { extractionId }: { extractionId: string }
+): Promise<{ deckJson: string } | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ deck_json: string }>(
+    `SELECT deck_json FROM extraction_presentations WHERE extraction_id = $1`,
+    [extractionId]
+  )
+  if (!rows[0]) return null
+  return { deckJson: rows[0].deck_json }
+}
+
+export async function savePresentationDeck(
+  { extractionId, deckJson }: { extractionId: string; deckJson: string }
+): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `INSERT INTO extraction_presentations (extraction_id, deck_json)
+     VALUES ($1, $2)
+     ON CONFLICT (extraction_id) DO UPDATE SET deck_json = $2, updated_at = NOW()`,
+    [extractionId, deckJson]
+  )
+}
+
+export async function getPresentationState(
+  { extractionId, userId }: { extractionId: string; userId: string }
+): Promise<{ lastSlideId: string | null } | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ last_slide_id: string | null }>(
+    `SELECT last_slide_id FROM extraction_presentation_states WHERE extraction_id = $1 AND user_id = $2`,
+    [extractionId, userId]
+  )
+  if (!rows[0]) return null
+  return { lastSlideId: rows[0].last_slide_id }
+}
+
+export async function setPresentationState(
+  { extractionId, userId, lastSlideId }: { extractionId: string; userId: string; lastSlideId: string }
+): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `INSERT INTO extraction_presentation_states (extraction_id, user_id, last_slide_id)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (extraction_id, user_id) DO UPDATE SET last_slide_id = $3, updated_at = NOW()`,
+    [extractionId, userId, lastSlideId]
+  )
+}
+
+export async function listFlowNodePositions(extractionId: string) {
+  await ensureDbReady()
+  const { rows } = await pool.query(
+    `SELECT task_id, extraction_id, cx, cy, updated_at
+     FROM flow_node_positions WHERE extraction_id = $1`,
+    [extractionId]
+  )
+  return rows.map((r) => ({
+    task_id: r.task_id as string,
+    extraction_id: r.extraction_id as string,
+    cx: Number(r.cx),
+    cy: Number(r.cy),
+    updated_at: toIso(r.updated_at as Date | string),
+  }))
+}
+
+export async function upsertFlowNodePosition(input: {
+  taskId: string; extractionId: string; cx: number; cy: number
+}): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `INSERT INTO flow_node_positions (task_id, extraction_id, cx, cy)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (task_id, extraction_id) DO UPDATE
+       SET cx = EXCLUDED.cx, cy = EXCLUDED.cy, updated_at = NOW()`,
+    [input.taskId, input.extractionId, input.cx, input.cy]
+  )
 }

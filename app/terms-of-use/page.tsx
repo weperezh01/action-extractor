@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 
 export const metadata: Metadata = {
-  title: 'Términos de Uso | Roi Action Extractor App',
-  description: 'Términos de uso temporales para Roi Action Extractor App.',
+  title: 'Términos de Uso | Notes Aide',
+  description: 'Términos de uso temporales para Notes Aide.',
 }
 
 export default function TermsOfUsePage() {
@@ -14,7 +14,7 @@ export default function TermsOfUsePage() {
         <h1 className="text-3xl font-bold tracking-tight mb-6">Términos de Uso (Temporal)</h1>
 
         <p className="text-slate-700 leading-relaxed mb-5">
-          Estos términos regulan el uso de Roi Action Extractor App. Este documento es temporal y será sustituido por
+          Estos términos regulan el uso de Notes Aide. Este documento es temporal y será sustituido por
           una versión legal final.
         </p>
 

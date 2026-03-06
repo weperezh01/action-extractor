@@ -1,6 +1,8 @@
 'use client'
 
-import { type ChangeEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import {
   ExternalLink,
   Globe,
@@ -10,14 +12,16 @@ import {
   Lock,
   MessageCircle,
   RefreshCw,
+  Search,
   Send,
   UserMinus,
   UserPlus,
   Users,
   X,
 } from 'lucide-react'
+import { LanguageToggle } from '@/app/components/LanguageToggle'
 
-type CommunityFeedMode = 'home' | 'explore' | 'extraction'
+type CommunityFeedMode = 'home' | 'explore' | 'extraction' | 'people'
 type CommunityPostVisibility = 'private' | 'circle' | 'followers' | 'public'
 type CommunityPostAttachmentType = 'link' | 'image' | 'audio' | 'video' | 'file'
 type CommunityPostAttachmentStorageProvider = 'external' | 'cloudinary'
@@ -89,6 +93,16 @@ interface CommunityComment {
   createdAt: string
 }
 
+interface UserCard {
+  userId: string
+  name: string | null
+  email: string | null
+  postCount: number
+  followerCount: number
+  followingCount: number
+  isFollowing: boolean
+}
+
 interface CommunityPanelProps {
   currentExtractionId?: string | null
   onError?: (message: string) => void
@@ -101,25 +115,18 @@ function parseErrorMessage(payload: unknown, fallback: string) {
   return typeof message === 'string' && message.trim() ? message : fallback
 }
 
-function formatDate(value: string) {
+function formatDate(value: string, locale: string, now: string): string {
   try {
     const date = new Date(value)
-    if (Number.isNaN(date.getTime())) return 'Ahora'
-    return date.toLocaleString('es-ES', {
+    if (Number.isNaN(date.getTime())) return now
+    return new Intl.DateTimeFormat(locale === 'es' ? 'es-ES' : 'en-US', {
       dateStyle: 'short',
       timeStyle: 'short',
       hour12: true,
-    })
+    }).format(date)
   } catch {
-    return 'Ahora'
+    return now
   }
-}
-
-function visibilityLabel(value: CommunityPostVisibility) {
-  if (value === 'private') return 'Privado'
-  if (value === 'circle') return 'Círculo'
-  if (value === 'followers') return 'Followers'
-  return 'Público'
 }
 
 function normalizeExternalUrl(raw: string) {
@@ -150,6 +157,9 @@ export function CommunityPanel({
   onNotice,
   className,
 }: CommunityPanelProps) {
+  const t = useTranslations('community')
+  const locale = useLocale()
+
   const [feedMode, setFeedMode] = useState<CommunityFeedMode>('home')
   const [loading, setLoading] = useState(false)
   const [items, setItems] = useState<CommunityPostItem[]>([])
@@ -167,9 +177,17 @@ export function CommunityPanel({
   const [commentMutationPostId, setCommentMutationPostId] = useState<string | null>(null)
   const [postMutationId, setPostMutationId] = useState<string | null>(null)
 
+  // People tab state
+  const [userCards, setUserCards] = useState<UserCard[]>([])
+  const [userCardsLoading, setUserCardsLoading] = useState(false)
+  const [peopleSearch, setPeopleSearch] = useState('')
+  const [peopleMutationId, setPeopleMutationId] = useState<string | null>(null)
+  const peopleDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const canUseExtractionFeed = Boolean(currentExtractionId?.trim())
 
   const resolveFeedEndpoint = useCallback(() => {
+    if (feedMode === 'people') return null
     if (feedMode === 'explore') return '/api/community/feed/explore?limit=24'
     if (feedMode === 'extraction') {
       if (!canUseExtractionFeed) return null
@@ -190,7 +208,7 @@ export function CommunityPanel({
       const res = await fetch(endpoint, { cache: 'no-store' })
       const data = (await res.json().catch(() => null)) as { items?: unknown; error?: unknown } | null
       if (!res.ok) {
-        const message = parseErrorMessage(data, 'No se pudo cargar el feed de comunidad.')
+        const message = parseErrorMessage(data, t('errors.loadFeed'))
         onError?.(message)
         setItems([])
         return
@@ -204,16 +222,80 @@ export function CommunityPanel({
         : []
       setItems(nextItems)
     } catch {
-      onError?.('Error de conexión cargando feed de comunidad.')
+      onError?.(t('errors.networkLoadFeed'))
       setItems([])
     } finally {
       setLoading(false)
     }
-  }, [onError, resolveFeedEndpoint])
+  }, [onError, resolveFeedEndpoint, t])
 
   useEffect(() => {
     void loadFeed()
   }, [loadFeed])
+
+  const loadPeople = useCallback(async (q: string) => {
+    setUserCardsLoading(true)
+    try {
+      const params = new URLSearchParams({ q, limit: '20', offset: '0' })
+      const res = await fetch(`/api/community/users?${params.toString()}`, { cache: 'no-store' })
+      const data = (await res.json().catch(() => null)) as { users?: unknown; error?: unknown } | null
+      if (!res.ok) {
+        onError?.(parseErrorMessage(data, 'Could not load users.'))
+        setUserCards([])
+        return
+      }
+      setUserCards(Array.isArray(data?.users) ? (data.users as UserCard[]) : [])
+    } catch {
+      onError?.('Network error while loading users.')
+      setUserCards([])
+    } finally {
+      setUserCardsLoading(false)
+    }
+  }, [onError])
+
+  useEffect(() => {
+    if (feedMode !== 'people') return
+    if (peopleDebounceRef.current) clearTimeout(peopleDebounceRef.current)
+    peopleDebounceRef.current = setTimeout(() => {
+      void loadPeople(peopleSearch)
+    }, 300)
+    return () => {
+      if (peopleDebounceRef.current) clearTimeout(peopleDebounceRef.current)
+    }
+  }, [feedMode, peopleSearch, loadPeople])
+
+  const toggleFollowUser = useCallback(
+    async (userCard: UserCard) => {
+      if (peopleMutationId) return
+      setPeopleMutationId(userCard.userId)
+      try {
+        const method = userCard.isFollowing ? 'DELETE' : 'POST'
+        const res = await fetch(`/api/community/follows/${encodeURIComponent(userCard.userId)}`, { method })
+        const data = (await res.json().catch(() => null)) as { followed?: boolean; error?: unknown } | null
+        if (!res.ok) {
+          onError?.(parseErrorMessage(data, t('errors.follow')))
+          return
+        }
+        const followed = data?.followed === true
+        setUserCards((prev) =>
+          prev.map((u) =>
+            u.userId === userCard.userId
+              ? {
+                  ...u,
+                  isFollowing: followed,
+                  followerCount: u.followerCount + (followed ? 1 : -1),
+                }
+              : u,
+          ),
+        )
+      } catch {
+        onError?.(t('errors.networkFollow'))
+      } finally {
+        setPeopleMutationId(null)
+      }
+    },
+    [onError, peopleMutationId, t],
+  )
 
   const handleImageAttachmentChange = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
@@ -251,14 +333,14 @@ export function CommunityPanel({
           | null
 
         if (!res.ok) {
-          onError?.(parseErrorMessage(data, 'No se pudo subir la imagen.'))
+          onError?.(parseErrorMessage(data, t('errors.uploadImage')))
           return
         }
 
         const attachment = data?.attachment
         const url = typeof attachment?.url === 'string' ? attachment.url.trim() : ''
         if (!url) {
-          onError?.('La subida devolvió una imagen inválida.')
+          onError?.(t('errors.invalidUpload'))
           return
         }
 
@@ -282,23 +364,21 @@ export function CommunityPanel({
           metadata,
         })
       } catch {
-        onError?.('Error de conexión subiendo imagen.')
+        onError?.(t('errors.networkUploadImage'))
       } finally {
         setImageUploading(false)
       }
     },
-    [imageUploading, onError]
+    [imageUploading, onError, t],
   )
 
   const handleCreatePost = useCallback(async () => {
     const content = postContent.trim()
     if (!content || postSubmitting) return
 
-    const normalizedLinkUrl = attachmentLinkUrl.trim()
-      ? normalizeExternalUrl(attachmentLinkUrl)
-      : null
+    const normalizedLinkUrl = attachmentLinkUrl.trim() ? normalizeExternalUrl(attachmentLinkUrl) : null
     if (attachmentLinkUrl.trim() && !normalizedLinkUrl) {
-      onError?.('El link del adjunto debe ser una URL válida (http o https).')
+      onError?.(t('errors.invalidLink'))
       return
     }
 
@@ -349,7 +429,7 @@ export function CommunityPanel({
         | null
 
       if (!res.ok) {
-        onError?.(parseErrorMessage(data, 'No se pudo publicar el post.'))
+        onError?.(parseErrorMessage(data, t('errors.createPost')))
         return
       }
 
@@ -365,9 +445,9 @@ export function CommunityPanel({
       setAttachmentLinkUrl('')
       setAttachmentLinkTitle('')
       setImageAttachment(null)
-      onNotice?.('Post publicado en comunidad.')
+      onNotice?.(t('notices.postPublished'))
     } catch {
-      onError?.('Error de conexión al publicar el post.')
+      onError?.(t('errors.networkCreatePost'))
     } finally {
       setPostSubmitting(false)
     }
@@ -382,6 +462,7 @@ export function CommunityPanel({
     postContent,
     postSubmitting,
     postVisibility,
+    t,
   ])
 
   const toggleReaction = useCallback(
@@ -398,7 +479,7 @@ export function CommunityPanel({
           | { reactionsCount?: number; reactedByMe?: boolean; error?: unknown }
           | null
         if (!res.ok) {
-          onError?.(parseErrorMessage(data, 'No se pudo actualizar la reacción.'))
+          onError?.(parseErrorMessage(data, t('errors.reaction')))
           return
         }
         setItems((prev) =>
@@ -414,16 +495,16 @@ export function CommunityPanel({
                       typeof data?.reactedByMe === 'boolean' ? data.reactedByMe : item.metrics.reactedByMe,
                   },
                 }
-              : item
-          )
+              : item,
+          ),
         )
       } catch {
-        onError?.('Error de conexión al reaccionar.')
+        onError?.(t('errors.networkReaction'))
       } finally {
         setPostMutationId(null)
       }
     },
-    [onError, postMutationId]
+    [onError, postMutationId, t],
   )
 
   const toggleFollow = useCallback(
@@ -437,7 +518,7 @@ export function CommunityPanel({
         })
         const data = (await res.json().catch(() => null)) as { followed?: boolean; error?: unknown } | null
         if (!res.ok) {
-          onError?.(parseErrorMessage(data, 'No se pudo actualizar follow.'))
+          onError?.(parseErrorMessage(data, t('errors.follow')))
           return
         }
 
@@ -452,16 +533,16 @@ export function CommunityPanel({
                     following: followed,
                   },
                 }
-              : item
-          )
+              : item,
+          ),
         )
       } catch {
-        onError?.('Error de conexión al actualizar follow.')
+        onError?.(t('errors.networkFollow'))
       } finally {
         setPostMutationId(null)
       }
     },
-    [onError, postMutationId]
+    [onError, postMutationId, t],
   )
 
   const loadComments = useCallback(
@@ -474,16 +555,16 @@ export function CommunityPanel({
           | { comments?: CommunityComment[]; error?: unknown }
           | null
         if (!res.ok) {
-          onError?.(parseErrorMessage(data, 'No se pudieron cargar comentarios.'))
+          onError?.(parseErrorMessage(data, t('errors.loadComments')))
           return
         }
         const comments = Array.isArray(data?.comments) ? data.comments : []
         setCommentsByPostId((prev) => ({ ...prev, [postId]: comments }))
       } catch {
-        onError?.('Error de conexión cargando comentarios.')
+        onError?.(t('errors.networkLoadComments'))
       }
     },
-    [onError]
+    [onError, t],
   )
 
   const toggleComments = useCallback(
@@ -496,7 +577,7 @@ export function CommunityPanel({
         return { ...prev, [postId]: nextOpen }
       })
     },
-    [commentsByPostId, loadComments]
+    [commentsByPostId, loadComments],
   )
 
   const handleCreateComment = useCallback(
@@ -515,7 +596,7 @@ export function CommunityPanel({
           | { comment?: CommunityComment; error?: unknown }
           | null
         if (!res.ok) {
-          onError?.(parseErrorMessage(data, 'No se pudo publicar el comentario.'))
+          onError?.(parseErrorMessage(data, t('errors.createComment')))
           return
         }
         const created = data?.comment
@@ -534,18 +615,18 @@ export function CommunityPanel({
                       commentsCount: item.metrics.commentsCount + 1,
                     },
                   }
-                : item
-            )
+                : item,
+            ),
           )
         }
         setCommentDraftByPostId((prev) => ({ ...prev, [postId]: '' }))
       } catch {
-        onError?.('Error de conexión al publicar comentario.')
+        onError?.(t('errors.networkCreateComment'))
       } finally {
         setCommentMutationPostId(null)
       }
     },
-    [commentDraftByPostId, commentMutationPostId, onError]
+    [commentDraftByPostId, commentMutationPostId, onError, t],
   )
 
   const handleDeleteComment = useCallback(
@@ -555,11 +636,11 @@ export function CommunityPanel({
       try {
         const res = await fetch(
           `/api/community/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
-          { method: 'DELETE' }
+          { method: 'DELETE' },
         )
         const data = (await res.json().catch(() => null)) as { error?: unknown } | null
         if (!res.ok) {
-          onError?.(parseErrorMessage(data, 'No se pudo eliminar el comentario.'))
+          onError?.(parseErrorMessage(data, t('errors.deleteComment')))
           return
         }
         setCommentsByPostId((prev) => ({
@@ -576,22 +657,24 @@ export function CommunityPanel({
                     commentsCount: Math.max(0, item.metrics.commentsCount - 1),
                   },
                 }
-              : item
-          )
+              : item,
+          ),
         )
       } catch {
-        onError?.('Error de conexión eliminando comentario.')
+        onError?.(t('errors.networkDeleteComment'))
       } finally {
         setCommentMutationPostId(null)
       }
     },
-    [commentMutationPostId, onError]
+    [commentMutationPostId, onError, t],
   )
 
   const showExtractionHint = useMemo(
     () => feedMode === 'extraction' && !canUseExtractionFeed,
-    [canUseExtractionFeed, feedMode]
+    [canUseExtractionFeed, feedMode],
   )
+
+  const now = t('time.now')
 
   return (
     <section
@@ -602,53 +685,58 @@ export function CommunityPanel({
       <div className="mb-3 flex items-center justify-between gap-2">
         <div>
           <p className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-            Comunidad
+            {t('header.title')}
           </p>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Publica avances, sigue autores y conversa sobre resultados.
-          </p>
+          <p className="text-sm text-slate-500 dark:text-slate-400">{t('header.subtitle')}</p>
         </div>
-        <button
-          type="button"
-          onClick={() => void loadFeed()}
-          disabled={loading}
-          className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
-        >
-          <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
-          {loading ? 'Actualizando...' : 'Actualizar'}
-        </button>
+        <div className="flex items-center gap-2">
+          <LanguageToggle />
+          <button
+            type="button"
+            onClick={() => void loadFeed()}
+            disabled={loading}
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+          >
+            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+            {loading ? t('header.refreshing') : t('header.refresh')}
+          </button>
+        </div>
       </div>
 
       <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/40">
         <textarea
           value={postContent}
           onChange={(event) => setPostContent(event.target.value)}
-          placeholder="Comparte qué avanzaste hoy, qué aprendiste o qué necesitas."
+          placeholder={t('composer.placeholder')}
           className="min-h-[84px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-indigo-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
         />
         <div className="mt-2 rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900">
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300">
               <Link2 size={11} />
-              Link
+              {t('composer.linkBadge')}
             </span>
             <input
               value={attachmentLinkUrl}
               onChange={(event) => setAttachmentLinkUrl(event.target.value)}
-              placeholder="https://sitio.com/recurso"
+              placeholder={t('composer.linkUrlPlaceholder')}
               className="h-8 min-w-[200px] flex-1 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
             />
             <input
               value={attachmentLinkTitle}
               onChange={(event) => setAttachmentLinkTitle(event.target.value)}
-              placeholder="Título del link (opcional)"
+              placeholder={t('composer.linkTitlePlaceholder')}
               className="h-8 min-w-[170px] flex-1 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
             />
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <label className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300 dark:hover:bg-slate-800">
               <ImagePlus size={12} />
-              {imageUploading ? 'Subiendo imagen...' : imageAttachment ? 'Cambiar imagen' : 'Adjuntar imagen'}
+              {imageUploading
+                ? t('composer.uploadingImage')
+                : imageAttachment
+                  ? t('composer.changeImage')
+                  : t('composer.attachImage')}
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp,image/gif"
@@ -665,7 +753,7 @@ export function CommunityPanel({
                 className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
               >
                 <X size={11} />
-                Quitar imagen
+                {t('composer.removeImage')}
               </button>
             )}
           </div>
@@ -673,7 +761,7 @@ export function CommunityPanel({
             <div className="mt-2 overflow-hidden rounded-md border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50">
               <img
                 src={imageAttachment.thumbnailUrl || imageAttachment.url}
-                alt={imageAttachment.title || 'Adjunto de imagen'}
+                alt={imageAttachment.title || t('composer.imageAlt')}
                 className="max-h-52 w-full object-cover"
               />
             </div>
@@ -690,10 +778,10 @@ export function CommunityPanel({
             }}
             className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
           >
-            <option value="private">Privado</option>
-            <option value="circle">Círculo</option>
-            <option value="followers">Followers</option>
-            <option value="public">Público</option>
+            <option value="private">{t('visibility.private')}</option>
+            <option value="circle">{t('visibility.circle')}</option>
+            <option value="followers">{t('visibility.followers')}</option>
+            <option value="public">{t('visibility.public')}</option>
           </select>
           <label className="inline-flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
             <input
@@ -702,7 +790,7 @@ export function CommunityPanel({
               onChange={(event) => setLinkCurrentExtraction(event.target.checked)}
               className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600"
             />
-            Vincular extracción actual
+            {t('composer.linkCurrentExtraction')}
           </label>
           <button
             type="button"
@@ -711,7 +799,7 @@ export function CommunityPanel({
             className="ml-auto inline-flex h-8 items-center gap-1 rounded-md bg-indigo-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:opacity-60"
           >
             <Send size={12} />
-            {postSubmitting ? 'Publicando...' : 'Publicar'}
+            {postSubmitting ? t('composer.publishing') : t('composer.publish')}
           </button>
         </div>
       </div>
@@ -727,7 +815,7 @@ export function CommunityPanel({
           }`}
         >
           <Users size={12} />
-          Home
+          {t('feed.home')}
         </button>
         <button
           type="button"
@@ -739,7 +827,7 @@ export function CommunityPanel({
           }`}
         >
           <Globe size={12} />
-          Explore
+          {t('feed.explore')}
         </button>
         <button
           type="button"
@@ -751,28 +839,101 @@ export function CommunityPanel({
           }`}
         >
           <Link2 size={12} />
-          Extracción
+          {t('feed.extraction')}
+        </button>
+        <button
+          type="button"
+          onClick={() => setFeedMode('people')}
+          className={`inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs font-semibold ${
+            feedMode === 'people'
+              ? 'border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-900/30 dark:text-violet-300'
+              : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800'
+          }`}
+        >
+          <Search size={12} />
+          {t('feed.people')}
         </button>
       </div>
 
       {showExtractionHint && (
-        <p className="mb-3 text-xs text-slate-500 dark:text-slate-400">
-          Abre una extracción para ver su feed comunitario.
-        </p>
+        <p className="mb-3 text-xs text-slate-500 dark:text-slate-400">{t('feed.openExtractionHint')}</p>
       )}
 
-      {loading ? (
-        <p className="text-sm text-slate-500 dark:text-slate-400">Cargando posts...</p>
+      {feedMode === 'people' ? (
+        <div>
+          <div className="relative mb-3">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              value={peopleSearch}
+              onChange={(e) => setPeopleSearch(e.target.value)}
+              placeholder={t('people.searchPlaceholder')}
+              className="h-9 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-3 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-violet-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-violet-600"
+            />
+          </div>
+          {userCardsLoading ? (
+            <p className="text-sm text-slate-500 dark:text-slate-400">{t('feed.peopleLoading')}</p>
+          ) : userCards.length === 0 ? (
+            <p className="text-sm text-slate-500 dark:text-slate-400">{t('feed.noUsersFound')}</p>
+          ) : (
+            <ul className="space-y-2">
+              {userCards.map((userCard) => {
+                const displayName = userCard.name?.trim() || userCard.email || 'User'
+                const initials = displayName
+                  .split(' ')
+                  .slice(0, 2)
+                  .map((w) => w[0]?.toUpperCase() ?? '')
+                  .join('')
+                return (
+                  <li
+                    key={userCard.userId}
+                    className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-800/40"
+                  >
+                    <Link
+                      href={`/community/${encodeURIComponent(userCard.userId)}`}
+                      className="flex min-w-0 flex-1 items-center gap-3"
+                    >
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-100 text-sm font-bold text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">
+                        {initials || '?'}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-700 hover:underline dark:text-slate-200">
+                          {displayName}
+                        </p>
+                        <p className="mt-0.5 flex flex-wrap gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                          <span>{userCard.postCount} {t('people.posts')}</span>
+                          <span>{userCard.followerCount} {t('people.followers')}</span>
+                          <span>{userCard.followingCount} {t('people.following')}</span>
+                        </p>
+                      </div>
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); void toggleFollowUser(userCard) }}
+                      disabled={peopleMutationId === userCard.userId}
+                      className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold transition-colors disabled:opacity-60 ${
+                        userCard.isFollowing
+                          ? 'border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-900/30 dark:text-violet-300 dark:hover:bg-violet-900/50'
+                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {userCard.isFollowing ? <UserMinus size={10} /> : <UserPlus size={10} />}
+                      {userCard.isFollowing ? t('people.following_btn') : t('people.follow')}
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+      ) : loading ? (
+        <p className="text-sm text-slate-500 dark:text-slate-400">{t('feed.loading')}</p>
       ) : items.length === 0 ? (
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          Aún no hay publicaciones en este feed.
-        </p>
+        <p className="text-sm text-slate-500 dark:text-slate-400">{t('feed.empty')}</p>
       ) : (
         <ul className="space-y-3">
           {items.map((post) => {
             const commentsOpen = openCommentsByPostId[post.id] === true
             const comments = commentsByPostId[post.id] ?? []
-            const followLabel = post.author.following ? 'Siguiendo' : 'Seguir'
             return (
               <li
                 key={post.id}
@@ -780,17 +941,34 @@ export function CommunityPanel({
               >
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="truncate text-xs font-semibold text-slate-700 dark:text-slate-200">
-                      {post.author.name?.trim() || post.author.email || 'Usuario'}
-                    </p>
+                    <Link
+                      href={`/community/${encodeURIComponent(post.author.userId)}`}
+                      className="block truncate text-xs font-semibold text-slate-700 hover:underline dark:text-slate-200"
+                    >
+                      {post.author.name?.trim() || post.author.email || t('post.userFallback')}
+                    </Link>
                     <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">
-                      {formatDate(post.createdAt)}
+                      {formatDate(post.createdAt, locale, now)}
                     </p>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                      {post.visibility === 'public' ? <Globe size={10} /> : post.visibility === 'private' ? <Lock size={10} /> : post.visibility === 'circle' ? <Users size={10} /> : <UserPlus size={10} />}
-                      {visibilityLabel(post.visibility)}
+                      {post.visibility === 'public' ? (
+                        <Globe size={10} />
+                      ) : post.visibility === 'private' ? (
+                        <Lock size={10} />
+                      ) : post.visibility === 'circle' ? (
+                        <Users size={10} />
+                      ) : (
+                        <UserPlus size={10} />
+                      )}
+                      {post.visibility === 'private'
+                        ? t('visibility.private')
+                        : post.visibility === 'circle'
+                          ? t('visibility.circle')
+                          : post.visibility === 'followers'
+                            ? t('visibility.followers')
+                            : t('visibility.public')}
                     </span>
                     <button
                       type="button"
@@ -799,7 +977,7 @@ export function CommunityPanel({
                       className="inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
                     >
                       {post.author.following ? <UserMinus size={10} /> : <UserPlus size={10} />}
-                      {followLabel}
+                      {post.author.following ? t('post.following') : t('post.follow')}
                     </button>
                   </div>
                 </div>
@@ -807,7 +985,7 @@ export function CommunityPanel({
                 <p className="text-sm leading-relaxed text-slate-700 dark:text-slate-200">{post.content}</p>
                 {post.source.extractionId && (
                   <p className="mt-1 truncate text-[11px] text-slate-500 dark:text-slate-400">
-                    Fuente: {post.source.label || `Extraction ${post.source.extractionId}`}
+                    {t('post.sourceLabel')} {post.source.label || `Extraction ${post.source.extractionId}`}
                   </p>
                 )}
                 {post.attachments.length > 0 && (
@@ -824,7 +1002,7 @@ export function CommunityPanel({
                           >
                             <img
                               src={attachment.thumbnailUrl || attachment.url}
-                              alt={attachment.title || 'Adjunto de imagen'}
+                              alt={attachment.title || t('composer.imageAlt')}
                               className="max-h-64 w-full object-cover"
                             />
                             {attachment.title && (
@@ -847,7 +1025,7 @@ export function CommunityPanel({
                         >
                           <span className="inline-flex h-5 items-center gap-1 rounded-md bg-slate-100 px-1.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                             <ExternalLink size={10} />
-                            {attachment.attachmentType === 'link' ? 'Link' : attachment.attachmentType}
+                            {attachment.attachmentType === 'link' ? t('attachment.link') : attachment.attachmentType}
                           </span>
                           <span className="min-w-0 flex-1 truncate text-xs text-slate-600 dark:text-slate-300">
                             {label}
@@ -881,7 +1059,7 @@ export function CommunityPanel({
                     {post.metrics.commentsCount}
                   </button>
                   <span className="ml-auto text-[11px] text-slate-500 dark:text-slate-400">
-                    {post.metrics.viewsCount} vistas
+                    {t('post.views', { count: post.metrics.viewsCount })}
                   </span>
                 </div>
 
@@ -889,20 +1067,23 @@ export function CommunityPanel({
                   <div className="mt-2 rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900">
                     <div className="space-y-1.5">
                       {comments.length === 0 ? (
-                        <p className="text-xs text-slate-500 dark:text-slate-400">Sin comentarios todavía.</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">{t('comments.none')}</p>
                       ) : (
                         comments.map((comment) => (
                           <div
                             key={comment.id}
                             className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1.5 dark:border-slate-800 dark:bg-slate-800/40"
                           >
-                            <p className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
-                              {comment.userName?.trim() || comment.userEmail || 'Usuario'}
-                            </p>
+                            <Link
+                              href={`/community/${encodeURIComponent(comment.userId)}`}
+                              className="text-[11px] font-semibold text-slate-600 hover:underline dark:text-slate-300"
+                            >
+                              {comment.userName?.trim() || comment.userEmail || t('post.userFallback')}
+                            </Link>
                             <p className="text-xs text-slate-700 dark:text-slate-200">{comment.content}</p>
                             <div className="mt-1 flex items-center justify-between">
                               <span className="text-[10px] text-slate-400 dark:text-slate-500">
-                                {formatDate(comment.createdAt)}
+                                {formatDate(comment.createdAt, locale, now)}
                               </span>
                               <button
                                 type="button"
@@ -910,7 +1091,7 @@ export function CommunityPanel({
                                 disabled={commentMutationPostId === post.id}
                                 className="text-[10px] font-semibold text-rose-600 hover:text-rose-700 disabled:opacity-60 dark:text-rose-300"
                               >
-                                Eliminar
+                                {t('comments.delete')}
                               </button>
                             </div>
                           </div>
@@ -923,16 +1104,18 @@ export function CommunityPanel({
                         onChange={(event) =>
                           setCommentDraftByPostId((prev) => ({ ...prev, [post.id]: event.target.value }))
                         }
-                        placeholder="Escribe un comentario..."
+                        placeholder={t('comments.placeholder')}
                         className="h-8 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                       />
                       <button
                         type="button"
                         onClick={() => void handleCreateComment(post.id)}
-                        disabled={commentMutationPostId === post.id || !(commentDraftByPostId[post.id] ?? '').trim()}
+                        disabled={
+                          commentMutationPostId === post.id || !(commentDraftByPostId[post.id] ?? '').trim()
+                        }
                         className="inline-flex h-8 items-center rounded-md bg-slate-800 px-2 text-[11px] font-semibold text-white transition-colors hover:bg-slate-700 disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
                       >
-                        Comentar
+                        {t('comments.send')}
                       </button>
                     </div>
                   </div>

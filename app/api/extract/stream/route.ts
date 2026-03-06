@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { YoutubeTranscript } from '@danielxceron/youtube-transcript'
 import { getUserFromRequest } from '@/lib/auth'
 import {
   createExtraction,
@@ -38,6 +37,7 @@ import { resolveVideoPreview } from '@/lib/video-preview'
 import { detectSourceType } from '@/lib/source-detector'
 import { extractWebContent, truncateForAi } from '@/lib/content-extractor'
 import { flattenItemsAsText, normalizePlaybookPhases } from '@/lib/playbook-tree'
+import { fetchYoutubeTranscriptWithFallback } from '@/lib/youtube-transcript-fallback'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -287,6 +287,22 @@ export async function POST(req: NextRequest) {
   const bodySourceLabel = typeof (body as { sourceLabel?: unknown })?.sourceLabel === 'string'
     ? (body as { sourceLabel: string }).sourceLabel
     : null
+  const bodySourceFileUrl: string | null = (() => {
+    const v = (body as { sourceFileUrl?: unknown })?.sourceFileUrl
+    return typeof v === 'string' && (v.startsWith('https://') || v.startsWith('/api/uploads/')) ? v : null
+  })()
+  const bodySourceFileName: string | null = (() => {
+    const v = (body as { sourceFileName?: unknown })?.sourceFileName
+    return typeof v === 'string' ? v.slice(0, 500) : null
+  })()
+  const bodySourceFileSizeBytes: number | null = (() => {
+    const v = (body as { sourceFileSizeBytes?: unknown })?.sourceFileSizeBytes
+    return typeof v === 'number' && v > 0 ? v : null
+  })()
+  const bodySourceFileMimeType: string | null = (() => {
+    const v = (body as { sourceFileMimeType?: unknown })?.sourceFileMimeType
+    return typeof v === 'string' ? v.slice(0, 200) : null
+  })()
 
   const mode = normalizeExtractionMode((body as { mode?: unknown })?.mode)
   const outputLanguage = normalizeExtractionOutputLanguage((body as { outputLanguage?: unknown })?.outputLanguage)
@@ -515,7 +531,7 @@ export async function POST(req: NextRequest) {
             })
           } else {
             try {
-              const segments = await retryWithBackoff(() => YoutubeTranscript.fetchTranscript(videoId!), {
+              const segments = await retryWithBackoff(() => fetchYoutubeTranscriptWithFallback(videoId!), {
                 maxAttempts: 3,
                 shouldRetry: (transcriptError) => classifyTranscriptError(transcriptError).retryable,
                 onRetry: ({ nextAttempt, maxAttempts, delayMs }) =>
@@ -733,6 +749,8 @@ export async function POST(req: NextRequest) {
           ? (videoPreview.videoTitle ?? bodySourceLabel)
           : (contentTitle ?? bodySourceLabel)
 
+        const sourceTextToStore = sourceType !== 'youtube' ? contentText || null : null
+
         if (user) {
           const saved = await createExtraction({
             userId: user.id,
@@ -747,6 +765,11 @@ export async function POST(req: NextRequest) {
             metadataJson: JSON.stringify(responsePayload.metadata),
             sourceType,
             sourceLabel: resolvedSourceLabel,
+            sourceText: sourceTextToStore,
+            sourceFileUrl: bodySourceFileUrl,
+            sourceFileName: bodySourceFileName,
+            sourceFileSizeBytes: bodySourceFileSizeBytes,
+            sourceFileMimeType: bodySourceFileMimeType,
           })
           const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
 
@@ -766,6 +789,11 @@ export async function POST(req: NextRequest) {
             sourceType,
             sourceLabel: saved.source_label,
             folderId: saved.folder_id,
+            sourceFileUrl: saved.source_file_url,
+            sourceFileName: saved.source_file_name,
+            sourceFileSizeBytes: saved.source_file_size_bytes,
+            sourceFileMimeType: saved.source_file_mime_type,
+            hasSourceText: !!sourceTextToStore,
           })
         } else {
           send('result', {

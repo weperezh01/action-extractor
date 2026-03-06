@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import SettingsPageClient from './SettingsPageClient'
 
 export const metadata: Metadata = {
-  title: 'Configuración de Cuenta | Roi Action Extractor App',
-  description: 'Administra tu perfil, contraseña, consumo y privacidad en Roi Action Extractor App.',
+  title: 'Configuración de Cuenta | Notes Aide',
+  description: 'Administra tu perfil, contraseña, consumo y privacidad en Notes Aide.',
 }
 
 export default function SettingsPage() {

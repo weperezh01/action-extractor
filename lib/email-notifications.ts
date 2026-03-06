@@ -18,7 +18,7 @@ async function sendEmail(params: { to: string; subject: string; html: string }):
   const resendKey = process.env.RESEND_API_KEY?.trim()
   const from =
     process.env.RESEND_FROM_EMAIL?.trim() ??
-    'ActionExtractor <noreply@roi.welltechnologies.net>'
+    'ActionExtractor <noreply@notesaide.com>'
 
   if (!resendKey) {
     console.log('[email-notifications] DEV — email no enviado:')
@@ -120,7 +120,7 @@ export async function notifyTaskStatusChange(params: {
   )
   if (recipients.length === 0) return
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://roi.welltechnologies.net'
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://notesaide.com'
   const playbookUrl = `${appUrl}/app/${extractionId}`
   const prevLabel = TASK_STATUS_LABELS[previousStatus] ?? previousStatus
   const nextLabel = TASK_STATUS_LABELS[newStatus] ?? newStatus
@@ -164,7 +164,7 @@ export async function notifyNewComment(params: {
   )
   if (recipients.length === 0) return
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://roi.welltechnologies.net'
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://notesaide.com'
   const playbookUrl = `${appUrl}/app/${extractionId}`
   const snippet =
     commentContent.length > 200 ? commentContent.slice(0, 197) + '...' : commentContent
@@ -205,8 +205,8 @@ function emailWrapper(content: string) {
     </div>
     <div style="background:#f8fafc;padding:14px 32px;border-top:1px solid #e2e8f0;">
       <p style="color:#94a3b8;font-size:12px;margin:0;">
-        roi.welltechnologies.net ·
-        <a href="${process.env.NEXT_PUBLIC_APP_URL ?? 'https://roi.welltechnologies.net'}/settings" style="color:#94a3b8;">Gestionar notificaciones</a>
+        notesaide.com ·
+        <a href="${process.env.NEXT_PUBLIC_APP_URL ?? 'https://notesaide.com'}/settings" style="color:#94a3b8;">Gestionar notificaciones</a>
       </p>
     </div>
   </div>
@@ -285,7 +285,7 @@ export async function sendWorkspaceInvitationEmail(params: {
   role: string
   inviteToken: string
 }): Promise<void> {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://roi.welltechnologies.net'
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://notesaide.com'
   const inviteUrl = `${appUrl}/workspace/invite/${params.inviteToken}`
 
   const roleLabels: Record<string, string> = {

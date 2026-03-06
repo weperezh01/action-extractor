@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import { deleteCloudinaryAsset } from '@/lib/cloudinary'
 import {
+  decrementUserStorageUsed,
   deleteExtractionTaskAttachmentByIdForUser,
   findExtractionAccessForUser,
   findExtractionTaskByIdForUser,
@@ -131,6 +132,11 @@ export async function DELETE(
           publicId,
           resourceType,
         })
+      }
+
+      const sizeBytes = deleted.size_bytes ? Number(deleted.size_bytes) : 0
+      if (sizeBytes > 0) {
+        void decrementUserStorageUsed(user.id, sizeBytes)
       }
     }
 

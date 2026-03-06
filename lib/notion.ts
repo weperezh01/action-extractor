@@ -4,7 +4,7 @@ import { flattenItemsAsText, type PlaybookNode } from '@/lib/playbook-tree'
 
 const NOTION_API_BASE_URL = 'https://api.notion.com/v1'
 const NOTION_API_VERSION = '2022-06-28'
-const DEFAULT_APP_URL = 'https://roi.welltechnologies.net'
+const DEFAULT_APP_URL = 'https://notesaide.com'
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000
 
 const DEV_FALLBACK_SESSION_SECRET = 'action-extractor-dev-only-secret'

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import {
   AlignLeft,
   AlertTriangle,
@@ -32,9 +33,11 @@ import {
   MessageSquare,
   Minimize2,
   MoreHorizontal,
+  Network,
   Music2,
   Pencil,
   PenLine,
+  Presentation,
   Play,
   Plus,
   Save,
@@ -44,6 +47,7 @@ import {
   Trash2,
   Upload,
   Users,
+  Workflow,
   X,
   Zap,
 } from 'lucide-react'
@@ -67,6 +71,52 @@ import {
   normalizePlaybookPhases,
   updateNodeText,
 } from '@/lib/playbook-tree'
+import dynamic from 'next/dynamic'
+
+const FlowchartView = dynamic(
+  () => import('./FlowchartView').then((m) => ({ default: m.FlowchartView })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center h-64 text-gray-400">
+        Cargando diagrama...
+      </div>
+    ),
+  }
+)
+const MindMapView = dynamic(
+  () => import('./MindMapView').then((m) => ({ default: m.MindMapView })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center h-64 text-gray-400">
+        Cargando mapa mental...
+      </div>
+    ),
+  }
+)
+const HierarchyChartView = dynamic(
+  () => import('./HierarchyChartView').then((m) => ({ default: m.HierarchyChartView })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center h-64 text-gray-400">
+        Cargando jerarquía...
+      </div>
+    ),
+  }
+)
+const PresentationView = dynamic(
+  () => import('./PresentationView').then((m) => ({ default: m.PresentationView })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center h-64 text-gray-400">
+        Cargando presentación...
+      </div>
+    ),
+  }
+)
 import type {
   ExtractionAccessRole,
   ExtractionMember,
@@ -86,7 +136,6 @@ import {
   isShareVisibilityShareable,
   getShareVisibilityLabel,
 } from '@/app/home/lib/share-visibility'
-import { type Lang, t } from '@/app/home/lib/i18n'
 
 interface ResultPanelProps {
   result: ExtractResult
@@ -163,7 +212,6 @@ interface ResultPanelProps {
   allTags?: import('@/app/home/lib/types').ExtractionTag[]
   onAddTag?: (name: string, color: string) => Promise<void>
   onRemoveTag?: (tagId: string) => Promise<void>
-  lang?: Lang
 }
 
 type PlaybookCloseStage = 'idle' | 'folding' | 'cover'
@@ -185,44 +233,42 @@ interface PlaybookPageTurnSnapshot {
 
 const TASK_STATUS_OPTIONS: Array<{
   value: InteractiveTaskStatus
-  label: string
   chipClassName: string
 }> = [
   {
     value: 'pending',
-    label: 'Pendiente',
     chipClassName:
       'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300',
   },
   {
     value: 'in_progress',
-    label: 'En progreso',
     chipClassName:
       'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-900/25 dark:text-sky-300',
   },
   {
     value: 'blocked',
-    label: 'Bloqueada',
     chipClassName:
       'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300',
   },
   {
     value: 'completed',
-    label: 'Completada',
     chipClassName:
       'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300',
   },
 ]
 
-const TASK_EVENT_TYPE_OPTIONS: Array<{ value: InteractiveTaskEventType; label: string }> = [
-  { value: 'note', label: 'Observación' },
-  { value: 'pending_action', label: 'Acción pendiente' },
-  { value: 'blocker', label: 'Impedimento' },
-  { value: 'resolved', label: 'Resuelto' },
-]
-
-function getTaskStatusLabel(status: InteractiveTaskStatus) {
-  return TASK_STATUS_OPTIONS.find((option) => option.value === status)?.label ?? 'Pendiente'
+function getTaskStatusLabel(status: InteractiveTaskStatus, t: (key: string) => string) {
+  switch (status) {
+    case 'in_progress':
+      return t('playbook.status.inProgress')
+    case 'blocked':
+      return t('playbook.status.blocked')
+    case 'completed':
+      return t('playbook.status.completed')
+    case 'pending':
+    default:
+      return t('playbook.status.pending')
+  }
 }
 
 function getTaskStatusChipClassName(status: InteractiveTaskStatus) {
@@ -232,19 +278,34 @@ function getTaskStatusChipClassName(status: InteractiveTaskStatus) {
   )
 }
 
-function getTaskEventTypeLabel(eventType: InteractiveTaskEventType) {
-  return TASK_EVENT_TYPE_OPTIONS.find((option) => option.value === eventType)?.label ?? 'Nota'
+function getTaskEventTypeLabel(eventType: InteractiveTaskEventType, t: (key: string) => string) {
+  switch (eventType) {
+    case 'pending_action':
+      return t('playbook.eventType.pendingAction')
+    case 'blocker':
+      return t('playbook.eventType.blocker')
+    case 'resolved':
+      return t('playbook.eventType.resolved')
+    case 'note':
+    default:
+      return t('playbook.eventType.note')
+  }
+}
+
+function dateFromYMDutc(ymd: string): Date {
+  const [y, m, d] = ymd.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d))
 }
 
 function getMonthMatrix(year: number, month: number): Date[][] {
-  const firstDay = new Date(year, month, 1)
-  const dow = firstDay.getDay() // 0=Dom, 1=Lun, ...
+  const firstDay = new Date(Date.UTC(year, month, 1))
+  const dow = firstDay.getUTCDay() // 0=Dom, 1=Lun, ...
   const offset = dow === 0 ? 6 : dow - 1 // días hacia atrás hasta el lunes
-  const gridStart = new Date(year, month, 1 - offset)
+  const gridStart = new Date(Date.UTC(year, month, 1 - offset))
   return Array.from({ length: 6 }, (_, row) =>
     Array.from({ length: 7 }, (_, col) => {
       const d = new Date(gridStart)
-      d.setDate(gridStart.getDate() + row * 7 + col)
+      d.setUTCDate(gridStart.getUTCDate() + row * 7 + col)
       return d
     })
   )
@@ -266,8 +327,8 @@ function segmentTaskByWeeks(
   const rawStart = task.scheduledStartAt ?? task.dueAt
   const rawEnd = task.scheduledEndAt ?? task.dueAt
   if (!rawStart || !rawEnd) return []
-  const startDate = new Date(rawStart); startDate.setHours(0, 0, 0, 0)
-  const endDate = new Date(rawEnd); endDate.setHours(0, 0, 0, 0)
+  const startDate = dateFromYMDutc(rawStart.slice(0, 10))
+  const endDate = dateFromYMDutc(rawEnd.slice(0, 10))
   if (endDate < startDate) return []
   const segments: CalTaskSegment[] = []
   for (let rowIdx = 0; rowIdx < matrix.length; rowIdx++) {
@@ -305,11 +366,11 @@ const GANTT_DAY_W  = 32   // px — ancho por día en el timeline
 const GANTT_DAYS   = 42   // días visibles (6 semanas)
 
 function getGanttWindowStart(date: Date): Date {
-  const d = new Date(date)
-  d.setHours(0, 0, 0, 0)
-  const dow = d.getDay()
+  const n = new Date()
+  const d = new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()))
+  const dow = d.getUTCDay()
   const offset = dow === 0 ? -6 : 1 - dow // retroceder al lunes
-  d.setDate(d.getDate() + offset)
+  d.setUTCDate(d.getUTCDate() + offset)
   return d
 }
 
@@ -519,9 +580,9 @@ function makeCpmBezierPath(x1: number, y1: number, x2: number, y2: number): stri
 
 function isSameDay(a: Date, b: Date): boolean {
   return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
   )
 }
 
@@ -559,33 +620,15 @@ function parsePlaybookReferenceTokens(text: unknown): PlaybookReferenceToken[] {
   return tokens
 }
 
-function formatTaskEventDate(isoDate: string) {
+function formatTaskEventDate(isoDate: string, locale: string, unknownDateLabel: string) {
   const parsed = new Date(isoDate)
-  if (Number.isNaN(parsed.getTime())) return 'Fecha desconocida'
+  if (Number.isNaN(parsed.getTime())) return unknownDateLabel
 
-  return new Intl.DateTimeFormat('es-ES', {
+  return new Intl.DateTimeFormat(locale, {
     dateStyle: 'short',
     timeStyle: 'short',
     hour12: true,
   }).format(parsed)
-}
-
-function formatPlaybookCreatedAt(isoDate: string) {
-  const parsed = new Date(isoDate)
-  if (Number.isNaN(parsed.getTime())) return null
-
-  return {
-    date: new Intl.DateTimeFormat('es-ES', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    }).format(parsed),
-    time: new Intl.DateTimeFormat('es-ES', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    }).format(parsed),
-  }
 }
 
 interface TaskCommentNode extends InteractiveTaskComment {
@@ -638,12 +681,15 @@ function formatAttachmentSize(sizeBytes: number | null) {
   return `${Math.max(1, Math.round(sizeBytes / kb))} KB`
 }
 
-function getAttachmentTypeLabel(type: InteractiveTaskAttachment['attachmentType']) {
-  if (type === 'image') return 'Imagen'
-  if (type === 'audio') return 'Audio'
-  if (type === 'youtube_link') return 'YouTube'
-  if (type === 'note') return 'Nota'
-  return 'PDF'
+function getAttachmentTypeLabel(
+  type: InteractiveTaskAttachment['attachmentType'],
+  t: (key: string) => string
+) {
+  if (type === 'image') return t('playbook.attachmentType.image')
+  if (type === 'audio') return t('playbook.attachmentType.audio')
+  if (type === 'youtube_link') return t('playbook.attachmentType.youtube')
+  if (type === 'note') return t('playbook.attachmentType.note')
+  return t('playbook.attachmentType.pdf')
 }
 
 /**
@@ -750,47 +796,52 @@ export function ResultPanel({
   allTags = [],
   onAddTag,
   onRemoveTag,
-  lang = 'en',
 }: ResultPanelProps) {
+  const locale = useLocale()
+  const tx = useTranslations()
+  const localeTag = locale === 'es' ? 'es-ES' : 'en-US'
+
   const resolvedMode = normalizeExtractionMode(result.mode ?? extractionMode)
   const sourceUrl = (result.url ?? url).trim()
   const resolvedSourceType: SourceType = result.sourceType ?? (result.videoId ? 'youtube' : 'text')
 
   const sourceSectionLabel = (() => {
     switch (resolvedSourceType) {
-      case 'youtube': return lang === 'es' ? 'Video Fuente' : 'Source Video'
-      case 'web_url': return t(lang, 'result.sourceWebPage')
-      case 'pdf': return lang === 'es' ? 'Documento PDF' : 'PDF Document'
-      case 'docx': return lang === 'es' ? 'Documento Word' : 'Word Document'
-      case 'manual': return t(lang, 'result.manualExtraction')
-      default: return lang === 'es' ? 'Contenido Analizado' : 'Analyzed Content'
+      case 'youtube':
+        return tx('playbook.source.sourceVideo')
+      case 'web_url':
+        return tx('playbook.source.webPage')
+      case 'pdf':
+        return tx('playbook.source.pdfDocument')
+      case 'docx':
+        return tx('playbook.source.wordDocument')
+      case 'manual':
+        return tx('playbook.source.manualExtraction')
+      default:
+        return tx('playbook.source.analyzedContent')
     }
   })()
 
   const sourceDisplayTitle = (() => {
     if (result.videoTitle) return result.videoTitle
     if (result.sourceLabel) return result.sourceLabel
-    if (resolvedSourceType === 'manual') return t(lang, 'result.manualExtractionLabel')
+    if (resolvedSourceType === 'manual') return tx('playbook.source.manualExtractionLabel')
     if (sourceUrl) {
       try { return new URL(sourceUrl).hostname } catch { return sourceUrl }
     }
-    return t(lang, 'result.textAnalysis')
+    return tx('playbook.source.textAnalysis')
   })()
-  const playbookCreatedAt = useMemo(
-    () => (result.createdAt ? formatPlaybookCreatedAt(result.createdAt) : null),
-    [result.createdAt]
-  )
   const coverFolderLabel =
     typeof bookFolderLabel === 'string' && bookFolderLabel.trim().length > 0
       ? bookFolderLabel.trim()
-      : 'General'
+      : tx('playbook.folder.general')
   const playbookOwnerSignature = useMemo(() => {
     const ownerName = result.ownerName?.trim()
     if (ownerName) return ownerName
     const ownerEmail = result.ownerEmail?.trim()
     if (ownerEmail) return ownerEmail
-    return 'Propietario'
-  }, [result.ownerEmail, result.ownerName])
+    return tx('playbook.ownerFallback')
+  }, [result.ownerEmail, result.ownerName, tx])
   const isShareableVisibility = isShareVisibilityShareable(shareVisibility)
   const isOwnerAccess = accessRole === 'owner'
   const canEditTaskContent = accessRole === 'owner' || accessRole === 'editor'
@@ -823,6 +874,113 @@ export function ResultPanel({
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [copiedPhaseId, setCopiedPhaseId] = useState<number | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
+
+  // ── Source access ─────────────────────────────────────────────────────────
+  const [showYoutubeEmbed, setShowYoutubeEmbed] = useState(false)
+  const [showSourceTextModal, setShowSourceTextModal] = useState(false)
+  const [sourceTextContent, setSourceTextContent] = useState<string | null>(null)
+  const [sourceTextLoading, setSourceTextLoading] = useState(false)
+  const [sourceLinkCopied, setSourceLinkCopied] = useState(false)
+  const [sourceTextCopied, setSourceTextCopied] = useState(false)
+  const [sourceDirectCopyLoading, setSourceDirectCopyLoading] = useState(false)
+  const [sourceDirectDownloadLoading, setSourceDirectDownloadLoading] = useState(false)
+
+  const handleFetchSourceText = useCallback(async () => {
+    if (!result.id) return
+    if (sourceTextContent !== null) { setShowSourceTextModal(true); return }
+    setSourceTextLoading(true)
+    try {
+      const res = await fetch(`/api/extractions/${result.id}/source/text`)
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({})) as { error?: string }
+        setSourceTextContent(json.error ?? tx('playbook.source.noSourceText'))
+      } else {
+        const json = await res.json() as { text?: string }
+        setSourceTextContent(typeof json.text === 'string' ? json.text : tx('playbook.source.noSourceText'))
+      }
+    } catch {
+      setSourceTextContent(tx('playbook.source.noSourceText'))
+    } finally {
+      setSourceTextLoading(false)
+      setShowSourceTextModal(true)
+    }
+  }, [result.id, sourceTextContent, tx])
+
+  const handleCopySourceLink = useCallback(() => {
+    if (!sourceUrl) return
+    void navigator.clipboard.writeText(sourceUrl).then(() => {
+      setSourceLinkCopied(true)
+      setTimeout(() => setSourceLinkCopied(false), 2000)
+    })
+  }, [sourceUrl])
+
+  const handleCopySourceText = useCallback(() => {
+    if (!sourceTextContent) return
+    void navigator.clipboard.writeText(sourceTextContent).then(() => {
+      setSourceTextCopied(true)
+      setTimeout(() => setSourceTextCopied(false), 2000)
+    })
+  }, [sourceTextContent])
+
+  const handleDownloadSourceText = useCallback(() => {
+    if (!sourceTextContent) return
+    const blob = new Blob([sourceTextContent], { type: 'text/plain;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${(result.sourceLabel ?? result.videoTitle ?? 'source').replace(/[^a-zA-Z0-9_-]/g, '_')}.txt`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }, [sourceTextContent, result.sourceLabel, result.videoTitle])
+
+  const fetchSourceTextSilently = useCallback(async (): Promise<string | null> => {
+    if (sourceTextContent !== null) return sourceTextContent
+    if (!result.id) return null
+    const res = await fetch(`/api/extractions/${result.id}/source/text`)
+    if (!res.ok) return null
+    const json = await res.json() as { text?: string }
+    const text = typeof json.text === 'string' ? json.text : null
+    if (text) setSourceTextContent(text)
+    return text
+  }, [result.id, sourceTextContent])
+
+  const handleDirectCopySourceText = useCallback(async () => {
+    setSourceDirectCopyLoading(true)
+    try {
+      const text = await fetchSourceTextSilently()
+      if (!text) return
+      await navigator.clipboard.writeText(text)
+      setSourceTextCopied(true)
+      setTimeout(() => setSourceTextCopied(false), 2000)
+    } finally {
+      setSourceDirectCopyLoading(false)
+    }
+  }, [fetchSourceTextSilently])
+
+  const handleDirectDownloadSourceText = useCallback(async () => {
+    setSourceDirectDownloadLoading(true)
+    try {
+      const text = await fetchSourceTextSilently()
+      if (!text) return
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `${(result.sourceLabel ?? result.videoTitle ?? result.sourceFileName ?? 'source').replace(/[^a-zA-Z0-9_-]/g, '_')}.txt`
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } finally {
+      setSourceDirectDownloadLoading(false)
+    }
+  }, [fetchSourceTextSilently, result.sourceLabel, result.videoTitle, result.sourceFileName])
+
+  // Show text-access buttons when:
+  // 1. The backend flag says so, OR
+  // 2. It's a YouTube video (transcript always available), OR
+  // 3. It's a source type that always produces text (pdf/docx/web_url/text/manual)
+  //    — even if hasSourceText flag is missing/undefined (rehidration from old history items)
+  const TEXT_SOURCE_TYPES: SourceType[] = ['pdf', 'docx', 'web_url', 'text', 'manual']
+  const hasSourceText = result.hasSourceText === true ||
+    (resolvedSourceType === 'youtube' && !!result.videoId) ||
+    TEXT_SOURCE_TYPES.includes(resolvedSourceType)
 
   // ── Tags ──────────────────────────────────────────────────────────────────
   const [tagInput, setTagInput] = useState('')
@@ -893,9 +1051,10 @@ export function ResultPanel({
   const reextractProcessingRef = useRef(false)
   const rightControlsRef = useRef<HTMLDivElement | null>(null)
   const [interactiveTasks, setInteractiveTasks] = useState<InteractiveTask[]>([])
-  const [taskView, setTaskView] = useState<'list' | 'kanban' | 'calendar' | 'gantt' | 'cpm'>('list')
+  const [taskView, setTaskView] = useState<'list' | 'kanban' | 'calendar' | 'gantt' | 'cpm' | 'mindmap' | 'hierarchy' | 'flowchart' | 'presentation'>('list')
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
-    const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0); return d
+    const n = new Date()
+    return new Date(Date.UTC(n.getFullYear(), n.getMonth(), 1))
   })
   const [schedulePopoverTask, setSchedulePopoverTask] = useState<InteractiveTask | null>(null)
   const [schedulePopoverStart, setSchedulePopoverStart] = useState('')
@@ -1269,7 +1428,7 @@ export function ResultPanel({
           const message =
             typeof payload?.error === 'string' && payload.error.trim()
               ? payload.error
-              : 'No se pudo cargar el checklist interactivo.'
+              : tx('errors.loadInteractiveChecklist')
           throw new Error(message)
         }
 
@@ -1283,7 +1442,7 @@ export function ResultPanel({
         const message =
           error instanceof Error && error.message.trim()
             ? error.message
-            : 'No se pudo cargar el checklist interactivo.'
+            : tx('errors.loadInteractiveChecklist')
         setTasksError(message)
       } finally {
         if (!controller.signal.aborted) {
@@ -1322,8 +1481,8 @@ export function ResultPanel({
   }, [interactiveTasks])
 
   const calendarData = useMemo(() => {
-    const year = calendarMonth.getFullYear()
-    const month = calendarMonth.getMonth()
+    const year = calendarMonth.getUTCFullYear()
+    const month = calendarMonth.getUTCMonth()
     const matrix = getMonthMatrix(year, month)
     const segsByRow = new Map<number, CalTaskSegment[]>()
     for (const task of interactiveTasks) {
@@ -1417,7 +1576,7 @@ export function ResultPanel({
         const message =
           typeof payload?.error === 'string' && payload.error.trim()
             ? payload.error
-            : 'No se pudo cargar la comunidad.'
+            : tx('errors.loadTaskCommunity')
         setTaskCommunityErrorByTaskId((previous) => ({
           ...previous,
           [taskId]: message,
@@ -1456,7 +1615,7 @@ export function ResultPanel({
     } catch {
       setTaskCommunityErrorByTaskId((previous) => ({
         ...previous,
-        [taskId]: 'No se pudo cargar la comunidad.',
+        [taskId]: tx('errors.loadTaskCommunity'),
       }))
       return false
     } finally {
@@ -1594,10 +1753,10 @@ export function ResultPanel({
       | null
 
     if (!response.ok) {
-      const message =
-        typeof data?.error === 'string' && data.error.trim()
-          ? data.error
-          : 'No se pudo actualizar el checklist interactivo.'
+    const message =
+      typeof data?.error === 'string' && data.error.trim()
+        ? data.error
+          : tx('errors.updateInteractiveChecklist')
       setTasksError(message)
       return false
     }
@@ -1638,11 +1797,11 @@ export function ResultPanel({
   }
 
   const prevMonth = useCallback(() => {
-    setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))
+    setCalendarMonth(prev => new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth() - 1, 1)))
   }, [])
 
   const nextMonth = useCallback(() => {
-    setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))
+    setCalendarMonth(prev => new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth() + 1, 1)))
   }, [])
 
   const openSchedulePopover = useCallback((task: InteractiveTask) => {
@@ -1669,11 +1828,11 @@ export function ResultPanel({
   }
 
   const prevGanttWeek = useCallback(() => {
-    setGanttRangeStart(prev => { const d = new Date(prev); d.setDate(d.getDate() - 7); return d })
+    setGanttRangeStart(prev => { const d = new Date(prev); d.setUTCDate(d.getUTCDate() - 7); return d })
   }, [])
 
   const nextGanttWeek = useCallback(() => {
-    setGanttRangeStart(prev => { const d = new Date(prev); d.setDate(d.getDate() + 7); return d })
+    setGanttRangeStart(prev => { const d = new Date(prev); d.setUTCDate(d.getUTCDate() + 7); return d })
   }, [])
 
   const resetGanttToToday = useCallback(() => {
@@ -1758,7 +1917,7 @@ export function ResultPanel({
         const message =
           typeof payload?.error === 'string' && payload.error.trim()
             ? payload.error
-            : 'No se pudo subir la evidencia.'
+            : tx('errors.uploadEvidence')
         setTaskAttachmentErrorByTaskId((previous) => ({
           ...previous,
           [task.id]: message,
@@ -1770,7 +1929,7 @@ export function ResultPanel({
     } catch {
       setTaskAttachmentErrorByTaskId((previous) => ({
         ...previous,
-        [task.id]: 'No se pudo subir la evidencia.',
+        [task.id]: tx('errors.uploadEvidence'),
       }))
     } finally {
       setTaskAttachmentMutationId((previous) => (previous === task.id ? null : previous))
@@ -1819,7 +1978,7 @@ export function ResultPanel({
         const message =
           typeof payload?.error === 'string' && payload.error.trim()
             ? payload.error
-            : 'No se pudo guardar el enlace.'
+            : tx('errors.saveTaskLink')
         setTaskAttachmentErrorByTaskId((previous) => ({
           ...previous,
           [task.id]: message,
@@ -1835,7 +1994,7 @@ export function ResultPanel({
     } catch {
       setTaskAttachmentErrorByTaskId((previous) => ({
         ...previous,
-        [task.id]: 'No se pudo guardar el enlace.',
+        [task.id]: tx('errors.saveTaskLink'),
       }))
     } finally {
       setTaskAttachmentMutationId((previous) => (previous === task.id ? null : previous))
@@ -1853,7 +2012,7 @@ export function ResultPanel({
     const confirmed =
       typeof window === 'undefined'
         ? false
-        : window.confirm('¿Eliminar esta evidencia del subítem?')
+        : window.confirm(tx('playbook.confirmDeleteEvidence'))
     if (!confirmed) return
 
     setTaskAttachmentMutationId(task.id)
@@ -1879,7 +2038,7 @@ export function ResultPanel({
         const message =
           typeof payload?.error === 'string' && payload.error.trim()
             ? payload.error
-            : 'No se pudo eliminar la evidencia.'
+            : tx('errors.deleteEvidence')
         setTaskAttachmentErrorByTaskId((previous) => ({
           ...previous,
           [task.id]: message,
@@ -1891,7 +2050,7 @@ export function ResultPanel({
     } catch {
       setTaskAttachmentErrorByTaskId((previous) => ({
         ...previous,
-        [task.id]: 'No se pudo eliminar la evidencia.',
+        [task.id]: tx('errors.deleteEvidence'),
       }))
     } finally {
       setTaskAttachmentMutationId((previous) => (previous === task.id ? null : previous))
@@ -1922,7 +2081,7 @@ export function ResultPanel({
         const message =
           typeof payload?.error === 'string' && payload.error.trim()
             ? payload.error
-            : 'No se pudo guardar la nota.'
+            : tx('errors.saveTaskNote')
         setTaskAttachmentErrorByTaskId((previous) => ({ ...previous, [task.id]: message }))
         return
       }
@@ -1931,7 +2090,7 @@ export function ResultPanel({
     } catch {
       setTaskAttachmentErrorByTaskId((previous) => ({
         ...previous,
-        [task.id]: 'No se pudo guardar la nota.',
+        [task.id]: tx('errors.saveTaskNote'),
       }))
     } finally {
       setTaskAttachmentMutationId((previous) => (previous === task.id ? null : previous))
@@ -2028,7 +2187,7 @@ export function ResultPanel({
         const message =
           typeof data?.error === 'string' && data.error.trim()
             ? data.error
-            : 'No se pudo actualizar la comunidad.'
+            : tx('errors.updateTaskCommunity')
         setTaskCommunityErrorByTaskId((previous) => ({
           ...previous,
           [taskId]: message,
@@ -2065,7 +2224,7 @@ export function ResultPanel({
     } catch {
       setTaskCommunityErrorByTaskId((previous) => ({
         ...previous,
-        [taskId]: 'No se pudo actualizar la comunidad.',
+        [taskId]: tx('errors.updateTaskCommunity'),
       }))
       return false
     } finally {
@@ -2118,7 +2277,9 @@ export function ResultPanel({
 
   const handleDeleteTaskComment = async (task: InteractiveTask, commentId: string) => {
     const confirmed =
-      typeof window === 'undefined' ? false : window.confirm('¿Eliminar este comentario?')
+      typeof window === 'undefined'
+        ? false
+        : window.confirm(tx('playbook.confirmDeleteComment'))
     if (!confirmed) return
 
     setTaskCommentMenuOpenId(null)
@@ -2147,7 +2308,9 @@ export function ResultPanel({
     const confirmed =
       typeof window === 'undefined'
         ? false
-        : window.confirm(nextHidden ? '¿Ocultar este comentario?' : '¿Mostrar este comentario?')
+        : window.confirm(
+            nextHidden ? tx('playbook.confirmHideComment') : tx('playbook.confirmShowComment')
+          )
     if (!confirmed) return
 
     setTaskCommentMenuOpenId(null)
@@ -2178,7 +2341,7 @@ export function ResultPanel({
     if (isGuestExtraction) {
       setTaskCommunityErrorByTaskId((previous) => ({
         ...previous,
-        [task.id]: 'Seguir subítems requiere una cuenta registrada.',
+        [task.id]: tx('errors.followSubItemsRequiresAccount'),
       }))
       return
     }
@@ -2223,7 +2386,7 @@ export function ResultPanel({
           const message =
             typeof payload?.error === 'string' && payload.error.trim()
               ? payload.error
-              : 'No se pudo generar el enlace compartible del subítem.'
+              : tx('errors.generateSubItemShareLink')
           setTaskCommunityErrorByTaskId((previous) => ({
             ...previous,
             [task.id]: message,
@@ -2232,7 +2395,7 @@ export function ResultPanel({
       } catch {
         setTaskCommunityErrorByTaskId((previous) => ({
           ...previous,
-          [task.id]: 'No se pudo generar el enlace compartible del subítem.',
+          [task.id]: tx('errors.generateSubItemShareLink'),
         }))
       }
     }
@@ -2252,7 +2415,7 @@ export function ResultPanel({
     } catch {
       setTaskCommunityErrorByTaskId((previous) => ({
         ...previous,
-        [task.id]: 'No se pudo copiar el enlace del subítem.',
+        [task.id]: tx('errors.copySubItemShareLink'),
       }))
       return
     }
@@ -2381,7 +2544,7 @@ export function ResultPanel({
               ? 'cursor-pointer border-violet-300 bg-violet-50 text-violet-700 underline decoration-violet-500/70 underline-offset-2 transition-colors hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-900/25 dark:text-violet-200 dark:hover:bg-violet-900/40'
               : 'border-slate-300 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
           }`}
-          title={`Abrir playbook ${token.id}`}
+          title={tx('playbook.openPlaybook', { id: token.id })}
         >
           {token.label}
         </span>
@@ -2435,8 +2598,8 @@ export function ResultPanel({
         ...previous,
         {
           id: nextId,
-          title: `Ítem principal ${previous.length + 1}`,
-          items: [buildNewNode('Nuevo ítem')],
+          title: `${tx('playbook.mainItem')} ${previous.length + 1}`,
+          items: [buildNewNode(tx('playbook.newItem'))],
         },
       ]
     })
@@ -2452,7 +2615,7 @@ export function ResultPanel({
         phase.id === phaseId
           ? {
               ...phase,
-              items: [...phase.items, buildNewNode('Nuevo ítem')],
+              items: [...phase.items, buildNewNode(tx('playbook.newItem'))],
             }
           : phase
       )
@@ -2465,7 +2628,7 @@ export function ResultPanel({
         if (phase.id !== phaseId) return phase
         return {
           ...phase,
-          items: addChildNode(phase.items, parentNodeId, buildNewNode('Nuevo hijo')),
+          items: addChildNode(phase.items, parentNodeId, buildNewNode(tx('playbook.newChildItem'))),
         }
       })
     )
@@ -2478,7 +2641,7 @@ export function ResultPanel({
         if (findNode(phase.items, siblingNodeId) == null) return phase
         return {
           ...phase,
-          items: addSiblingNode(phase.items, siblingNodeId, buildNewNode('Nuevo ítem')),
+          items: addSiblingNode(phase.items, siblingNodeId, buildNewNode(tx('playbook.newItem'))),
         }
       })
     )
@@ -2492,7 +2655,7 @@ export function ResultPanel({
         if (remaining.length === 0) {
           return {
             ...phase,
-            items: [buildNewNode('Nuevo ítem')],
+            items: [buildNewNode(tx('playbook.newItem'))],
           }
         }
         return {
@@ -2582,7 +2745,7 @@ export function ResultPanel({
       .filter((phase) => phase.title.length > 0 || phase.items.length > 0)
 
     if (normalized.length === 0) {
-      setStructureError('Debes conservar al menos un ítem principal.')
+      setStructureError(tx('errors.keepAtLeastOneMainItem'))
       return
     }
 
@@ -2590,7 +2753,7 @@ export function ResultPanel({
       (phase) => !phase.title || phase.items.length === 0 || countNodes(phase.items) === 0
     )
     if (hasInvalidPhase) {
-      setStructureError('Cada ítem principal debe tener título y al menos un subítem.')
+      setStructureError(tx('errors.mainItemNeedsTitleAndSubitem'))
       return
     }
 
@@ -2599,7 +2762,7 @@ export function ResultPanel({
     try {
       const ok = await onSavePhases(normalized)
       if (!ok) {
-        setStructureError('No se pudo guardar la edición del contenido.')
+        setStructureError(tx('playbook.saveContentEditFailed'))
         return
       }
 
@@ -2638,14 +2801,14 @@ export function ResultPanel({
       const res = await fetch('/api/extract/thumbnail', { method: 'POST', body: formData })
       const data = (await res.json().catch(() => null)) as { url?: string; error?: string } | null
       if (!res.ok) {
-        setMetaThumbError(data?.error ?? 'No se pudo subir la imagen.')
+        setMetaThumbError(data?.error ?? tx('errors.uploadImage'))
         return
       }
       const url = data?.url ?? null
       setMetaThumbnailUrl(url)
       setMetaThumbnailPreview(url)
     } catch {
-      setMetaThumbError('Error al subir la imagen.')
+      setMetaThumbError(tx('errors.uploadImage'))
     } finally {
       setIsUploadingMetaThumb(false)
     }
@@ -2655,13 +2818,13 @@ export function ResultPanel({
     if (!canEditMeta) return
     setMetaSaving(true)
     const ok = await onSaveMeta({
-      title: metaTitleDraft.trim() || 'Sin título',
+      title: metaTitleDraft.trim() || tx('playbook.untitled'),
       thumbnailUrl: metaThumbnailUrl,
       objective: metaObjectiveDraft.trim(),
     })
     setMetaSaving(false)
     if (ok) setIsMetaEditing(false)
-    else setMetaError('No se pudo guardar. Intenta de nuevo.')
+    else setMetaError(tx('playbook.saveFailedTryAgain'))
   }
 
   const handleClose = () => {
@@ -2688,14 +2851,14 @@ export function ResultPanel({
 
     const email = memberEmailDraft.trim().toLowerCase()
     if (!email) {
-      setMemberError('Debes indicar un correo válido.')
+      setMemberError(tx('errors.validEmailRequired'))
       return
     }
 
     setMemberError(null)
     const ok = await onAddMember({ email, role: memberRoleDraft })
     if (!ok) {
-      setMemberError('No se pudo agregar el miembro.')
+      setMemberError(tx('errors.addMember'))
       return
     }
 
@@ -2707,13 +2870,13 @@ export function ResultPanel({
     const confirmed =
       typeof window === 'undefined'
         ? false
-        : window.confirm('¿Eliminar este miembro del círculo?')
+        : window.confirm(tx('playbook.confirmRemoveCircleMember'))
     if (!confirmed) return
 
     setMemberError(null)
     const ok = await onRemoveMember(memberUserId)
     if (!ok) {
-      setMemberError('No se pudo eliminar el miembro.')
+      setMemberError(tx('errors.removeMember'))
     }
   }
 
@@ -2738,7 +2901,7 @@ export function ResultPanel({
           const hasReplies = replyCount > 0
           const isRepliesCollapsed =
             hasReplies && collapsedReplyThreadsByCommentKey[replyThreadKey] === true
-          const repliesLabel = `${replyCount} ${replyCount === 1 ? 'respuesta' : 'respuestas'}`
+          const repliesLabel = tx('playbook.replyCount', { count: replyCount })
           const repliesContainerId = `task-comment-replies-${input.compact ? 'compact' : 'full'}-${input.task.id}-${comment.id}`
           const canHideComment = isOwnerAccess && !isGuestExtraction
           const canDeleteComment =
@@ -2747,7 +2910,7 @@ export function ResultPanel({
           const isHiddenComment = comment.isHidden === true
           const displayContent =
             !isOwnerAccess && isHiddenComment
-              ? 'Comentario oculto por el propietario.'
+              ? tx('playbook.commentHiddenByOwner')
               : comment.content
           return (
             <li key={comment.id} style={depth > 0 ? { marginLeft: `${Math.min(depth, 5) * 14}px` } : undefined}>
@@ -2790,7 +2953,11 @@ export function ResultPanel({
                         </div>
                         <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">{displayContent}</p>
                         <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
-                          {formatTaskEventDate(comment.createdAt)}
+                          {formatTaskEventDate(
+                            comment.createdAt,
+                            localeTag,
+                            tx('playbook.unknownDate')
+                          )}
                         </p>
                       </div>
                       {canOpenCommentMenu && (
@@ -2804,7 +2971,7 @@ export function ResultPanel({
                             }
                             disabled={input.isCommunityMutating}
                             className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
-                            aria-label="Opciones del comentario"
+                            aria-label={tx('playbook.commentOptions')}
                           >
                             <MoreHorizontal size={13} />
                           </button>
@@ -2818,7 +2985,7 @@ export function ResultPanel({
                                   className="flex w-full items-center gap-2 px-3 py-2 text-[11px] font-medium text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-rose-300 dark:hover:bg-rose-900/30"
                                 >
                                   <Trash2 size={11} />
-                                  Borrar
+                                  {tx('common.delete')}
                                 </button>
                               )}
                               {canHideComment && (
@@ -2835,7 +3002,7 @@ export function ResultPanel({
                                   className="flex w-full items-center gap-2 px-3 py-2 text-[11px] font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-amber-300 dark:hover:bg-amber-900/30"
                                 >
                                   {comment.isHidden ? <Eye size={11} /> : <EyeOff size={11} />}
-                                  {comment.isHidden ? 'Mostrar' : 'Ocultar'}
+                                  {comment.isHidden ? tx('common.show') : tx('common.hide')}
                                 </button>
                               )}
                             </div>
@@ -2854,7 +3021,7 @@ export function ResultPanel({
                             : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300 dark:hover:bg-slate-800'
                         }`}
                       >
-                        {isReplyTarget ? 'Respondiendo' : 'Responder'}
+                        {isReplyTarget ? tx('playbook.replying') : tx('playbook.reply')}
                       </button>
                       {hasReplies && (
                         <button
@@ -2865,7 +3032,9 @@ export function ResultPanel({
                           aria-controls={repliesContainerId}
                         >
                           {isRepliesCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
-                          {isRepliesCollapsed ? `Ver ${repliesLabel}` : `Ocultar ${repliesLabel}`}
+                          {isRepliesCollapsed
+                            ? tx('playbook.viewReplies', { label: repliesLabel })
+                            : tx('playbook.hideReplies', { label: repliesLabel })}
                         </button>
                       )}
                     </div>
@@ -2905,7 +3074,7 @@ export function ResultPanel({
                                 input.compact ? 'h-10' : 'h-9'
                               }`}
                             >
-                              Cancelar
+                              {tx('common.cancel')}
                             </button>
                           </div>
                         </div>
@@ -2968,25 +3137,16 @@ export function ResultPanel({
           }`}
           style={{ marginInline: '4.5%' }}
         >
-          {playbookCreatedAt && (
-            <div className="mb-1 flex justify-end">
-              <p className="paper-playbook-date-note" aria-label={`Creado el ${playbookCreatedAt.date} a las ${playbookCreatedAt.time}`}>
-                <span className="paper-playbook-date-note-label">Fecha:</span> {playbookCreatedAt.date}
-                <br />
-                <span className="paper-playbook-date-note-label">Hora:</span> {playbookCreatedAt.time}
-              </p>
-            </div>
-          )}
           <div className="mb-3 flex flex-wrap items-start justify-between gap-2.5">
             <div className="flex flex-wrap items-center justify-start gap-2.5">
               <div className="flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
-                <Clock size={14} /> Tiempo ahorrado: {result.metadata.savedTime}
+                <Clock size={14} /> {tx('playbook.savedTimeLabel')}: {result.metadata.savedTime}
               </div>
               <div className="flex items-center gap-1.5 rounded-lg border border-orange-100 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-700 dark:border-orange-800 dark:bg-orange-900/20 dark:text-orange-300">
-                <Brain size={14} /> Dificultad: {result.metadata.difficulty}
+                <Brain size={14} /> {tx('playbook.difficultyLabel')}: {result.metadata.difficulty}
               </div>
               <div className="flex items-center gap-1.5 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300">
-                <Zap size={14} /> Modo: {getExtractionModeLabel(resolvedMode)}
+                <Zap size={14} /> {tx('playbook.modeLabel')}: {getExtractionModeLabel(resolvedMode)}
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -2994,7 +3154,11 @@ export function ResultPanel({
                 <button
                   type="button"
                   onClick={() => onStarResult(!result.isStarred)}
-                  aria-label={result.isStarred ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+                  aria-label={
+                    result.isStarred
+                      ? tx('playbook.removeFromFavorites')
+                      : tx('playbook.addToFavorites')
+                  }
                   className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${
                     result.isStarred
                       ? 'border-amber-300 bg-amber-50 text-amber-600 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/25 dark:text-amber-300'
@@ -3002,27 +3166,29 @@ export function ResultPanel({
                   }`}
                 >
                   <Star size={13} fill={result.isStarred ? 'currentColor' : 'none'} />
-                  {result.isStarred ? 'Favorito' : 'Guardar'}
+                  {result.isStarred ? tx('playbook.save') : tx('playbook.favorite')}
                 </button>
               )}
               <button
                 type="button"
                 onClick={handleToggleFullscreen}
-                aria-label={isFullscreen ? 'Salir de pantalla completa' : 'Ver en pantalla completa'}
+                aria-label={
+                  isFullscreen ? tx('playbook.exitFullscreen') : tx('playbook.enterFullscreen')
+                }
                 className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
               >
                 {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-                {isFullscreen ? 'Reducir' : 'Ampliar'}
+                {isFullscreen ? tx('playbook.minimize') : tx('playbook.expand')}
               </button>
               {onClose && isBookOpen && (
                 <button
                   type="button"
                   onClick={handleClose}
-                  aria-label="Cerrar playbook"
+                  aria-label={tx('playbook.close')}
                   className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
                 >
                   <X size={13} />
-                  Cerrar
+                  {tx('common.close')}
                 </button>
               )}
             </div>
@@ -3041,7 +3207,7 @@ export function ResultPanel({
                 {sourceSectionLabel}
               </h2>
               <span
-                title={`Carpeta: ${coverFolderLabel}`}
+                title={`${tx('playbook.folder.label')}: ${coverFolderLabel}`}
                 className="inline-flex min-w-0 items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-200"
               >
                 <Folder size={12} />
@@ -3057,7 +3223,7 @@ export function ResultPanel({
                     disabled={isAssigningFolder}
                     onChange={(event) => handleAssignCurrentFolder(event.target.value || null)}
                     className="bg-transparent pr-1 outline-none"
-                    aria-label="Asignar carpeta"
+                    aria-label={tx('playbook.folder.assign')}
                   >
                     {folders.map((folder) => (
                       <option key={folder.id} value={folder.id}>
@@ -3073,7 +3239,7 @@ export function ResultPanel({
                   onClick={handleStartMetaEdit}
                   className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                 >
-                  <Pencil size={12} /> Editar
+                  <Pencil size={12} /> {tx('common.edit')}
                 </button>
               )}
             </div>
@@ -3093,7 +3259,7 @@ export function ResultPanel({
                       type="button"
                       onClick={() => void handleRemoveTag(tag.id)}
                       disabled={tagLoading}
-                      aria-label={`Eliminar tag ${tag.name}`}
+                      aria-label={tx('playbook.tags.removeAria', { tag: tag.name })}
                       className="ml-0.5 rounded-full p-0.5 opacity-60 transition-opacity hover:opacity-100 disabled:cursor-not-allowed"
                     >
                       <X size={9} />
@@ -3144,7 +3310,7 @@ export function ResultPanel({
                     {metaThumbnailPreview ? (
                       <Image
                         src={metaThumbnailPreview}
-                        alt="Miniatura"
+                        alt={tx('playbook.thumbnailAlt')}
                         fill
                         sizes="224px"
                         className="object-cover"
@@ -3166,7 +3332,8 @@ export function ResultPanel({
                         disabled={isUploadingMetaThumb}
                         className="flex-1 inline-flex items-center justify-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
                       >
-                        <Upload size={11} /> {metaThumbnailPreview ? 'Cambiar' : 'Subir'}
+                        <Upload size={11} />{' '}
+                        {metaThumbnailPreview ? tx('playbook.change') : tx('playbook.upload')}
                       </button>
                       {metaThumbnailPreview && (
                         <button
@@ -3199,7 +3366,7 @@ export function ResultPanel({
                 <div className="relative h-32 w-full md:w-56">
                   <Image
                     src={result.thumbnailUrl}
-                    alt={result.videoTitle ?? 'Miniatura del video'}
+                    alt={result.videoTitle ?? tx('playbook.videoThumbnailAlt')}
                     fill
                     sizes="(min-width: 768px) 224px, 100vw"
                     className="rounded-xl object-cover border border-slate-200 dark:border-slate-700"
@@ -3221,15 +3388,148 @@ export function ResultPanel({
                     value={metaTitleDraft}
                     onChange={(e) => setMetaTitleDraft(e.target.value)}
                     maxLength={300}
-                    placeholder="Título"
+                    placeholder={tx('playbook.titlePlaceholder')}
                     className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 placeholder-slate-400 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
                   />
                 )}
-                {sourceUrl && (
+                {sourceUrl && /^https?:\/\//i.test(sourceUrl) ? (
+                  <a
+                    href={sourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`break-all text-xs text-indigo-600 underline hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 ${isMetaEditing ? 'mt-2 block' : 'mt-0 block'}`}
+                  >
+                    {sourceUrl}
+                  </a>
+                ) : sourceUrl ? (
                   <p className={`break-all text-xs text-slate-500 dark:text-slate-400 ${isMetaEditing ? 'mt-2' : 'mt-0'}`}>
                     {sourceUrl}
                   </p>
+                ) : null}
+                {/* ── Source Actions ─────────────────────────────────────────────── */}
+                {!isMetaEditing && (
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                    {/* YouTube: play/hide embed */}
+                    {resolvedSourceType === 'youtube' && result.videoId && (
+                      <button
+                        type="button"
+                        onClick={() => setShowYoutubeEmbed((v) => !v)}
+                        className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40"
+                        aria-label={showYoutubeEmbed ? tx('playbook.source.hideEmbed') : tx('playbook.source.playVideo')}
+                      >
+                        {showYoutubeEmbed ? <X size={11} /> : <Play size={11} className="fill-current" />}
+                        {showYoutubeEmbed ? tx('playbook.source.hideEmbed') : tx('playbook.source.playVideo')}
+                      </button>
+                    )}
+                    {/* YouTube: open on youtube.com */}
+                    {resolvedSourceType === 'youtube' && sourceUrl && (
+                      <a
+                        href={sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                        aria-label={tx('playbook.source.openYoutube')}
+                      >
+                        <ExternalLink size={11} />
+                        {tx('playbook.source.openYoutube')}
+                      </a>
+                    )}
+                    {/* Web URL: open in new tab + copy link */}
+                    {resolvedSourceType === 'web_url' && sourceUrl && (
+                      <>
+                        <a
+                          href={sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
+                          aria-label={tx('playbook.source.openInNewTab')}
+                        >
+                          <ExternalLink size={11} />
+                          {tx('playbook.source.openInNewTab')}
+                        </a>
+                        <button
+                          type="button"
+                          onClick={handleCopySourceLink}
+                          className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                          aria-label={tx('playbook.source.copyLink')}
+                        >
+                          {sourceLinkCopied ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
+                          {sourceLinkCopied ? tx('playbook.source.copied') : tx('playbook.source.copyLink')}
+                        </button>
+                      </>
+                    )}
+                    {/* PDF/DOCX: download original file */}
+                    {(resolvedSourceType === 'pdf' || resolvedSourceType === 'docx') && result.sourceFileUrl && (
+                      <a
+                        href={result.sourceFileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        download={result.sourceFileName ?? undefined}
+                        className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-300 dark:hover:bg-amber-900/40"
+                        aria-label={tx('playbook.source.download')}
+                      >
+                        <Download size={11} />
+                        {tx('playbook.source.download')}
+                        {result.sourceFileName && (
+                          <span className="max-w-[120px] truncate opacity-70">
+                            {result.sourceFileName}
+                          </span>
+                        )}
+                      </a>
+                    )}
+                    {/* View full text / copy / download TXT */}
+                    {hasSourceText && result.id && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void handleFetchSourceText()}
+                          disabled={sourceTextLoading}
+                          className="inline-flex items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-[11px] font-semibold text-violet-700 transition-colors hover:bg-violet-100 disabled:opacity-60 dark:border-violet-800 dark:bg-violet-900/25 dark:text-violet-300 dark:hover:bg-violet-900/40"
+                          aria-label={tx('playbook.source.viewText')}
+                        >
+                          {sourceTextLoading ? <Loader2 size={11} className="animate-spin" /> : <AlignLeft size={11} />}
+                          {tx('playbook.source.viewText')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleDirectCopySourceText()}
+                          disabled={sourceDirectCopyLoading}
+                          className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                          aria-label={tx('playbook.source.copyText')}
+                        >
+                          {sourceDirectCopyLoading ? <Loader2 size={11} className="animate-spin" /> : sourceTextCopied ? <Check size={11} className="text-emerald-500" /> : <Copy size={11} />}
+                          {sourceTextCopied ? tx('playbook.source.copied') : tx('playbook.source.copyText')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleDirectDownloadSourceText()}
+                          disabled={sourceDirectDownloadLoading}
+                          className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                          aria-label={tx('playbook.source.downloadTxt')}
+                        >
+                          {sourceDirectDownloadLoading ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
+                          {tx('playbook.source.downloadTxt')}
+                        </button>
+                      </>
+                    )}
+                  </div>
                 )}
+
+                {/* ── YouTube inline embed ──────────────────────────────────────── */}
+                {showYoutubeEmbed && result.videoId && (
+                  <div className="mt-3 overflow-hidden rounded-xl border border-slate-200 bg-black dark:border-slate-700">
+                    <div className="relative w-full" style={{ paddingBottom: '56.25%' }}>
+                      <iframe
+                        className="absolute inset-0 h-full w-full"
+                        src={`https://www.youtube.com/embed/${result.videoId}?autoplay=1`}
+                        title={result.videoTitle ?? 'YouTube video'}
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                      />
+                    </div>
+                  </div>
+                )}
+
                 {(result.orderNumber || result.id) && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     {result.orderNumber && result.orderNumber > 0 && (
@@ -3255,9 +3555,9 @@ export function ResultPanel({
                               ? 'bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900'
                               : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
                           }`}
-                          aria-label="Marcar contenido como privado"
+                          aria-label={tx('playbook.visibility.markPrivateAria')}
                         >
-                          Privado
+                          {tx('playbook.visibility.private')}
                         </button>
                         <button
                           type="button"
@@ -3268,9 +3568,9 @@ export function ResultPanel({
                               ? 'bg-sky-600 text-white dark:bg-sky-500 dark:text-sky-950'
                               : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
                           }`}
-                          aria-label="Marcar contenido como círculo"
+                          aria-label={tx('playbook.visibility.markCircleAria')}
                         >
-                          Círculo
+                          {tx('playbook.visibility.circle')}
                         </button>
                         <button
                           type="button"
@@ -3281,9 +3581,9 @@ export function ResultPanel({
                               ? 'bg-amber-500 text-white dark:bg-amber-400 dark:text-amber-950'
                               : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
                           }`}
-                          aria-label="Marcar contenido como solo con enlace"
+                          aria-label={tx('playbook.visibility.markLinkAria')}
                         >
-                          Enlace
+                          {tx('playbook.visibility.link')}
                         </button>
                         <button
                           type="button"
@@ -3294,15 +3594,15 @@ export function ResultPanel({
                               ? 'bg-emerald-600 text-white dark:bg-emerald-500 dark:text-emerald-950'
                               : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
                           }`}
-                          aria-label="Marcar contenido como público"
+                          aria-label={tx('playbook.visibility.markPublicAria')}
                         >
-                          Público
+                          {tx('playbook.visibility.public')}
                         </button>
                       </div>
                     )}
                     {result.id && !canManageVisibility && (
                       <span className="inline-flex rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-700 dark:border-sky-700 dark:bg-sky-900/25 dark:text-sky-300">
-                        Visibilidad: {getShareVisibilityLabel(shareVisibility)}
+                        {tx('playbook.visibility.label')}: {getShareVisibilityLabel(shareVisibility)}
                       </span>
                     )}
                     {result.id && (
@@ -3310,10 +3610,10 @@ export function ResultPanel({
                         type="button"
                         onClick={handleCopyExtractionId}
                         className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-                        aria-label="Copiar ID único"
+                        aria-label={tx('playbook.copyUniqueIdAria')}
                       >
                         <Copy size={12} />
-                        {idCopied ? 'Copiado' : 'Copiar'}
+                        {idCopied ? tx('common.copied') : tx('common.copy')}
                       </button>
                     )}
                     {result.id && (
@@ -3321,10 +3621,10 @@ export function ResultPanel({
                         type="button"
                         onClick={handleCopyPlaybookReference}
                         className="inline-flex h-7 items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2 text-[11px] font-semibold text-violet-700 transition-colors hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-900/25 dark:text-violet-200 dark:hover:bg-violet-900/40"
-                        aria-label="Copiar enlace interno de playbook"
+                        aria-label={tx('playbook.copyInternalLinkAria')}
                       >
                         <Link2 size={12} />
-                        {playbookLinkCopied ? 'Link copiado' : 'Link interno'}
+                        {playbookLinkCopied ? tx('playbook.linkCopied') : tx('playbook.internalLink')}
                       </button>
                     )}
                     {result.id && canManageVisibility && (
@@ -3333,16 +3633,16 @@ export function ResultPanel({
                         onClick={onCopyShareLink}
                         disabled={shareLoading || !isShareableVisibility}
                         className="inline-flex h-7 items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2 text-[11px] font-semibold text-violet-700 transition-colors hover:bg-violet-100 disabled:cursor-wait disabled:opacity-70 dark:border-violet-700 dark:bg-violet-900/25 dark:text-violet-300 dark:hover:bg-violet-900/40"
-                        aria-label="Compartir extracción"
+                        aria-label={tx('playbook.shareExtractionAria')}
                       >
                         <Share2 size={12} />
                         {shareLoading
-                          ? 'Compartiendo...'
+                          ? tx('playbook.sharing')
                           : !isShareableVisibility
-                            ? 'Público o enlace'
+                            ? tx('playbook.visibility.publicOrLink')
                             : shareCopied
-                              ? 'Compartido'
-                              : 'Compartir'}
+                              ? tx('common.shared')
+                              : tx('common.share')}
                       </button>
                     )}
                   </div>
@@ -3350,14 +3650,14 @@ export function ResultPanel({
                 {result.id && canManageMembers && shareVisibility === 'circle' && (
                   <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50/60 p-3 dark:border-sky-800 dark:bg-sky-900/20">
                     <p className="text-[11px] font-bold uppercase tracking-wider text-sky-700 dark:text-sky-300">
-                      Miembros del Círculo
+                      {tx('playbook.circleMembers')}
                     </p>
                     <div className="mt-2 flex flex-col gap-2 sm:flex-row">
                       <input
                         type="email"
                         value={memberEmailDraft}
                         onChange={(event) => setMemberEmailDraft(event.target.value)}
-                        placeholder="correo@dominio.com"
+                        placeholder={tx('playbook.emailPlaceholder')}
                         disabled={memberMutationLoading}
                         className="h-8 min-w-0 flex-1 rounded-md border border-sky-200 bg-white px-2 text-xs text-slate-700 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none dark:border-sky-800 dark:bg-slate-900 dark:text-slate-200"
                       />
@@ -3377,17 +3677,19 @@ export function ResultPanel({
                         className="inline-flex h-8 items-center justify-center gap-1 rounded-md bg-sky-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
                       >
                         <Plus size={12} />
-                        Agregar
+                        {tx('common.add')}
                       </button>
                     </div>
                     {memberError && (
                       <p className="mt-2 text-xs font-medium text-rose-600 dark:text-rose-300">{memberError}</p>
                     )}
                     {membersLoading ? (
-                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Cargando miembros...</p>
+                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        {tx('common.loading')}
+                      </p>
                     ) : members.length === 0 ? (
                       <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                        Aún no hay miembros en este círculo.
+                        {tx('playbook.noCircleMembers')}
                       </p>
                     ) : (
                       <ul className="mt-2 space-y-1.5">
@@ -3410,7 +3712,7 @@ export function ResultPanel({
                               disabled={memberMutationLoading}
                               className="inline-flex h-7 items-center rounded-md border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300"
                             >
-                              Quitar
+                              {tx('common.remove')}
                             </button>
                           </li>
                         ))}
@@ -3432,12 +3734,12 @@ export function ResultPanel({
                 >
                   <div className="min-w-0">
                     <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
-                      Acciones y Exportación
+                      {tx('playbook.actionsAndExport')}
                     </p>
                     <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">
                       {isActionsExpanded
-                        ? 'Selecciona una acción o exportación.'
-                        : 'Haz clic para desplegar opciones.'}
+                        ? tx('playbook.selectActionOrExport')
+                        : tx('playbook.clickToExpandOptions')}
                     </p>
                   </div>
                   <ChevronDown
@@ -3469,7 +3771,7 @@ export function ResultPanel({
                           className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-wait disabled:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
                         >
                           <Download size={15} />
-                          {isExportingPdf ? 'Generando...' : 'Guardar PDF'}
+                          {isExportingPdf ? tx('common.generating') : tx('playbook.savePdf')}
                         </button>
 
                         <button
@@ -3479,12 +3781,12 @@ export function ResultPanel({
                         >
                           <Share2 size={15} />
                           {shareLoading
-                            ? 'Generando...'
+                            ? tx('common.generating')
                             : !isShareableVisibility
-                              ? 'Público o enlace'
+                              ? tx('playbook.visibility.publicOrLink')
                               : shareCopied
-                                ? 'Copiado'
-                                : 'Compartir'}
+                                ? tx('common.copied')
+                                : tx('common.share')}
                         </button>
 
                         <button
@@ -3492,13 +3794,13 @@ export function ResultPanel({
                           className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
                         >
                           <Copy size={15} />
-                          Copiar Markdown
+                          {tx('playbook.copyMarkdown')}
                         </button>
                       </div>
 
                       <div className="mt-3 border-t border-slate-200 pt-3 dark:border-slate-700">
                         <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
-                          Integraciones
+                          {tx('playbook.integrations')}
                         </p>
 
                         <div className="mt-2 grid grid-cols-1 gap-2">
@@ -3509,7 +3811,9 @@ export function ResultPanel({
                               className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-wait disabled:bg-slate-400"
                             >
                               <Zap size={14} />
-                              {notionExportLoading ? 'Exportando a Notion...' : 'Exportar a Notion'}
+                              {notionExportLoading
+                                ? tx('playbook.exportingToNotion')
+                                : tx('playbook.exportToNotion')}
                             </button>
                           ) : (
                             <button
@@ -3521,7 +3825,7 @@ export function ResultPanel({
                               {notionLoading
                                 ? 'Conectando Notion...'
                                 : notionConfigured
-                                  ? 'Conectar Notion'
+                                  ? tx('playbook.connectNotion')
                                   : 'Notion no configurado'}
                             </button>
                           )}
@@ -3533,7 +3837,9 @@ export function ResultPanel({
                               className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-sky-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-sky-700 disabled:cursor-wait disabled:bg-slate-400"
                             >
                               <Zap size={14} />
-                              {trelloExportLoading ? 'Exportando a Trello...' : 'Exportar a Trello'}
+                              {trelloExportLoading
+                                ? tx('playbook.exportingToTrello')
+                                : tx('playbook.exportToTrello')}
                             </button>
                           ) : (
                             <button
@@ -3545,7 +3851,7 @@ export function ResultPanel({
                               {trelloLoading
                                 ? 'Conectando Trello...'
                                 : trelloConfigured
-                                  ? 'Conectar Trello'
+                                  ? tx('playbook.connectTrello')
                                   : 'Trello no configurado'}
                             </button>
                           )}
@@ -3557,7 +3863,9 @@ export function ResultPanel({
                               className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-rose-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-rose-700 disabled:cursor-wait disabled:bg-slate-400"
                             >
                               <Zap size={14} />
-                              {todoistExportLoading ? 'Exportando a Todoist...' : 'Exportar a Todoist'}
+                              {todoistExportLoading
+                                ? tx('playbook.exportingToTodoist')
+                                : tx('playbook.exportToTodoist')}
                             </button>
                           ) : (
                             <button
@@ -3569,7 +3877,7 @@ export function ResultPanel({
                               {todoistLoading
                                 ? 'Conectando Todoist...'
                                 : todoistConfigured
-                                  ? 'Conectar Todoist'
+                                  ? tx('playbook.connectTodoist')
                                   : 'Todoist no configurado'}
                             </button>
                           )}
@@ -3582,8 +3890,8 @@ export function ResultPanel({
                             >
                               <Zap size={14} />
                               {googleDocsExportLoading
-                                ? 'Exportando a Google Docs...'
-                                : 'Exportar a Google Docs'}
+                                ? tx('playbook.exportingToGoogleDocs')
+                                : tx('playbook.exportToGoogleDocs')}
                             </button>
                           ) : (
                             <button
@@ -3595,7 +3903,7 @@ export function ResultPanel({
                               {googleDocsLoading
                                 ? 'Conectando Google Docs...'
                                 : googleDocsConfigured
-                                  ? 'Conectar Google Docs'
+                                  ? tx('playbook.connectGoogleDocs')
                                   : 'Google Docs no configurado'}
                             </button>
                           )}
@@ -3640,12 +3948,12 @@ export function ResultPanel({
                     >
                       <div className="min-w-0">
                         <p className="text-xs font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
-                          Re-extraer en otro modo
+                          {tx('playbook.reExtractInAnotherMode')}
                         </p>
                         <p className="mt-0.5 text-[11px] text-indigo-500/90 dark:text-indigo-300/80">
                           {isReextractExpanded
-                            ? 'Selecciona un modo para generar una nueva extracción.'
-                            : 'Haz clic para desplegar opciones.'}
+                            ? tx('playbook.selectModeToGenerate')
+                            : tx('playbook.clickToExpandOptions')}
                         </p>
                       </div>
                       <ChevronDown
@@ -3671,7 +3979,7 @@ export function ResultPanel({
                           }`}
                         >
                           <p className="text-sm text-slate-600 dark:text-slate-300">
-                            Usa este mismo video sin copiar la URL para descubrir los otros modos.
+                            {tx('playbook.useSameSourceToDiscoverModes')}
                           </p>
 
                           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -3695,7 +4003,7 @@ export function ResultPanel({
                                 >
                                   <p className="text-sm font-semibold">
                                     {option.label}
-                                    {isActive ? ' (actual)' : ''}
+                                    {isActive ? ` (${tx('playbook.current')})` : ''}
                                   </p>
                                   <p className="mt-0.5 text-xs opacity-80">{option.description}</p>
                                 </button>
@@ -3717,7 +4025,7 @@ export function ResultPanel({
           style={{ marginInline: '4.5%' }}
         >
           <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
-            Objetivo del Resultado
+            {tx('playbook.resultObjective')}
           </h2>
           {isMetaEditing ? (
             <div>
@@ -3725,7 +4033,7 @@ export function ResultPanel({
                 value={metaObjectiveDraft}
                 onChange={(e) => setMetaObjectiveDraft(e.target.value)}
                 rows={4}
-                placeholder="Objetivo de la extracción"
+                placeholder={tx('playbook.extractionObjectivePlaceholder')}
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500 resize-none"
               />
               {metaError && (
@@ -3738,7 +4046,7 @@ export function ResultPanel({
                   disabled={metaSaving}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                 >
-                  <X size={14} /> Cancelar
+                  <X size={14} /> {tx('common.cancel')}
                 </button>
                 <button
                   type="button"
@@ -3747,9 +4055,9 @@ export function ResultPanel({
                   className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
                 >
                   {metaSaving ? (
-                    <><Loader2 size={14} className="animate-spin" /> Guardando...</>
+                    <><Loader2 size={14} className="animate-spin" /> {tx('common.loading')}</>
                   ) : (
-                    <><Save size={14} /> Guardar cambios</>
+                    <><Save size={14} /> {tx('common.saveChanges')}</>
                   )}
                 </button>
               </div>
@@ -3764,9 +4072,11 @@ export function ResultPanel({
         <div className="p-6 space-y-4">
           <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Ítems y Subítems</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                {tx('playbook.itemsAndSubitems')}
+              </p>
               <p className="text-sm text-slate-500 dark:text-slate-400">
-                Define y organiza la estructura accionable del contenido.
+                {tx('playbook.defineActionableStructure')}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -3775,7 +4085,7 @@ export function ResultPanel({
                   <button
                     type="button"
                     onClick={() => setTaskView('list')}
-                    title="Vista lista"
+                    title={tx('playbook.view.listTooltip')}
                     className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
                       taskView === 'list'
                         ? 'bg-indigo-600 text-white'
@@ -3783,12 +4093,12 @@ export function ResultPanel({
                     }`}
                   >
                     <LayoutList size={13} />
-                    <span className="hidden sm:inline">Lista</span>
+                    <span className="hidden sm:inline">{tx('playbook.view.list')}</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setTaskView('kanban')}
-                    title="Vista Kanban"
+                    title={tx('playbook.view.kanbanTooltip')}
                     className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
                       taskView === 'kanban'
                         ? 'bg-indigo-600 text-white'
@@ -3796,12 +4106,12 @@ export function ResultPanel({
                     }`}
                   >
                     <KanbanSquare size={13} />
-                    <span className="hidden sm:inline">Kanban</span>
+                    <span className="hidden sm:inline">{tx('playbook.view.kanban')}</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setTaskView('calendar')}
-                    title="Vista Calendario"
+                    title={tx('playbook.view.calendarTooltip')}
                     className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
                       taskView === 'calendar'
                         ? 'bg-indigo-600 text-white'
@@ -3809,12 +4119,12 @@ export function ResultPanel({
                     }`}
                   >
                     <CalendarDays size={13} />
-                    <span className="hidden sm:inline">Calendario</span>
+                    <span className="hidden sm:inline">{tx('playbook.view.calendar')}</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setTaskView('gantt')}
-                    title="Vista Gantt"
+                    title={tx('playbook.view.ganttTooltip')}
                     className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
                       taskView === 'gantt'
                         ? 'bg-indigo-600 text-white'
@@ -3822,12 +4132,12 @@ export function ResultPanel({
                     }`}
                   >
                     <GanttChart size={13} />
-                    <span className="hidden sm:inline">Gantt</span>
+                    <span className="hidden sm:inline">{tx('playbook.view.gantt')}</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setTaskView('cpm')}
-                    title="Vista CPM — Ruta Crítica"
+                    title={tx('playbook.view.cpmTooltip')}
                     className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
                       taskView === 'cpm'
                         ? 'bg-indigo-600 text-white'
@@ -3835,7 +4145,60 @@ export function ResultPanel({
                     }`}
                   >
                     <GitBranch size={13} />
-                    <span className="hidden sm:inline">CPM</span>
+                    <span className="hidden sm:inline">{tx('playbook.view.cpm')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskView('mindmap')}
+                    title={tx('playbook.view.mindmapTooltip')}
+                    className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
+                      taskView === 'mindmap'
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <Brain size={13} />
+                    <span className="hidden sm:inline">{tx('playbook.view.mindmap')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskView('hierarchy')}
+                    title={tx('playbook.view.hierarchyTooltip')}
+                    className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
+                      taskView === 'hierarchy'
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <Network size={13} />
+                    <span className="hidden sm:inline">{tx('playbook.view.hierarchy')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskView('flowchart')}
+                    title={tx('playbook.view.flowchartTooltip')}
+                    className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
+                      taskView === 'flowchart'
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <Workflow size={13} />
+                    <span className="hidden sm:inline">{tx('playbook.view.flowchart')}</span>
+                    <span className="rounded-full bg-amber-400 px-1 py-px text-[9px] font-bold leading-none text-white">Beta</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskView('presentation')}
+                    title={tx('playbook.view.slidesTooltip')}
+                    className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
+                      taskView === 'presentation'
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <Presentation size={13} />
+                    <span className="hidden sm:inline">{tx('playbook.view.slides')}</span>
                   </button>
                 </div>
               )}
@@ -3846,7 +4209,7 @@ export function ResultPanel({
                   className="inline-flex h-9 items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
                 >
                   <Pencil size={14} />
-                  Editar contenido
+                  {tx('playbook.editContent')}
                 </button>
               )}
             </div>
@@ -3878,7 +4241,7 @@ export function ResultPanel({
                     <div className="flex items-center gap-2">
                       <span
                         className="flex-shrink-0 cursor-grab touch-none text-slate-300 active:cursor-grabbing dark:text-slate-600"
-                        title="Arrastrar para reordenar"
+                        title={tx('playbook.dragToReorder')}
                       >
                         <GripVertical size={16} />
                       </span>
@@ -3886,7 +4249,7 @@ export function ResultPanel({
                         type="text"
                         value={phase.title}
                         onChange={(event) => handleDraftPhaseTitleChange(phase.id, event.target.value)}
-                        placeholder="Título del ítem principal"
+                        placeholder={tx('playbook.mainItemTitlePlaceholder')}
                         className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
                       />
                       <button
@@ -3894,16 +4257,18 @@ export function ResultPanel({
                         onClick={() => handleDeleteDraftPhase(phase.id)}
                         disabled={phaseDrafts.length <= 1 || structureSaving}
                         className="inline-flex h-9 items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40"
-                        aria-label={`Eliminar ítem principal ${phase.title || phase.id}`}
+                        aria-label={tx('playbook.deleteMainItemAria', {
+                          name: phase.title || String(phase.id),
+                        })}
                       >
                         <Trash2 size={13} />
-                        Borrar
+                        {tx('common.delete')}
                       </button>
                     </div>
 
                     <div className="mt-3 rounded-lg border border-slate-200/80 bg-slate-50/70 p-2.5 dark:border-slate-700 dark:bg-slate-800/30">
                       <p className="mb-2 pl-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
-                        Subítems
+                        {tx('playbook.subitems')}
                       </p>
                       <div className="ml-2 space-y-2 border-l border-dashed border-slate-300 pl-3 dark:border-slate-600">
                         {flattenPhaseNodes(phase.id, phase.items).map((node) => {
@@ -3924,7 +4289,7 @@ export function ResultPanel({
                                   onChange={(event) =>
                                     handleDraftSubItemChange(phase.id, node.nodeId, event.target.value)
                                   }
-                                  placeholder="Texto del ítem"
+                                  placeholder={tx('playbook.itemTextPlaceholder')}
                                   className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
                                 />
                                 <button
@@ -3932,8 +4297,8 @@ export function ResultPanel({
                                   onClick={() => handleAddDraftChildSubItem(phase.id, node.nodeId)}
                                   disabled={structureSaving}
                                   className="inline-flex h-8 items-center justify-center rounded-lg border border-sky-200 bg-sky-50 px-2 text-sky-700 transition-colors hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-sky-800 dark:bg-sky-900/25 dark:text-sky-300 dark:hover:bg-sky-900/40"
-                                  title="Agregar hijo"
-                                  aria-label="Agregar hijo"
+                                  title={tx('playbook.addChild')}
+                                  aria-label={tx('playbook.addChild')}
                                 >
                                   <Plus size={13} />
                                 </button>
@@ -3942,8 +4307,8 @@ export function ResultPanel({
                                   onClick={() => handleAddDraftSiblingSubItem(phase.id, node.nodeId)}
                                   disabled={structureSaving}
                                   className="inline-flex h-8 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-2 text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-800 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
-                                  title="Agregar hermano"
-                                  aria-label="Agregar hermano"
+                                  title={tx('playbook.addSibling')}
+                                  aria-label={tx('playbook.addSibling')}
                                 >
                                   <Plus size={13} />
                                 </button>
@@ -3952,7 +4317,7 @@ export function ResultPanel({
                                   onClick={() => handleDeleteDraftSubItem(phase.id, node.nodeId)}
                                   disabled={!canDelete || structureSaving}
                                   className="inline-flex h-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-2 text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40"
-                                  aria-label="Eliminar ítem"
+                                  aria-label={tx('playbook.deleteItem')}
                                 >
                                   <Trash2 size={13} />
                                 </button>
@@ -3970,7 +4335,7 @@ export function ResultPanel({
                       className="mt-3 ml-2 inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
                     >
                       <Plus size={13} />
-                      Agregar ítem raíz
+                      {tx('playbook.addRootItem')}
                     </button>
                   </div>
                 ))}
@@ -3984,7 +4349,7 @@ export function ResultPanel({
                   className="inline-flex h-9 items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300 dark:hover:bg-emerald-900/40"
                 >
                   <Plus size={14} />
-                  Agregar ítem principal
+                  {tx('playbook.addMainItem')}
                 </button>
                 <button
                   type="button"
@@ -3993,7 +4358,7 @@ export function ResultPanel({
                   className="inline-flex h-9 items-center gap-1 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-400"
                 >
                   {structureSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                  Guardar cambios
+                  {tx('common.saveChanges')}
                 </button>
                 <button
                   type="button"
@@ -4002,7 +4367,7 @@ export function ResultPanel({
                   className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
                 >
                   <X size={14} />
-                  Cancelar
+                  {tx('common.cancel')}
                 </button>
               </div>
             </div>
@@ -4032,7 +4397,7 @@ export function ResultPanel({
                         col.value === 'in_progress' ? 'text-sky-600 dark:text-sky-400' :
                         col.value === 'blocked' ? 'text-rose-600 dark:text-rose-400' :
                         'text-emerald-600 dark:text-emerald-400'
-                      }`}>{col.label}</span>
+                      }`}>{getTaskStatusLabel(col.value, tx)}</span>
                       <span className="ml-2 rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                         {colTasks.length}
                       </span>
@@ -4098,8 +4463,11 @@ export function ResultPanel({
                                   {dueDate && (
                                     <span className={`flex items-center gap-0.5 text-[10px] ${isOverdue ? 'text-rose-500 font-semibold' : 'text-slate-400 dark:text-slate-500'}`}>
                                       <Clock size={9} />
-                                      {dueDate.toLocaleDateString('es', { month: 'short', day: 'numeric' })}
-                                      {isOverdue && ' ·  Vencida'}
+                                      {new Intl.DateTimeFormat(localeTag, {
+                                        month: 'short',
+                                        day: 'numeric',
+                                      }).format(dueDate)}
+                                      {isOverdue && ` · ${tx('playbook.overdue')}`}
                                     </span>
                                   )}
                                 </div>
@@ -4113,7 +4481,7 @@ export function ResultPanel({
                                   {isTaskMutating && (
                                     <span className="flex items-center gap-1 text-[10px] text-slate-400">
                                       <Loader2 size={9} className="animate-spin" />
-                                      Guardando
+                                      {tx('common.saving')}
                                     </span>
                                   )}
                                 </div>
@@ -4124,7 +4492,7 @@ export function ResultPanel({
                       })}
                       {colTasks.length === 0 && (
                         <div className="flex flex-1 items-center justify-center py-6 text-[11px] text-slate-400 dark:text-slate-600">
-                          Sin tareas
+                          {tx('playbook.noTasks')}
                         </div>
                       )}
                     </div>
@@ -4143,7 +4511,7 @@ export function ResultPanel({
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500 mb-0.5">
-                      Programar tarea
+                      {tx('schedule.title')}
                     </p>
                     <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 line-clamp-2">
                       {schedulePopoverTask.itemText}
@@ -4157,7 +4525,7 @@ export function ResultPanel({
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
-                      Inicio
+                      {tx('schedule.start')}
                     </label>
                     <input type="date" value={schedulePopoverStart}
                       onChange={e => setSchedulePopoverStart(e.target.value)}
@@ -4165,7 +4533,7 @@ export function ResultPanel({
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
-                      Fin
+                      {tx('schedule.end')}
                     </label>
                     <input type="date" value={schedulePopoverEnd}
                       onChange={e => setSchedulePopoverEnd(e.target.value)}
@@ -4185,18 +4553,18 @@ export function ResultPanel({
                       }}
                       disabled={schedulePopoverSaving}
                       className="text-xs text-slate-400 hover:text-rose-500 disabled:opacity-50">
-                      Quitar fecha
+                      {tx('schedule.clearDates')}
                     </button>
                   )}
                   <button type="button" onClick={() => setSchedulePopoverTask(null)}
                     className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-                    Cancelar
+                    {tx('schedule.cancel')}
                   </button>
                   <button type="button" onClick={handleSaveSchedule}
                     disabled={schedulePopoverSaving || !schedulePopoverStart || !schedulePopoverEnd}
                     className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700">
                     {schedulePopoverSaving && <Loader2 size={11} className="animate-spin" />}
-                    Guardar
+                    {tx('schedule.save')}
                   </button>
                 </div>
               </div>
@@ -4218,14 +4586,16 @@ export function ResultPanel({
                   <button type="button" onClick={prevMonth}
                     className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200">
                     <ChevronLeft size={14} />
-                    <span className="hidden sm:inline">Mes anterior</span>
+                    <span className="hidden sm:inline">{tx('calendar.prevMonth')}</span>
                   </button>
                   <span className="capitalize text-sm font-bold text-slate-700 dark:text-slate-200">
-                    {calendarMonth.toLocaleDateString('es', { month: 'long', year: 'numeric' })}
+                    {new Intl.DateTimeFormat(localeTag, { month: 'long', year: 'numeric' }).format(
+                      new Date(calendarMonth.getUTCFullYear(), calendarMonth.getUTCMonth(), 1)
+                    )}
                   </span>
                   <button type="button" onClick={nextMonth}
                     className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200">
-                    <span className="hidden sm:inline">Mes siguiente</span>
+                    <span className="hidden sm:inline">{tx('calendar.nextMonth')}</span>
                     <ChevronRight size={14} />
                   </button>
                 </div>
@@ -4234,7 +4604,15 @@ export function ResultPanel({
                 <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
                   {/* Day-of-week header */}
                   <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800">
-                    {['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'].map((d, i) => (
+                    {[
+                      tx('calendar.dayMon'),
+                      tx('calendar.dayTue'),
+                      tx('calendar.dayWed'),
+                      tx('calendar.dayThu'),
+                      tx('calendar.dayFri'),
+                      tx('calendar.daySat'),
+                      tx('calendar.daySun'),
+                    ].map((d, i) => (
                       <div key={d} className={`py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500 ${i > 0 ? 'border-l border-slate-100 dark:border-slate-700' : ''}`}>
                         {d}
                       </div>
@@ -4243,11 +4621,11 @@ export function ResultPanel({
 
                   {/* 6 rows */}
                   {matrix.map((row, rowIdx) => {
-                    const calToday = new Date(); calToday.setHours(0,0,0,0)
+                    const _cn = new Date(); const calToday = new Date(Date.UTC(_cn.getFullYear(), _cn.getMonth(), _cn.getDate()))
                     const rowLanes = lanesByRow.get(rowIdx) ?? []
                     const numLanes = rowLanes.length > 0 ? Math.max(...rowLanes.map(s => s.lane)) + 1 : 0
                     const barsHeight = numLanes > 0 ? numLanes * 24 + 6 : 0
-                    const currentMonthNum = calendarMonth.getMonth()
+                    const currentMonthNum = calendarMonth.getUTCMonth()
 
                     return (
                       <div key={rowIdx} className="border-b border-slate-100 last:border-b-0 dark:border-slate-800">
@@ -4255,7 +4633,7 @@ export function ResultPanel({
                         <div className="grid grid-cols-7">
                           {row.map((day, colIdx) => {
                             const isToday = isSameDay(day, calToday)
-                            const inMonth = day.getMonth() === currentMonthNum
+                            const inMonth = day.getUTCMonth() === currentMonthNum
                             return (
                               <div key={colIdx}
                                 className={`flex h-7 items-center justify-end px-1.5 ${colIdx > 0 ? 'border-l border-slate-100 dark:border-slate-800' : ''} ${isToday ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''}`}>
@@ -4264,7 +4642,7 @@ export function ResultPanel({
                                   !inMonth ? 'text-slate-300 dark:text-slate-700' :
                                   'text-slate-600 dark:text-slate-400'
                                 }`}>
-                                  {day.getDate()}
+                                  {day.getUTCDate()}
                                 </span>
                               </div>
                             )
@@ -4278,8 +4656,8 @@ export function ResultPanel({
                               const task = interactiveTasks.find(t => t.id === seg.taskId)
                               if (!task) return null
                               const rawEnd = task.scheduledEndAt ?? task.dueAt
-                              const nowZero = new Date(); nowZero.setHours(0,0,0,0)
-                              const isOverdue = rawEnd && new Date(rawEnd) < nowZero && task.status !== 'completed'
+                              const _now = new Date(); const nowUtc = new Date(Date.UTC(_now.getFullYear(), _now.getMonth(), _now.getDate()))
+                              const isOverdue = rawEnd && dateFromYMDutc(rawEnd.slice(0, 10)) < nowUtc && task.status !== 'completed'
                               const barColor = isOverdue
                                 ? 'bg-rose-100 text-rose-700 border-rose-200 dark:bg-rose-900/40 dark:text-rose-300 dark:border-rose-800'
                                 : task.status === 'completed'
@@ -4320,7 +4698,7 @@ export function ResultPanel({
                     <button type="button" onClick={() => setCalendarSinFechaOpen(v => !v)}
                       className="flex w-full items-center justify-between px-4 py-2.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800">
                       <span className="flex items-center gap-2">
-                        Sin fecha
+                        {tx('calendar.unscheduled')}
                         <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                           {unscheduledTasks.length}
                         </span>
@@ -4342,7 +4720,7 @@ export function ResultPanel({
                                       F{task.phaseId} · {task.phaseTitle}
                                     </span>
                                     <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${getTaskStatusChipClassName(task.status)}`}>
-                                      {getTaskStatusLabel(task.status)}
+                                      {getTaskStatusLabel(task.status, tx)}
                                     </span>
                                   </div>
                                   <p className="font-medium text-slate-700 dark:text-slate-200 line-clamp-2 leading-snug">
@@ -4350,7 +4728,7 @@ export function ResultPanel({
                                   </p>
                                   <p className="flex items-center gap-0.5 text-[10px] text-indigo-400 dark:text-indigo-500">
                                     <CalendarDays size={9} />
-                                    Clic para programar
+                                    {tx('calendar.clickToSchedule')}
                                   </p>
                                 </div>
                               </div>
@@ -4368,15 +4746,15 @@ export function ResultPanel({
           {/* ── Gantt Chart view ── */}
           {!isStructureEditing && taskView === 'gantt' && interactiveTasks.length > 0 && (() => {
             const ganttRangeEnd = new Date(ganttRangeStart)
-            ganttRangeEnd.setDate(ganttRangeStart.getDate() + GANTT_DAYS - 1)
+            ganttRangeEnd.setUTCDate(ganttRangeStart.getUTCDate() + GANTT_DAYS - 1)
 
             const ganttDays = Array.from({ length: GANTT_DAYS }, (_, i) => {
               const d = new Date(ganttRangeStart)
-              d.setDate(ganttRangeStart.getDate() + i)
+              d.setUTCDate(ganttRangeStart.getUTCDate() + i)
               return d
             })
 
-            const today = new Date(); today.setHours(0, 0, 0, 0)
+            const _tn = new Date(); const today = new Date(Date.UTC(_tn.getFullYear(), _tn.getMonth(), _tn.getDate()))
             const todayOffset = daysBetween(ganttRangeStart, today)
             const todayVisible = todayOffset >= 0 && todayOffset < GANTT_DAYS
 
@@ -4398,7 +4776,10 @@ export function ResultPanel({
 
             // Etiqueta del rango visible
             const fmtRangeLabel = () => {
-              const fmt = (d: Date) => d.toLocaleDateString('es', { day: 'numeric', month: 'short' })
+              const fmt = (d: Date) =>
+                new Intl.DateTimeFormat(localeTag, { day: 'numeric', month: 'short' }).format(
+                  new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+                )
               return `${fmt(ganttRangeStart)} – ${fmt(ganttRangeEnd)}`
             }
 
@@ -4410,12 +4791,12 @@ export function ResultPanel({
                   <button type="button" onClick={prevGanttWeek}
                     className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200">
                     <ChevronLeft size={14} />
-                    <span className="hidden sm:inline">Sem. anterior</span>
+                    <span className="hidden sm:inline">{tx('calendar.prevWeek')}</span>
                   </button>
                   <div className="flex items-center gap-2">
                     <button type="button" onClick={resetGanttToToday}
                       className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-500 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800">
-                      Hoy
+                      {tx('calendar.today')}
                     </button>
                     <span className="text-sm font-bold text-slate-700 dark:text-slate-200">
                       {fmtRangeLabel()}
@@ -4423,7 +4804,7 @@ export function ResultPanel({
                   </div>
                   <button type="button" onClick={nextGanttWeek}
                     className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200">
-                    <span className="hidden sm:inline">Sem. siguiente</span>
+                    <span className="hidden sm:inline">{tx('calendar.nextWeek')}</span>
                     <ChevronRight size={14} />
                   </button>
                 </div>
@@ -4440,15 +4821,15 @@ export function ResultPanel({
                         className="flex-shrink-0 border-r border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800 flex items-center px-3 h-10"
                       >
                         <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
-                          Tarea
+                          {tx('calendar.task')}
                         </span>
                       </div>
                       {/* Días */}
                       <div className="flex">
                         {ganttDays.map((day, i) => {
                           const isToday = isSameDay(day, today)
-                          const isMonday = day.getDay() === 1
-                          const showMonth = day.getDate() === 1 || i === 0
+                          const isMonday = day.getUTCDay() === 1
+                          const showMonth = day.getUTCDate() === 1 || i === 0
                           return (
                             <div
                               key={i}
@@ -4457,14 +4838,18 @@ export function ResultPanel({
                             >
                               {showMonth && (
                                 <span className="absolute top-0.5 left-0.5 text-[8px] font-bold uppercase text-slate-400 dark:text-slate-500 leading-none">
-                                  {day.toLocaleDateString('es', { month: 'short' })}
+                                  {new Intl.DateTimeFormat(localeTag, { month: 'short' }).format(
+                                    new Date(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate())
+                                  )}
                                 </span>
                               )}
                               <span className={`text-[11px] font-medium leading-none ${isToday ? 'text-indigo-600 font-bold dark:text-indigo-400' : 'text-slate-400 dark:text-slate-500'}`}>
-                                {day.getDate()}
+                                {day.getUTCDate()}
                               </span>
                               <span className="text-[8px] uppercase text-slate-300 dark:text-slate-700 leading-none mt-0.5">
-                                {day.toLocaleDateString('es', { weekday: 'short' }).slice(0, 2)}
+                                {new Intl.DateTimeFormat(localeTag, { weekday: 'short' })
+                                  .format(new Date(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()))
+                                  .slice(0, 2)}
                               </span>
                             </div>
                           )
@@ -4494,7 +4879,7 @@ export function ResultPanel({
                             )}
                             {/* Separadores de semana */}
                             {ganttDays.map((day, i) =>
-                              day.getDay() === 1 && i > 0 ? (
+                              day.getUTCDay() === 1 && i > 0 ? (
                                 <div key={i} className="absolute top-0 bottom-0 w-px bg-slate-200/60 dark:bg-slate-700/40 pointer-events-none"
                                   style={{ left: `${i * GANTT_DAY_W}px` }} />
                               ) : null
@@ -4506,8 +4891,8 @@ export function ResultPanel({
                         {phase.tasks.map(task => {
                           const rawStart = task.scheduledStartAt ?? task.dueAt
                           const rawEnd   = task.scheduledEndAt   ?? task.dueAt
-                          const tStart = rawStart ? (() => { const d = new Date(rawStart); d.setHours(0,0,0,0); return d })() : null
-                          const tEnd   = rawEnd   ? (() => { const d = new Date(rawEnd);   d.setHours(0,0,0,0); return d })() : null
+                          const tStart = rawStart ? dateFromYMDutc(rawStart.slice(0, 10)) : null
+                          const tEnd   = rawEnd   ? dateFromYMDutc(rawEnd.slice(0, 10))   : null
 
                           let barLeftPx: number | null = null
                           let barWidthPx: number | null = null
@@ -4542,7 +4927,7 @@ export function ResultPanel({
                                     <span className="flex-shrink-0 text-[10px] text-slate-300 dark:text-slate-600">└</span>
                                   )}
                                   <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold flex-shrink-0 ${getTaskStatusChipClassName(task.status)}`}>
-                                    {getTaskStatusLabel(task.status).slice(0, 3)}
+                                    {getTaskStatusLabel(task.status, tx).slice(0, 3)}
                                   </span>
                                   <span className="text-[11px] text-slate-700 dark:text-slate-300 truncate leading-tight">
                                     {task.itemText}
@@ -4565,7 +4950,7 @@ export function ResultPanel({
                                 )}
                                 {/* Separadores de semana */}
                                 {ganttDays.map((day, i) =>
-                                  day.getDay() === 1 && i > 0 ? (
+                                  day.getUTCDay() === 1 && i > 0 ? (
                                     <div key={i} className="absolute top-0 bottom-0 w-px bg-slate-100 dark:bg-slate-800 pointer-events-none"
                                       style={{ left: `${i * GANTT_DAY_W}px` }} />
                                   ) : null
@@ -4588,7 +4973,9 @@ export function ResultPanel({
                                 {barLeftPx === null && tStart && tEnd && (
                                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                                     <span className="text-[9px] text-slate-300 dark:text-slate-700 italic">
-                                      {tEnd < ganttRangeStart ? '← fuera rango' : 'fuera rango →'}
+                                      {tEnd < ganttRangeStart
+                                        ? tx('calendar.outOfRangeLeft')
+                                        : tx('calendar.outOfRangeRight')}
                                     </span>
                                   </div>
                                 )}
@@ -4604,7 +4991,9 @@ export function ResultPanel({
                       <div className="flex" style={{ height: 48 }}>
                         <div style={{ position: 'sticky', left: 0, width: GANTT_LEFT_W }}
                           className="flex-shrink-0 border-r border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center px-3">
-                          <span className="text-xs text-slate-400">Sin tareas programadas</span>
+                          <span className="text-xs text-slate-400">
+                            {tx('calendar.noScheduledTasks')}
+                          </span>
                         </div>
                         <div style={{ width: `${GANTT_DAYS * GANTT_DAY_W}px` }} className="relative">
                           {todayVisible && (
@@ -4623,7 +5012,7 @@ export function ResultPanel({
                     <button type="button" onClick={() => setGanttSinFechaOpen(v => !v)}
                       className="flex w-full items-center justify-between px-4 py-2.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800">
                       <span className="flex items-center gap-2">
-                        Sin fecha
+                        {tx('calendar.unscheduled')}
                         <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                           {unscheduledTasks.length}
                         </span>
@@ -4645,7 +5034,7 @@ export function ResultPanel({
                                       F{task.phaseId} · {task.phaseTitle}
                                     </span>
                                     <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${getTaskStatusChipClassName(task.status)}`}>
-                                      {getTaskStatusLabel(task.status)}
+                                      {getTaskStatusLabel(task.status, tx)}
                                     </span>
                                   </div>
                                   <p className="font-medium text-slate-700 dark:text-slate-200 line-clamp-2 leading-snug">
@@ -4653,7 +5042,7 @@ export function ResultPanel({
                                   </p>
                                   <p className="flex items-center gap-0.5 text-[10px] text-indigo-400 dark:text-indigo-500">
                                     <CalendarDays size={9} />
-                                    Clic para programar
+                                    {tx('calendar.clickToSchedule')}
                                   </p>
                                 </div>
                               </div>
@@ -4768,7 +5157,7 @@ export function ResultPanel({
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500 mb-0.5">
-                            Editar planificación
+                            {tx('playbook.editPlanning')}
                           </p>
                           <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 line-clamp-2">
                             {cpmEditTask.itemText}
@@ -4781,7 +5170,7 @@ export function ResultPanel({
                       </div>
                       <div>
                         <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
-                          Duración (días)
+                          {tx('playbook.durationDays')}
                         </label>
                         <input type="number" min={1} value={cpmEditDuration}
                           onChange={e => setCpmEditDuration(Math.max(1, Number.parseInt(e.target.value, 10) || 1))}
@@ -4791,16 +5180,16 @@ export function ResultPanel({
                       <div>
                         <div className="flex items-center justify-between mb-1.5">
                           <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                            Predecesoras ({cpmEditPreds.length})
+                            {tx('playbook.predecessors', { count: cpmEditPreds.length })}
                           </label>
                           {cpmEditPreds.length > 0 && (
                             <button type="button" onClick={() => setCpmEditPreds([])}
                               className="text-[10px] text-slate-400 hover:text-rose-500">
-                              Limpiar deps
+                              {tx('playbook.clearDependencies')}
                             </button>
                           )}
                         </div>
-                        <input type="text" placeholder="Buscar tarea..." value={cpmPredSearch}
+                        <input type="text" placeholder={tx('playbook.searchTask')} value={cpmPredSearch}
                           onChange={e => setCpmPredSearch(e.target.value)}
                           className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-400 mb-2"
                         />
@@ -4829,12 +5218,12 @@ export function ResultPanel({
                       <div className="flex items-center justify-end gap-2 pt-1">
                         <button type="button" onClick={() => setCpmEditTask(null)}
                           className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-                          Cancelar
+                          {tx('common.cancel')}
                         </button>
                         <button type="button" onClick={handleSavePlanning} disabled={cpmEditSaving}
                           className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700">
                           {cpmEditSaving && <Loader2 size={11} className="animate-spin" />}
-                          Guardar
+                          {tx('common.save')}
                         </button>
                       </div>
                     </div>
@@ -4847,13 +5236,16 @@ export function ResultPanel({
                   <div className="flex items-center gap-2">
                     <GitBranch size={14} className="text-indigo-500" />
                     <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
-                      Red CPM · {displayTasks.length} tareas · Duración proyecto: {projectDuration}d
+                      {tx('playbook.cpmNetworkSummary', {
+                        count: displayTasks.length,
+                        duration: projectDuration,
+                      })}
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5 rounded-lg bg-rose-50 px-2.5 py-1 dark:bg-rose-900/20">
                     <Zap size={11} className="text-rose-500" />
                     <span className="text-[11px] font-semibold text-rose-600 dark:text-rose-400">
-                      {criticalCount} crítica{criticalCount !== 1 ? 's' : ''}
+                      {tx('playbook.criticalCount', { count: criticalCount })}
                     </span>
                   </div>
                   <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">
@@ -4861,10 +5253,12 @@ export function ResultPanel({
                       onChange={e => { setCpmOnlyCritical(e.target.checked); setCpmPanX(24); setCpmPanY(24); setCpmZoom(0.85) }}
                       className="h-3.5 w-3.5 rounded border-slate-300 text-rose-500 focus:ring-rose-400 dark:border-slate-600"
                     />
-                    Solo ruta crítica
+                    {tx('playbook.onlyCriticalPath')}
                   </label>
                   {canEditTaskContent && (
-                    <span className="text-[11px] text-slate-400 dark:text-slate-500">· Clic en nodo para editar</span>
+                    <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                      · {tx('playbook.clickNodeToEdit')}
+                    </span>
                   )}
                 </div>
 
@@ -4872,14 +5266,14 @@ export function ResultPanel({
                 {hasCycle && (
                   <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-700 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
                     <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
-                    Hay un ciclo en las dependencias — el CPM no puede calcularse correctamente. Edita las tareas para eliminarlo.
+                    {tx('playbook.cycleDetectedWarning')}
                   </div>
                 )}
 
                 {/* ── Hint: no deps yet ── */}
                 {!hasCycle && interactiveTasks.every(t => t.predecessorIds.length === 0) && (
                   <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-4 py-2.5 text-[11px] text-indigo-600 dark:border-indigo-800/40 dark:bg-indigo-900/20 dark:text-indigo-400">
-                    Ninguna tarea tiene predecesoras aún. Haz clic en un nodo para asignar duración y dependencias, luego guarda para ver las flechas.
+                    {tx('playbook.noPredecessorsHint')}
                   </div>
                 )}
 
@@ -5038,11 +5432,11 @@ export function ResultPanel({
                   <div className="absolute bottom-3 left-3 flex items-center gap-3 rounded-lg border border-slate-200/80 bg-white/90 px-3 py-1.5 text-[10px] text-slate-500 shadow-sm backdrop-blur-sm dark:border-slate-700 dark:bg-slate-800/90 dark:text-slate-400">
                     <span className="flex items-center gap-1.5">
                       <span className="inline-block h-2 w-4 rounded-sm" style={{ background: edgeCrit }} />
-                      Ruta crítica (S=0)
+                      {tx('playbook.criticalPathLegend')}
                     </span>
                     <span className="flex items-center gap-1.5">
                       <span className="inline-block h-2 w-4 rounded-sm" style={{ background: edgeNormal }} />
-                      Normal
+                      {tx('playbook.normalLegend')}
                     </span>
                     <span className="hidden sm:inline">ES·EF / D / LS·LF·S</span>
                   </div>
@@ -5050,6 +5444,79 @@ export function ResultPanel({
               </div>
             )
           })()}
+
+          {/* ── Mind Map view ── */}
+          {!isStructureEditing && taskView === 'mindmap' && interactiveTasks.length > 0 && (
+            <MindMapView
+              phases={result.phases}
+              tasksByNodeId={tasksByNodeId}
+              objective={result.objective}
+              sourceDisplayTitle={sourceDisplayTitle}
+              onSelectTask={taskId => {
+                const isSelected = selectedTaskId === taskId
+                setSelectedTaskId(isSelected ? null : taskId)
+                setActiveTaskId(isSelected ? null : taskId)
+              }}
+              onOpenTaskMobile={taskId => {
+                setMobileSheetTaskId(taskId)
+                setMobileSheetTab('gestion')
+              }}
+            />
+          )}
+
+          {/* ── Hierarchy / Org-chart / WBS view ── */}
+          {!isStructureEditing && taskView === 'hierarchy' && interactiveTasks.length > 0 && (
+            <HierarchyChartView
+              phases={result.phases}
+              tasksByNodeId={tasksByNodeId}
+              objective={result.objective}
+              sourceDisplayTitle={sourceDisplayTitle}
+              onSelectTask={taskId => {
+                const isSelected = selectedTaskId === taskId
+                setSelectedTaskId(isSelected ? null : taskId)
+                setActiveTaskId(isSelected ? null : taskId)
+              }}
+              onOpenTaskMobile={taskId => {
+                setMobileSheetTaskId(taskId)
+                setMobileSheetTab('gestion')
+              }}
+            />
+          )}
+
+          {/* ── Flowchart / Process Graph view ── */}
+          {!isStructureEditing && taskView === 'flowchart' && interactiveTasks.length > 0 && result.id && (
+            <>
+            <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
+              <span className="text-base">🚧</span>
+              <span>
+                <strong>{tx('playbook.viewInDevelopmentTitle')}</strong>{' '}
+                {tx('playbook.viewInDevelopmentBody')}
+              </span>
+            </div>
+            <FlowchartView
+              interactiveTasks={interactiveTasks}
+              extractionId={result.id}
+              canEdit={canEditTaskContent}
+              onSelectTask={taskId => {
+                const isSelected = selectedTaskId === taskId
+                setSelectedTaskId(isSelected ? null : taskId)
+                setActiveTaskId(isSelected ? null : taskId)
+              }}
+              onOpenTaskMobile={taskId => {
+                setMobileSheetTaskId(taskId)
+                setMobileSheetTab('gestion')
+              }}
+            />
+            </>
+          )}
+
+          {!isStructureEditing && taskView === 'presentation' && result.id && (
+            <PresentationView
+              interactiveTasks={interactiveTasks}
+              extractionId={result.id}
+              canEdit={canEditTaskContent}
+            />
+          )}
 
           {!isStructureEditing && taskView === 'list' &&
             result.phases.map((phase: Phase) => {
@@ -5099,7 +5566,7 @@ export function ResultPanel({
                           {tasksLoading && (
                             <p className="inline-flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
                               <Loader2 size={13} className="animate-spin" />
-                              Sincronizando checklist interactivo...
+                              {tx('playbook.syncingInteractiveChecklist')}
                             </p>
                           )}
                           {tasksError && (
@@ -5107,7 +5574,7 @@ export function ResultPanel({
                           )}
                           {!result.id && (
                             <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                              Para guardar el avance necesitas una extracción persistida en historial.
+                              {tx('playbook.mustBePersistedToSave')}
                             </p>
                           )}
                         </div>
@@ -5116,7 +5583,7 @@ export function ResultPanel({
                           <div className="mb-3 flex items-center gap-2">
                             <CheckCircle2 size={14} className="text-indigo-400 dark:text-indigo-500" />
                             <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
-                              Subítems
+                              {tx('playbook.subitems')}
                             </p>
                           </div>
                           <ul className="space-y-3 md:ml-2 md:space-y-4 md:border-l-2 md:border-dashed md:border-slate-300 md:pl-4 md:dark:border-slate-700">
@@ -5126,7 +5593,7 @@ export function ResultPanel({
                                 typeof itemText === 'string' ? itemText : itemText == null ? '' : String(itemText)
                               const itemDisplayText = normalizedItemText.trim()
                                 ? renderTextWithPlaybookReferences(normalizedItemText)
-                                : 'Subítem sin texto'
+                                : tx('playbook.subitemWithoutText')
                               const subItemNumber = node.fullPath
                               const task =
                                 tasksByNodeId.get(node.nodeId) ??
@@ -5259,23 +5726,23 @@ export function ResultPanel({
                                           </span>
                                           {/* Community micro-stats */}
                                           <div className="flex items-center gap-2">
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Me gusta">
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.like')}>
                                               <ThumbsUp size={10} />
                                               {taskLikeSummary?.likesCount ?? 0}
                                             </span>
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Compartidos">
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('common.shared')}>
                                               <Share2 size={10} />
                                               {taskLikeSummary?.sharesCount ?? 0}
                                             </span>
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Seguidores">
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.followers')}>
                                               <Bell size={10} />
                                               {taskLikeSummary?.followersCount ?? 0}
                                             </span>
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Visualizaciones">
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.views')}>
                                               <Eye size={10} />
                                               {taskLikeSummary?.viewsCount ?? 0}
                                             </span>
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Comentarios">
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.comments')}>
                                               <MessageSquare size={10} />
                                               {taskComments.length}
                                             </span>
@@ -5290,13 +5757,13 @@ export function ResultPanel({
                                             </span>
                                           )}
                                           {task && taskAttachments.length > 0 && (
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Evidencias">
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.evidence')}>
                                               <ImageIcon size={10} />
                                               {taskAttachments.length}
                                             </span>
                                           )}
                                           {task && (taskCommentsByTaskId[task.id]?.length ?? 0) > 0 && (
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Participantes">
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.participants')}>
                                               <Users size={10} />
                                               {taskCommentsByTaskId[task.id]?.length ?? 0}
                                             </span>
@@ -5306,7 +5773,7 @@ export function ResultPanel({
                                               {/* Mobile: icono compacto con color de estado */}
                                               <span
                                                 className={`md:hidden inline-flex items-center justify-center rounded-full border p-[3px] ${getTaskStatusChipClassName(task.status)}`}
-                                                title={getTaskStatusLabel(task.status)}
+                                                title={getTaskStatusLabel(task.status, tx)}
                                               >
                                                 {task.status === 'completed' && <CheckCircle2 size={10} />}
                                                 {task.status === 'in_progress' && <Zap size={10} />}
@@ -5315,7 +5782,7 @@ export function ResultPanel({
                                               </span>
                                               {/* Desktop: chip con texto */}
                                               <span className={`hidden md:inline-flex rounded-md border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(task.status)}`}>
-                                                {getTaskStatusLabel(task.status)}
+                                                {getTaskStatusLabel(task.status, tx)}
                                               </span>
                                             </>
                                           )}
@@ -5361,7 +5828,7 @@ export function ResultPanel({
                                                     className="flex w-full items-center gap-2 px-3 py-2 text-[11px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
                                                   >
                                                     <Zap size={10} className="text-slate-400" />
-                                                    Gestión
+                                                    {tx('playbook.management')}
                                                   </button>
                                                   <button
                                                     type="button"
@@ -5377,7 +5844,7 @@ export function ResultPanel({
                                                     className="flex w-full items-center gap-2 px-3 py-2 text-[11px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
                                                   >
                                                     <ImageIcon size={10} className="text-slate-400" />
-                                                    Evidencias
+                                                    {tx('playbook.evidence')}
                                                   </button>
                                                 </div>
                                               )}
@@ -5456,15 +5923,15 @@ export function ResultPanel({
                                                   }))
                                                 }
                                                 className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
-                                                aria-label="Cerrar actividad"
-                                                title="Cerrar actividad"
+                                                aria-label={tx('playbook.closeActivity')}
+                                                title={tx('playbook.closeActivity')}
                                               >
                                                 <X size={12} />
                                               </button>
                                             </div>
                                             {task.events.length === 0 ? (
                                               <p className="text-xs text-slate-500 dark:text-slate-400">
-                                                No hay eventos registrados todavía.
+                                                {tx('playbook.noEventsYet')}
                                               </p>
                                             ) : (
                                               <ul className="space-y-2">
@@ -5485,7 +5952,7 @@ export function ResultPanel({
                                                       )}
                                                       <div className="min-w-0 flex-1">
                                                         <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                                                          {getTaskEventTypeLabel(event.eventType)}
+                                                          {getTaskEventTypeLabel(event.eventType, tx)}
                                                         </p>
                                                         <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
                                                           {event.content}
@@ -5495,7 +5962,11 @@ export function ResultPanel({
                                                             {event.userName?.trim() || event.userEmail?.trim() || 'Usuario'}
                                                           </span>
                                                           {' · '}
-                                                          {formatTaskEventDate(event.createdAt)}
+                                                          {formatTaskEventDate(
+                                                            event.createdAt,
+                                                            localeTag,
+                                                            tx('playbook.unknownDate')
+                                                          )}
                                                         </p>
                                                       </div>
                                                     </div>
@@ -5532,8 +6003,8 @@ export function ResultPanel({
                                                   }))
                                                 }
                                                 className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
-                                                aria-label="Cerrar gestión"
-                                                title="Cerrar gestión"
+                                                aria-label={tx('playbook.closeManagement')}
+                                                title={tx('playbook.closeManagement')}
                                               >
                                                 <X size={12} />
                                               </button>
@@ -5549,11 +6020,11 @@ export function ResultPanel({
                                               className="flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:bg-slate-800"
                                             >
                                               <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                                                Estado
+                                                {tx('playbook.statusLabel')}
                                               </span>
                                               <span className="flex items-center gap-2">
                                                 <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${getTaskStatusChipClassName(task.status)}`}>
-                                                  {getTaskStatusLabel(task.status)}
+                                                  {getTaskStatusLabel(task.status, tx)}
                                                 </span>
                                                 {isTaskEstadoExpanded ? (
                                                   <ChevronUp size={12} className="text-slate-400" />
@@ -5589,7 +6060,7 @@ export function ResultPanel({
                                                         {option.value === 'in_progress' && <Zap size={11} />}
                                                         {option.value === 'blocked' && <AlertTriangle size={11} />}
                                                         {option.value === 'pending' && <Clock size={11} />}
-                                                        {option.label}
+                                                        {getTaskStatusLabel(option.value, tx)}
                                                       </button>
                                                     )
                                                   })}
@@ -5598,7 +6069,7 @@ export function ResultPanel({
                                             </div>
                                             <div className="mt-4">
                                               <p className="mb-2 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                                                Registrar en actividad
+                                                {tx('playbook.logInActivity')}
                                               </p>
                                               <input
                                                 type="text"
@@ -5609,15 +6080,15 @@ export function ResultPanel({
                                                     void handleAddTaskEvent(task, 'note')
                                                   }
                                                 }}
-                                                placeholder="Escribe una observación, acción o bloqueo..."
+                                                placeholder={tx('playbook.writeObservationActionBlocker')}
                                                 disabled={!canEditTaskContent || isTaskMutating}
                                                 className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
                                               />
                                               <div className="mt-2 flex flex-wrap gap-1.5">
-                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'note')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"><Pencil size={11} />Observación</button>
-                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'pending_action')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30"><Clock size={11} />Acción pendiente</button>
-                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'blocker')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300 dark:hover:bg-rose-900/30"><AlertTriangle size={11} />Impedimento</button>
-                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'resolved')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"><CheckCircle2 size={11} />Resuelto</button>
+                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'note')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"><Pencil size={11} />{getTaskEventTypeLabel('note', tx)}</button>
+                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'pending_action')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30"><Clock size={11} />{getTaskEventTypeLabel('pending_action', tx)}</button>
+                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'blocker')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300 dark:hover:bg-rose-900/30"><AlertTriangle size={11} />{getTaskEventTypeLabel('blocker', tx)}</button>
+                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'resolved')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"><CheckCircle2 size={11} />{getTaskEventTypeLabel('resolved', tx)}</button>
                                               </div>
                                             </div>
                                           </>
@@ -5643,7 +6114,7 @@ export function ResultPanel({
                                             className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-700 dark:text-slate-300 dark:hover:text-slate-100 transition-colors"
                                           >
                                             <MessageSquare size={12} />
-                                            Comunidad
+                                            {tx('playbook.community')}
                                             {isTaskCommunityExpanded ? (
                                               <ChevronUp size={10} className="opacity-60" />
                                             ) : (
@@ -5662,7 +6133,7 @@ export function ResultPanel({
                                             className="inline-flex h-7 items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
                                           >
                                             <MessageSquare size={11} />
-                                            Comentar
+                                            {tx('playbook.comment')}
                                           </button>
                                           {taskLikeSummary && (
                                             <>
@@ -5677,7 +6148,7 @@ export function ResultPanel({
                                                 }`}
                                               >
                                                 <ThumbsUp size={11} />
-                                                Me gusta
+                                                {tx('playbook.like')}
                                                 <span className="rounded bg-slate-200/60 px-1 py-0.5 text-[10px] dark:bg-slate-700/80">
                                                   {taskLikeSummary.likesCount}
                                                 </span>
@@ -5693,7 +6164,7 @@ export function ResultPanel({
                                                 }`}
                                               >
                                                 <Share2 size={11} />
-                                                {isTaskShareCopied ? 'Copiado' : 'Compartir'}
+                                                {isTaskShareCopied ? tx('common.copied') : tx('common.share')}
                                                 <span className="rounded bg-slate-200/60 px-1 py-0.5 text-[10px] dark:bg-slate-700/80">
                                                   {taskLikeSummary.sharesCount ?? 0}
                                                 </span>
@@ -5709,7 +6180,9 @@ export function ResultPanel({
                                                 }`}
                                               >
                                                 <Bell size={11} />
-                                                {taskLikeSummary.followingByMe ? 'Siguiendo' : 'Seguir'}
+                                                {taskLikeSummary.followingByMe
+                                                  ? tx('playbook.following')
+                                                  : tx('playbook.follow')}
                                                 <span className="rounded bg-slate-200/60 px-1 py-0.5 text-[10px] dark:bg-slate-700/80">
                                                   {taskLikeSummary.followersCount ?? 0}
                                                 </span>
@@ -5721,7 +6194,7 @@ export function ResultPanel({
                                                 className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800"
                                               >
                                                 <Eye size={11} />
-                                                Vistas
+                                                {tx('playbook.views')}
                                                 <span className="rounded bg-slate-200/60 px-1 py-0.5 text-[10px] dark:bg-slate-700/80">
                                                   {taskLikeSummary.viewsCount ?? 0}
                                                 </span>
@@ -5732,7 +6205,7 @@ export function ResultPanel({
                                         {(isTaskCommunityLoading || isTaskCommunityMutating) && (
                                           <p className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400">
                                             <Loader2 size={12} className="animate-spin" />
-                                            Actualizando...
+                                            {tx('playbook.updating')}
                                           </p>
                                         )}
                                       </div>
@@ -5761,7 +6234,7 @@ export function ResultPanel({
                                                 onChange={(event) =>
                                                   handleTaskCommentDraftChange(task.id, event.target.value)
                                                 }
-                                                placeholder="Escribe un comentario para este subítem..."
+                                                placeholder={tx('playbook.writeCommentForSubitem')}
                                                 disabled={isTaskCommunityMutating}
                                                 className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
                                               />
@@ -5771,17 +6244,17 @@ export function ResultPanel({
                                                 disabled={isTaskCommunityMutating || taskCommentDraft.trim().length === 0}
                                                 className="inline-flex h-9 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
                                               >
-                                                Comentar
+                                                {tx('playbook.comment')}
                                               </button>
                                             </div>
 
                                             {isTaskCommunityLoading ? (
                                               <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                                                Cargando comentarios...
+                                                {tx('common.loading')}
                                               </p>
                                             ) : taskComments.length === 0 ? (
                                               <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                                                Aún no hay comentarios en este subítem.
+                                                {tx('playbook.noCommentsYetForSubitem')}
                                               </p>
                                             ) : (
                                               renderTaskCommentThread({
@@ -5830,7 +6303,7 @@ export function ResultPanel({
                                                 className="flex w-full items-center justify-between px-3 py-2.5"
                                               >
                                                 <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
-                                                  Evidencias
+                                                  {tx('playbook.evidence')}
                                                   {taskAttachments.length > 0 && (
                                                     <span className="ml-1.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                                                       {taskAttachments.length}
@@ -5880,7 +6353,7 @@ export function ResultPanel({
                                               >
                                                 <Plus size={12} className="text-indigo-600 dark:text-indigo-400" />
                                                 <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">
-                                                  Agregar evidencia
+                                                  {tx('playbook.addEvidence')}
                                                 </span>
                                                 {isTaskAddEvidenceExpanded ? (
                                                   <ChevronUp size={13} className="text-indigo-400" />
@@ -5914,7 +6387,7 @@ export function ResultPanel({
                                                       [task.id]: event.target.value,
                                                     }))
                                                   }
-                                                  placeholder="Escribe tu nota aquí..."
+                                                  placeholder={tx('playbook.task.notePlaceholder')}
                                                   disabled={!canEditTaskContent || isTaskAttachmentMutating}
                                                   style={{ minHeight: '4.5rem' }}
                                                   onInput={(event) => {
@@ -5936,7 +6409,7 @@ export function ResultPanel({
                                                     className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
                                                   >
                                                     <Save size={11} />
-                                                    Guardar nota
+                                                    {tx('playbook.task.saveNote')}
                                                   </button>
                                                 </div>
                                               </div>
@@ -6005,7 +6478,7 @@ export function ResultPanel({
                                                     className="inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-lg bg-rose-600 px-3 text-[11px] font-semibold text-white shadow-sm transition-all hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-40"
                                                   >
                                                     <Plus size={11} />
-                                                    Agregar
+                                                    {tx('common.add')}
                                                   </button>
                                                 </div>
                                               </div>
@@ -6016,17 +6489,18 @@ export function ResultPanel({
 
                                               {isTaskAttachmentLoading ? (
                                                 <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                                                  Cargando evidencias...
+                                                  {tx('common.loading')}
                                                 </p>
                                               ) : taskAttachments.length === 0 ? (
                                                 <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                                                  Este subítem aún no tiene evidencias.
+                                                  {tx('playbook.subitemHasNoEvidenceYet')}
                                                 </p>
                                               ) : (
                                                 <ul className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                                                   {taskAttachments.map((attachment) => {
                                                     const attachmentLabel = getAttachmentTypeLabel(
-                                                      attachment.attachmentType
+                                                      attachment.attachmentType,
+                                                      tx
                                                     )
                                                     const attachmentSize = formatAttachmentSize(
                                                       attachment.sizeBytes
@@ -6053,7 +6527,7 @@ export function ResultPanel({
                                                         {isNote ? (
                                                           <div className="flex-1 bg-amber-50 px-3 py-2.5 dark:bg-amber-950/20">
                                                             <p className="line-clamp-5 whitespace-pre-wrap break-words text-xs leading-relaxed text-amber-900 dark:text-amber-200">
-                                                              {noteContent || '(nota vacía)'}
+                                                              {noteContent || tx('playbook.emptyNote')}
                                                             </p>
                                                           </div>
                                                         ) : previewUrl ? (
@@ -6101,7 +6575,11 @@ export function ResultPanel({
                                                           <p className="mt-1 truncate text-[10px] text-slate-400 dark:text-slate-500">
                                                             {attachment.userName?.trim() || attachment.userEmail?.trim() || 'Usuario'}
                                                             {' · '}
-                                                            {formatTaskEventDate(attachment.createdAt)}
+                                                            {formatTaskEventDate(
+                                                              attachment.createdAt,
+                                                              localeTag,
+                                                              tx('playbook.unknownDate')
+                                                            )}
                                                           </p>
                                                           {attachment.attachmentType === 'audio' && (
                                                             <audio
@@ -6181,12 +6659,16 @@ export function ResultPanel({
                                                                   {copiedAttachmentId === attachment.id ? (
                                                                     <>
                                                                       <CheckCircle2 size={13} className="flex-shrink-0 text-emerald-500" />
-                                                                      <span className="text-emerald-600 dark:text-emerald-400">¡Copiado!</span>
+                                                                      <span className="text-emerald-600 dark:text-emerald-400">
+                                                                        {tx('common.copied')}
+                                                                      </span>
                                                                     </>
                                                                   ) : (
                                                                     <>
                                                                       <Share2 size={13} className="flex-shrink-0 text-slate-400" />
-                                                                      {isNote ? 'Copiar nota' : 'Compartir enlace'}
+                                                                      {isNote
+                                                                        ? tx('playbook.copyNote')
+                                                                        : tx('playbook.shareLink')}
                                                                     </>
                                                                   )}
                                                                 </button>
@@ -6201,7 +6683,7 @@ export function ResultPanel({
                                                                   className="flex w-full items-center gap-2.5 px-3 py-2.5 text-[12px] font-medium text-rose-600 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-rose-400 dark:hover:bg-rose-900/20"
                                                                 >
                                                                   <Trash2 size={13} className="flex-shrink-0" />
-                                                                  Quitar evidencia
+                                                                  {tx('playbook.removeEvidence')}
                                                                 </button>
                                                               </div>
                                                             </>
@@ -6233,9 +6715,9 @@ export function ResultPanel({
                               className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
                             >
                               {copiedPhaseId === phase.id ? (
-                                <><Check size={11} className="text-emerald-500" /> Copiado</>
+                                <><Check size={11} className="text-emerald-500" /> {tx('common.copied')}</>
                               ) : (
-                                <><Copy size={11} /> Copiar fase</>
+                                <><Copy size={11} /> {tx('playbook.copyPhase')}</>
                               )}
                             </button>
                           </div>
@@ -6254,7 +6736,7 @@ export function ResultPanel({
           </div>
           <div>
             <h4 className="font-bold text-amber-800 mb-1 text-sm dark:text-amber-200">
-              Consejo Pro (Gold Nugget)
+              {tx('playbook.proTipTitle')}
             </h4>
             <p className="text-sm text-amber-700 leading-relaxed italic dark:text-amber-300">
               &ldquo;{result.proTip}&rdquo;
@@ -6264,7 +6746,7 @@ export function ResultPanel({
 
         <div className="mx-6 mb-5 mt-1 flex justify-end">
           <p
-            title={`Dueño: ${playbookOwnerSignature}`}
+            title={`${tx('playbook.ownerTitle')}: ${playbookOwnerSignature}`}
             className="paper-playbook-owner-signature"
           >
             {playbookOwnerSignature}
@@ -6314,16 +6796,16 @@ export function ResultPanel({
           typeof sheetTask.itemText === 'string'
             ? sheetTask.itemText.trim()
               ? renderTextWithPlaybookReferences(sheetTask.itemText)
-              : 'Subítem sin texto'
+              : tx('playbook.subitemWithoutText')
             : sheetTask.itemText == null
-              ? 'Subítem sin texto'
+              ? tx('playbook.subitemWithoutText')
               : renderTextWithPlaybookReferences(String(sheetTask.itemText))
 
         const TABS = [
-          { key: 'gestion', label: 'Gestión' },
-          { key: 'actividad', label: 'Actividad' },
-          { key: 'evidencias', label: 'Evidencias' },
-          { key: 'comunidad', label: 'Comunidad' },
+          { key: 'gestion', label: tx('playbook.management') },
+          { key: 'actividad', label: tx('playbook.activity') },
+          { key: 'evidencias', label: tx('playbook.evidence') },
+          { key: 'comunidad', label: tx('playbook.community') },
         ] as const
 
         return createPortal(
@@ -6336,7 +6818,7 @@ export function ResultPanel({
                   <p className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
                     {sheetTask.positionPath?.trim() || `${sheetTask.phaseId}.${sheetTask.itemIndex + 1}`}
                     <span className={`ml-2 rounded-md border px-1.5 py-0.5 text-[10px] ${getTaskStatusChipClassName(sheetTask.status)}`}>
-                      {getTaskStatusLabel(sheetTask.status)}
+                      {getTaskStatusLabel(sheetTask.status, tx)}
                     </span>
                   </p>
                   <p className="mt-0.5 line-clamp-2 text-sm font-semibold text-slate-800 dark:text-slate-100">
@@ -6397,7 +6879,9 @@ export function ResultPanel({
                         />
                       </button>
                       <span className="text-sm text-slate-600 dark:text-slate-300">
-                        {sheetTask.checked ? 'Marcada como completada' : 'Pendiente de completar'}
+                        {sheetTask.checked
+                          ? tx('playbook.markedAsCompleted')
+                          : tx('playbook.pendingToComplete')}
                       </span>
                     </div>
 
@@ -6413,10 +6897,12 @@ export function ResultPanel({
                         }
                         className="flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:bg-slate-800"
                       >
-                        <span className="text-sm font-semibold text-slate-600 dark:text-slate-300">Estado</span>
+                        <span className="text-sm font-semibold text-slate-600 dark:text-slate-300">
+                          {tx('playbook.statusLabel')}
+                        </span>
                         <span className="flex items-center gap-2">
                           <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(sheetTask.status)}`}>
-                            {getTaskStatusLabel(sheetTask.status)}
+                            {getTaskStatusLabel(sheetTask.status, tx)}
                           </span>
                           {sheetEstadoExpanded ? <ChevronUp size={14} className="text-slate-400" /> : <ChevronDown size={14} className="text-slate-400" />}
                         </span>
@@ -6441,7 +6927,7 @@ export function ResultPanel({
                                 {option.value === 'in_progress' && <Zap size={13} />}
                                 {option.value === 'blocked' && <AlertTriangle size={13} />}
                                 {option.value === 'pending' && <Clock size={13} />}
-                                {option.label}
+                                {getTaskStatusLabel(option.value, tx)}
                               </button>
                             )
                           })}
@@ -6452,7 +6938,7 @@ export function ResultPanel({
                     {/* Registrar en actividad */}
                     <div>
                       <p className="mb-2 text-sm font-semibold text-slate-600 dark:text-slate-300">
-                        Registrar en actividad
+                        {tx('playbook.logInActivity')}
                       </p>
                       <input
                         type="text"
@@ -6463,15 +6949,15 @@ export function ResultPanel({
                             void handleAddTaskEvent(sheetTask, 'note')
                           }
                         }}
-                        placeholder="Escribe una observación, acción o bloqueo..."
+                        placeholder={tx('playbook.writeObservationActionBlocker')}
                         disabled={!canEditTaskContent || sheetIsTaskMutating}
                         className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500"
                       />
                       <div className="mt-3 grid grid-cols-2 gap-2">
-                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'note')} disabled={!canEditTaskContent || sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"><Pencil size={12} />Observación</button>
-                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'pending_action')} disabled={!canEditTaskContent || sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"><Clock size={12} />Pendiente</button>
-                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'blocker')} disabled={!canEditTaskContent || sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300"><AlertTriangle size={12} />Impedimento</button>
-                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'resolved')} disabled={!canEditTaskContent || sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300"><CheckCircle2 size={12} />Resuelto</button>
+                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'note')} disabled={!canEditTaskContent || sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"><Pencil size={12} />{getTaskEventTypeLabel('note', tx)}</button>
+                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'pending_action')} disabled={!canEditTaskContent || sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"><Clock size={12} />{getTaskEventTypeLabel('pending_action', tx)}</button>
+                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'blocker')} disabled={!canEditTaskContent || sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300"><AlertTriangle size={12} />{getTaskEventTypeLabel('blocker', tx)}</button>
+                        <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'resolved')} disabled={!canEditTaskContent || sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300"><CheckCircle2 size={12} />{getTaskEventTypeLabel('resolved', tx)}</button>
                       </div>
                     </div>
                   </div>
@@ -6482,7 +6968,7 @@ export function ResultPanel({
                   <div>
                     {sheetTask.events.length === 0 ? (
                       <p className="text-sm text-slate-500 dark:text-slate-400">
-                        No hay eventos registrados todavía.
+                        {tx('playbook.noEventsYet')}
                       </p>
                     ) : (
                       <ul className="space-y-3">
@@ -6503,7 +6989,7 @@ export function ResultPanel({
                               )}
                               <div className="min-w-0 flex-1">
                                 <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                                  {getTaskEventTypeLabel(event.eventType)}
+                                  {getTaskEventTypeLabel(event.eventType, tx)}
                                 </p>
                                 <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
                                   {event.content}
@@ -6513,7 +6999,11 @@ export function ResultPanel({
                                     {event.userName?.trim() || event.userEmail?.trim() || 'Usuario'}
                                   </span>
                                   {' · '}
-                                  {formatTaskEventDate(event.createdAt)}
+                                  {formatTaskEventDate(
+                                    event.createdAt,
+                                    localeTag,
+                                    tx('playbook.unknownDate')
+                                  )}
                                 </p>
                               </div>
                             </div>
@@ -6548,7 +7038,7 @@ export function ResultPanel({
                       >
                         <Plus size={13} className="text-indigo-600 dark:text-indigo-400" />
                         <span className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">
-                          Agregar evidencia
+                          {tx('playbook.addEvidence')}
                         </span>
                         {sheetAddEvidenceExpanded ? <ChevronUp size={13} className="text-indigo-400" /> : <ChevronDown size={13} className="text-indigo-400" />}
                       </button>
@@ -6566,7 +7056,7 @@ export function ResultPanel({
                             onChange={(event) =>
                               setNoteDraftByTaskId((prev) => ({ ...prev, [sheetTask.id]: event.target.value }))
                             }
-                            placeholder="Escribe tu nota aquí..."
+                            placeholder={tx('playbook.task.notePlaceholder')}
                             disabled={!canEditTaskContent || sheetIsAttachmentMutating}
                             style={{ minHeight: '5rem' }}
                             className="w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200"
@@ -6578,7 +7068,7 @@ export function ResultPanel({
                               disabled={!canEditTaskContent || sheetIsAttachmentMutating || !sheetNoteContent.trim()}
                               className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
                             >
-                              <Save size={12} />Guardar nota
+                              <Save size={12} />{tx('playbook.task.saveNote')}
                             </button>
                           </div>
                         </div>
@@ -6633,7 +7123,7 @@ export function ResultPanel({
                               disabled={!canEditTaskContent || sheetIsAttachmentMutating || sheetTaskYoutubeDraft.trim().length === 0}
                               className="inline-flex h-9 flex-shrink-0 items-center gap-1.5 rounded-lg bg-rose-600 px-3 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-40"
                             >
-                              <Plus size={12} />Agregar
+                              <Plus size={12} />{tx('common.add')}
                             </button>
                           </div>
                         </div>
@@ -6641,15 +7131,17 @@ export function ResultPanel({
                     )}
 
                     {sheetIsAttachmentLoading ? (
-                      <p className="text-sm text-slate-500 dark:text-slate-400">Cargando evidencias...</p>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        {tx('common.loading')}
+                      </p>
                     ) : sheetTaskAttachments.length === 0 ? (
                       <p className="text-sm text-slate-500 dark:text-slate-400">
-                        Este subítem aún no tiene evidencias.
+                        {tx('playbook.subitemHasNoEvidenceYet')}
                       </p>
                     ) : (
                       <ul className="grid grid-cols-2 gap-3">
                         {sheetTaskAttachments.map((attachment) => {
-                          const attachmentLabel = getAttachmentTypeLabel(attachment.attachmentType)
+                          const attachmentLabel = getAttachmentTypeLabel(attachment.attachmentType, tx)
                           const attachmentSize = formatAttachmentSize(attachment.sizeBytes)
                           const previewUrl =
                             attachment.attachmentType === 'image' || attachment.attachmentType === 'youtube_link'
@@ -6668,7 +7160,7 @@ export function ResultPanel({
                               {isNote ? (
                                 <div className="flex-1 bg-amber-50 px-3 py-2.5 dark:bg-amber-950/20">
                                   <p className="line-clamp-5 whitespace-pre-wrap break-words text-xs leading-relaxed text-amber-900 dark:text-amber-200">
-                                    {noteContent || '(nota vacía)'}
+                                    {noteContent || tx('playbook.emptyNote')}
                                   </p>
                                 </div>
                               ) : previewUrl ? (
@@ -6733,7 +7225,9 @@ export function ResultPanel({
                         }`}
                       >
                         <ThumbsUp size={14} />
-                        {sheetTaskLikeSummary.likedByMe ? 'Te gusta' : 'Me gusta'}
+                        {sheetTaskLikeSummary.likedByMe
+                          ? tx('playbook.youLikeThis')
+                          : tx('playbook.like')}
                         <span className="rounded bg-slate-200/60 px-1.5 py-0.5 text-xs dark:bg-slate-700/80">
                           {sheetTaskLikeSummary.likesCount}
                         </span>
@@ -6749,7 +7243,7 @@ export function ResultPanel({
                         }`}
                       >
                         <Share2 size={14} />
-                        {sheetIsShareCopied ? 'Copiado' : 'Compartir'}
+                        {sheetIsShareCopied ? tx('common.copied') : tx('common.share')}
                         <span className="rounded bg-slate-200/60 px-1.5 py-0.5 text-xs dark:bg-slate-700/80">
                           {sheetTaskLikeSummary.sharesCount ?? 0}
                         </span>
@@ -6765,7 +7259,9 @@ export function ResultPanel({
                         }`}
                       >
                         <Bell size={14} />
-                        {sheetTaskLikeSummary.followingByMe ? 'Siguiendo' : 'Seguir'}
+                        {sheetTaskLikeSummary.followingByMe
+                          ? tx('playbook.following')
+                          : tx('playbook.follow')}
                         <span className="rounded bg-slate-200/60 px-1.5 py-0.5 text-xs dark:bg-slate-700/80">
                           {sheetTaskLikeSummary.followersCount ?? 0}
                         </span>
@@ -6787,7 +7283,7 @@ export function ResultPanel({
                         type="text"
                         value={sheetCommentDraft}
                         onChange={(event) => handleTaskCommentDraftChange(sheetTask.id, event.target.value)}
-                        placeholder="Escribe un comentario..."
+                        placeholder={tx('playbook.writeComment')}
                         disabled={sheetIsCommunityMutating}
                         className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
                       />
@@ -6797,15 +7293,17 @@ export function ResultPanel({
                         disabled={sheetIsCommunityMutating || sheetCommentDraft.trim().length === 0}
                         className="inline-flex h-10 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-4 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300"
                       >
-                        Comentar
+                        {tx('playbook.comment')}
                       </button>
                     </div>
 
                     {sheetIsCommunityLoading ? (
-                      <p className="text-sm text-slate-500 dark:text-slate-400">Cargando comentarios...</p>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        {tx('common.loading')}
+                      </p>
                     ) : sheetTaskComments.length === 0 ? (
                       <p className="text-sm text-slate-500 dark:text-slate-400">
-                        Aún no hay comentarios en este subítem.
+                        {tx('playbook.noCommentsYetForSubitem')}
                       </p>
                     ) : (
                       renderTaskCommentThread({
@@ -6863,7 +7361,7 @@ export function ResultPanel({
                   Objetivo del resultado
                 </p>
                 <p className="mt-1 line-clamp-4 text-[12px] leading-5 text-slate-700">
-                  {pageTurnSnapshot.objective || 'Sin objetivo.'}
+                  {pageTurnSnapshot.objective || tx('playbook.noObjective')}
                 </p>
               </div>
 
@@ -6906,6 +7404,84 @@ export function ResultPanel({
           <p className="paper-playbook-cover-kicker">Carpeta activa</p>
           <p className="paper-playbook-cover-title">{coverFolderLabel}</p>
         </div>
+      )}
+
+      {/* ── Source Text Modal ──────────────────────────────────────────────── */}
+      {showSourceTextModal && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={tx('playbook.source.textViewer')}
+          className="fixed inset-0 z-[9999] flex items-end justify-center sm:items-center p-4 bg-black/60 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowSourceTextModal(false) }}
+        >
+          <div className="relative flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+            {/* Header */}
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-5 py-3 dark:border-slate-800">
+              <div className="min-w-0">
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                  {tx('playbook.source.textViewer')}
+                </p>
+                {(result.sourceLabel ?? result.videoTitle) && (
+                  <p className="mt-0.5 truncate text-sm font-semibold text-slate-700 dark:text-slate-200">
+                    {result.sourceLabel ?? result.videoTitle}
+                  </p>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCopySourceText}
+                  disabled={!sourceTextContent}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                  aria-label={tx('playbook.source.copyText')}
+                >
+                  {sourceTextCopied ? <Check size={13} className="text-emerald-500" /> : <Copy size={13} />}
+                  {sourceTextCopied ? tx('playbook.source.copied') : tx('playbook.source.copyText')}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadSourceText}
+                  disabled={!sourceTextContent}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                  aria-label={tx('playbook.source.downloadTxt')}
+                >
+                  <Download size={13} />
+                  {tx('playbook.source.downloadTxt')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowSourceTextModal(false)}
+                  className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+                  aria-label={tx('playbook.close')}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {sourceTextContent ? (
+                <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-slate-700 dark:text-slate-300">
+                  {sourceTextContent}
+                </pre>
+              ) : (
+                <p className="py-8 text-center text-sm text-slate-400">
+                  {tx('playbook.source.noSourceText')}
+                </p>
+              )}
+            </div>
+            {/* Footer: char count */}
+            {sourceTextContent && (
+              <div className="shrink-0 border-t border-slate-100 px-5 py-2 dark:border-slate-800">
+                <p className="text-[11px] text-slate-400">
+                  {sourceTextContent.length.toLocaleString()} chars
+                </p>
+              </div>
+            )}
+          </div>
+        </div>,
+        document.body
       )}
 
     </div>

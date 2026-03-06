@@ -1,10 +1,12 @@
 import {
   YoutubeTranscriptDisabledError,
+  YoutubeTranscriptEmptyError,
   YoutubeTranscriptTooManyRequestError,
   YoutubeTranscriptVideoUnavailableError,
 } from '@danielxceron/youtube-transcript'
 import { describe, expect, it, vi } from 'vitest'
 import { classifyModelError, classifyTranscriptError, retryWithBackoff } from '@/lib/extract-resilience'
+import { YoutubeTranscriptTemporarilyUnavailableError } from '@/lib/youtube-transcript-fallback'
 
 describe('lib/extract-resilience', () => {
   describe('retryWithBackoff', () => {
@@ -74,6 +76,16 @@ describe('lib/extract-resilience', () => {
     it('clasifica transcript deshabilitado con 422 no retryable', () => {
       const error = new YoutubeTranscriptDisabledError('video-id')
       expect(classifyTranscriptError(error)).toMatchObject({ status: 422, retryable: false })
+    })
+
+    it('clasifica payload vacío de transcript como temporal (503 retryable)', () => {
+      const error = new YoutubeTranscriptEmptyError('video-id', 'html')
+      expect(classifyTranscriptError(error)).toMatchObject({ status: 503, retryable: true })
+    })
+
+    it('clasifica captions detectados pero bloqueados como temporal (503 retryable)', () => {
+      const error = new YoutubeTranscriptTemporarilyUnavailableError('video-id', ['en'])
+      expect(classifyTranscriptError(error)).toMatchObject({ status: 503, retryable: true })
     })
   })
 })

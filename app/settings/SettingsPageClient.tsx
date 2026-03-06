@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Building2, Loader2, Plus, X } from 'lucide-react'
 import { useLang } from '@/app/home/hooks/useLang'
 import { t } from '@/app/home/lib/i18n'
+import { StorageBar } from '@/app/components/StorageBar'
 
 interface AccountUser {
   id: string
@@ -143,6 +144,8 @@ export default function SettingsPageClient() {
   const [planSnapshot, setPlanSnapshot] = useState<PlanSnapshot | null>(null)
   const [openingPortal, setOpeningPortal] = useState(false)
 
+  const [storageInfo, setStorageInfo] = useState<{ usedBytes: number; limitBytes: number; plan: string } | null>(null)
+
   const [notifPrefs, setNotifPrefs] = useState<{
     notifyTaskStatusChange: boolean
     notifyNewComment: boolean
@@ -242,6 +245,13 @@ export default function SettingsPageClient() {
       .then((res) => (res.ok ? res.json() : null))
       .then((data: PlanSnapshot | null) => {
         if (data) setPlanSnapshot(data)
+      })
+      .catch(() => undefined)
+
+    fetch('/api/account/stats', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { storage?: { usedBytes: number; limitBytes: number; plan: string } } | null) => {
+        if (data?.storage) setStorageInfo(data.storage)
       })
       .catch(() => undefined)
   }, [])
@@ -544,7 +554,7 @@ export default function SettingsPageClient() {
     return (
       <main className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 p-6 md:p-10">
         <div className="mx-auto max-w-3xl space-y-4">
-          <Link href="/" className="text-sm text-indigo-600 hover:text-indigo-700">
+          <Link href="/app" className="text-sm text-indigo-600 hover:text-indigo-700">
             {t(lang, 'settings.backToExtractor')}
           </Link>
           <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
@@ -571,7 +581,7 @@ export default function SettingsPageClient() {
 
           <div className="flex items-center gap-2">
             <Link
-              href="/"
+              href="/app"
               className="px-3 py-2 text-sm rounded-lg border border-slate-300 bg-white hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
             >
               {t(lang, 'settings.backToExtractor')}
@@ -708,6 +718,22 @@ export default function SettingsPageClient() {
             </p>
           </div>
         </section>
+
+        {/* Almacenamiento */}
+        {storageInfo && (
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+              <h2 className="text-base font-semibold">Almacenamiento</h2>
+              <Link
+                href="/pricing"
+                className="text-sm text-indigo-600 hover:text-indigo-700 dark:text-indigo-400"
+              >
+                Ampliar
+              </Link>
+            </div>
+            <StorageBar usedBytes={storageInfo.usedBytes} limitBytes={storageInfo.limitBytes} />
+          </section>
+        )}
 
         {/* Extra Credits */}
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">

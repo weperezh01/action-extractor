@@ -48,6 +48,11 @@ export async function GET(req: NextRequest) {
         createdAt: string
         sourceType: string
         sourceLabel: string | null
+        sourceFileUrl: string | null
+        sourceFileName: string | null
+        sourceFileSizeBytes: number | null
+        sourceFileMimeType: string | null
+        hasSourceText: boolean
         folderId: string | null
         accessRole: 'viewer' | 'editor'
         ownerName: string | null
@@ -95,6 +100,11 @@ export async function GET(req: NextRequest) {
           createdAt: extraction.created_at,
           sourceType: extraction.source_type ?? 'youtube',
           sourceLabel: extraction.source_label ?? null,
+          sourceFileUrl: extraction.source_file_url ?? null,
+          sourceFileName: extraction.source_file_name ?? null,
+          sourceFileSizeBytes: extraction.source_file_size_bytes ?? null,
+          sourceFileMimeType: extraction.source_file_mime_type ?? null,
+          hasSourceText: extraction.has_source_text === true,
           folderId: extraction.folder_id ?? null,
           accessRole: nextAccessRole,
           ownerName: input.row.owner_name,

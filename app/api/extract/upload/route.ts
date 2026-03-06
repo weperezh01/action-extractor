@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import { extractPdfContent, extractDocxContent } from '@/lib/content-extractor'
+import { uploadFileToCloudinary, isCloudinaryConfigured } from '@/lib/cloudinary'
+import fs from 'fs'
+import path from 'path'
+import { randomUUID } from 'crypto'
+
+const UPLOADS_DIR = path.join(process.cwd(), 'uploads')
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -31,13 +37,16 @@ export async function POST(req: NextRequest) {
 
   let sourceType: 'pdf' | 'docx'
   let maxBytes: number
+  let mimeType: string
 
   if (lower.endsWith('.pdf')) {
     sourceType = 'pdf'
     maxBytes = MAX_PDF_BYTES
+    mimeType = 'application/pdf'
   } else if (lower.endsWith('.docx')) {
     sourceType = 'docx'
     maxBytes = MAX_DOCX_BYTES
+    mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
   } else {
     return NextResponse.json(
       { error: 'Formato no soportado. Solo se aceptan archivos .pdf y .docx.' },
@@ -45,7 +54,8 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  if (file.size > maxBytes) {
+  const fileSizeBytes = file.size
+  if (fileSizeBytes > maxBytes) {
     const limitMb = maxBytes / (1024 * 1024)
     return NextResponse.json(
       { error: `El archivo supera el límite de ${limitMb} MB para archivos ${sourceType.toUpperCase()}.` },
@@ -78,10 +88,37 @@ export async function POST(req: NextRequest) {
     )
   }
 
+  // Save original file for later download.
+  // Prefer Cloudinary if configured; otherwise save to local filesystem.
+  let sourceFileUrl: string | null = null
+  if (isCloudinaryConfigured()) {
+    try {
+      const uploadResult = await uploadFileToCloudinary({ fileBuffer: buffer, filename, mimeType })
+      sourceFileUrl = uploadResult.secureUrl
+    } catch (err: unknown) {
+      console.warn('[upload] Cloudinary upload failed (continuing without file URL):', err)
+    }
+  }
+  if (!sourceFileUrl) {
+    try {
+      fs.mkdirSync(UPLOADS_DIR, { recursive: true })
+      const ext = lower.endsWith('.pdf') ? 'pdf' : 'docx'
+      const storedName = `${randomUUID()}.${ext}`
+      fs.writeFileSync(path.join(UPLOADS_DIR, storedName), buffer)
+      sourceFileUrl = `/api/uploads/${storedName}`
+    } catch (err: unknown) {
+      console.warn('[upload] Local file save failed (continuing without file URL):', err)
+    }
+  }
+
   return NextResponse.json({
     text: extracted.text,
     charCount: extracted.charCount,
     sourceLabel: extracted.title ?? filename,
     sourceType,
+    sourceFileName: filename,
+    sourceFileSizeBytes: fileSizeBytes,
+    sourceFileMimeType: mimeType,
+    sourceFileUrl,
   })
 }

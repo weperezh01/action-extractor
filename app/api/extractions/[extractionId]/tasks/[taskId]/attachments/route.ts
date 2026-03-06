@@ -5,11 +5,14 @@ import {
   createExtractionTaskAttachmentForUser,
   findExtractionAccessForUser,
   findExtractionTaskByIdForUser,
+  getUserStorageInfo,
+  incrementUserStorageUsed,
   listExtractionTaskAttachmentsForUser,
   type DbExtractionTaskAttachment,
   type ExtractionAccessRole,
   type ExtractionTaskAttachmentType,
 } from '@/lib/db'
+import { formatStorageBytes } from '@/lib/storage-limits'
 import {
   createGuestTaskAttachment,
   findGuestTaskById,
@@ -335,6 +338,20 @@ export async function POST(
         )
       }
 
+      // Storage quota check
+      const { usedBytes, limitBytes } = await getUserStorageInfo(user.id)
+      if (usedBytes + rawFile.size > limitBytes) {
+        return NextResponse.json(
+          {
+            error: `Has alcanzado tu límite de almacenamiento (${formatStorageBytes(limitBytes)}). Elimina archivos o actualiza tu plan.`,
+            storageExceeded: true,
+            usedBytes,
+            limitBytes,
+          },
+          { status: 413 }
+        )
+      }
+
       const upload = await uploadFileToCloudinary({
         fileBuffer: Buffer.from(await rawFile.arrayBuffer()),
         filename: rawFile.name?.trim() || `adjunto-${Date.now()}`,
@@ -369,6 +386,8 @@ export async function POST(
       if (!created) {
         return NextResponse.json({ error: 'No se pudo guardar la evidencia.' }, { status: 404 })
       }
+
+      await incrementUserStorageUsed(user.id, rawFile.size)
 
       return NextResponse.json(
         {

@@ -78,13 +78,13 @@ export async function POST(req: Request) {
     const expiresAt = createEmailVerificationTokenExpirationDate()
     await createEmailVerificationTokenRecord({ userId: user.id, tokenHash, expiresAt })
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://roi.welltechnologies.net'
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://notesaide.com'
     const verifyUrl = `${appUrl}/api/auth/verify-email?token=${token}`
 
     const resendKey = process.env.RESEND_API_KEY?.trim()
     const resendFrom =
       process.env.RESEND_FROM_EMAIL?.trim() ??
-      'ActionExtractor <noreply@roi.welltechnologies.net>'
+      'ActionExtractor <noreply@notesaide.com>'
     const isProduction = process.env.NODE_ENV === 'production'
 
     if (resendKey) {
@@ -157,7 +157,7 @@ function buildVerificationEmailHtml(name: string, verifyUrl: string) {
       </p>
     </div>
     <div style="background:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
-      <p style="color:#94a3b8;font-size:12px;margin:0;">roi.welltechnologies.net — ActionExtractor</p>
+      <p style="color:#94a3b8;font-size:12px;margin:0;">notesaide.com — ActionExtractor</p>
     </div>
   </div>
 </body>

@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import {
   createSessionExpirationDate,
   createSessionToken,
@@ -7,12 +7,15 @@ import {
   setSessionCookie,
   verifyPassword,
 } from '@/lib/auth'
-import { createSession, findUserByEmail, mapUserForClient } from '@/lib/db'
+import { createSession, findUserByEmail, mapUserForClient, consumeLoginRateLimit } from '@/lib/db'
+
+const LOGIN_RATE_LIMIT = 10
+const LOGIN_RATE_WINDOW_MINUTES = 15
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const emailInput = typeof body?.email === 'string' ? body.email : ''
@@ -21,6 +24,17 @@ export async function POST(req: Request) {
 
     if (!email || !password) {
       return NextResponse.json({ error: 'Correo y contraseña son requeridos.' }, { status: 400 })
+    }
+
+    // Brute-force protection: 10 attempts per 15 min per email+IP
+    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'
+    const rlKey = `login:${email}:${ip}`
+    const rl = await consumeLoginRateLimit(rlKey, LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW_MINUTES)
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: 'Demasiados intentos de inicio de sesión. Intenta de nuevo en 15 minutos.' },
+        { status: 429, headers: { 'Retry-After': String(LOGIN_RATE_WINDOW_MINUTES * 60) } }
+      )
     }
 
     const user = await findUserByEmail(email)

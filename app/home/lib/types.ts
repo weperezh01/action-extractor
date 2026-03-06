@@ -48,6 +48,11 @@ export interface ExtractResult {
   folderId?: string | null
   isStarred?: boolean
   tags?: ExtractionTag[]
+  sourceFileUrl?: string | null
+  sourceFileName?: string | null
+  sourceFileSizeBytes?: number | null
+  sourceFileMimeType?: string | null
+  hasSourceText?: boolean
 }
 
 export interface HistoryItem extends ExtractResult {
@@ -86,6 +91,28 @@ export type InteractiveTaskEventType = 'note' | 'pending_action' | 'blocker' | '
 export type InteractiveTaskAttachmentType = 'pdf' | 'image' | 'audio' | 'youtube_link' | 'note'
 export type InteractiveTaskAttachmentStorageProvider = 'cloudinary' | 'external'
 
+export type FlowNodeType = 'process' | 'decision'
+export type EdgeType = 'and' | 'xor' | 'loop'
+
+export interface TaskEdge {
+  id: string
+  extractionId: string
+  fromTaskId: string
+  toTaskId: string
+  edgeType: EdgeType
+  label: string | null
+  expectedExtraDays: number | null
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DecisionSelection {
+  extractionId: string
+  decisionTaskId: string
+  selectedToTaskId: string
+}
+
 export interface InteractiveTaskEvent {
   id: string
   taskId: string
@@ -116,6 +143,7 @@ export interface InteractiveTask {
   scheduledEndAt: string | null
   durationDays: number
   predecessorIds: string[]
+  flowNodeType: FlowNodeType
   createdAt: string
   updatedAt: string
   events: InteractiveTaskEvent[]
@@ -179,4 +207,40 @@ export type Theme = 'light' | 'dark'
 export interface ParsedSseEvent {
   event: string
   data: string
+}
+
+// ── Presentation Types ────────────────────────────────────────────────────────
+
+export interface TextElementStyle {
+  fontSize?: number
+  bold?: boolean
+  color?: string
+  align?: 'left' | 'center' | 'right'
+}
+
+export interface BulletElementStyle {
+  fontSize?: number
+  color?: string
+  lineHeight?: number
+}
+
+export type PresentationElement =
+  | { id: string; type: 'text'; x: number; y: number; w: number; h: number; z?: number;
+      text: string; style?: TextElementStyle }
+  | { id: string; type: 'image'; x: number; y: number; w: number; h: number; z?: number;
+      url: string; publicId?: string | null; crop?: 'contain' | 'cover' }
+  | { id: string; type: 'bullet'; x: number; y: number; w: number; h: number; z?: number;
+      items: string[]; style?: BulletElementStyle }
+
+export interface PresentationSlide {
+  id: string
+  title?: string
+  background?: string
+  elements: PresentationElement[]
+}
+
+export interface PresentationDeck {
+  version: number
+  theme?: { background?: string; accent?: string }
+  slides: PresentationSlide[]
 }

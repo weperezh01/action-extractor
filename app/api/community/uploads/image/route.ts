@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import { isCloudinaryConfigured, uploadFileToCloudinary } from '@/lib/cloudinary'
+import { decrementUserStorageUsed, getUserStorageInfo, incrementUserStorageUsed } from '@/lib/db'
+import { formatStorageBytes } from '@/lib/storage-limits'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -55,11 +57,27 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // Storage quota check
+    const { usedBytes, limitBytes } = await getUserStorageInfo(user.id)
+    if (usedBytes + rawFile.size > limitBytes) {
+      return NextResponse.json(
+        {
+          error: `Has alcanzado tu límite de almacenamiento (${formatStorageBytes(limitBytes)}). Elimina archivos o actualiza tu plan.`,
+          storageExceeded: true,
+          usedBytes,
+          limitBytes,
+        },
+        { status: 413 }
+      )
+    }
+
     const upload = await uploadFileToCloudinary({
       fileBuffer: Buffer.from(await rawFile.arrayBuffer()),
       filename: normalizeFilename(rawFile),
       mimeType,
     })
+
+    await incrementUserStorageUsed(user.id, rawFile.size)
 
     return NextResponse.json({
       attachment: {

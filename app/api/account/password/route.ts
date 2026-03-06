@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getUserFromRequest, hashPassword, isValidPassword, verifyPassword } from '@/lib/auth'
-import { findUserById, updateUserPassword } from '@/lib/db'
+import {
+  getUserFromRequest,
+  getSessionTokenFromRequest,
+  hashPassword,
+  hashSessionToken,
+  isValidPassword,
+  verifyPassword,
+} from '@/lib/auth'
+import { findUserById, updateUserPassword, deleteOtherSessionsByUserId } from '@/lib/db'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -32,11 +39,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Usuario no encontrado.' }, { status: 404 })
     }
 
-    if (currentPassword.trim()) {
-      const isCurrentValid = await verifyPassword(currentPassword, user.password_hash)
-      if (!isCurrentValid) {
-        return NextResponse.json({ error: 'La contraseña actual no es válida.' }, { status: 401 })
-      }
+    if (!currentPassword.trim()) {
+      return NextResponse.json({ error: 'La contraseña actual es requerida.' }, { status: 400 })
+    }
+
+    const isCurrentValid = await verifyPassword(currentPassword, user.password_hash)
+    if (!isCurrentValid) {
+      return NextResponse.json({ error: 'La contraseña actual no es válida.' }, { status: 401 })
     }
 
     const isSamePassword = await verifyPassword(newPassword, user.password_hash)
@@ -49,6 +58,13 @@ export async function POST(req: NextRequest) {
 
     const passwordHash = await hashPassword(newPassword)
     await updateUserPassword(user.id, passwordHash)
+
+    // Invalidate all other sessions so stolen sessions can't be reused
+    const currentToken = getSessionTokenFromRequest(req)
+    const currentTokenHash = currentToken ? hashSessionToken(currentToken) : null
+    if (currentTokenHash) {
+      await deleteOtherSessionsByUserId(user.id, currentTokenHash)
+    }
 
     return NextResponse.json({ ok: true })
   } catch (error: unknown) {

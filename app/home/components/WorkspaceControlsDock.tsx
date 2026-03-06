@@ -17,6 +17,7 @@ interface WorkspaceControlsDockProps {
   outputLanguage: ExtractionOutputLanguage
   isProcessing: boolean
   isManualOpen?: boolean
+  isSearchOpen?: boolean
   onExtractionModeChange: (mode: ExtractionMode) => void
   onOutputLanguageChange: (language: ExtractionOutputLanguage) => void
 
@@ -76,6 +77,7 @@ export function WorkspaceControlsDock({
   outputLanguage,
   isProcessing,
   isManualOpen = false,
+  isSearchOpen = false,
   onExtractionModeChange,
   onOutputLanguageChange,
 
@@ -189,13 +191,13 @@ export function WorkspaceControlsDock({
       <div className="flex flex-wrap items-center justify-end gap-2">
         <div
           style={{
-            maxWidth: isManualOpen ? '0px' : '600px',
-            maxHeight: isManualOpen ? '0px' : '120px',
-            opacity: isManualOpen ? 0 : 1,
-            transform: isManualOpen
+            maxWidth: (isManualOpen || isSearchOpen) ? '0px' : '600px',
+            maxHeight: (isManualOpen || isSearchOpen) ? '0px' : '120px',
+            opacity: (isManualOpen || isSearchOpen) ? 0 : 1,
+            transform: (isManualOpen || isSearchOpen)
               ? 'perspective(700px) translateX(56px) rotateY(-12deg) scale(0.88)'
               : 'perspective(700px) translateX(0px) rotateY(0deg) scale(1)',
-            pointerEvents: isManualOpen ? 'none' : undefined,
+            pointerEvents: (isManualOpen || isSearchOpen) ? 'none' : undefined,
             overflow: (isModeOpen || isLanguageOpen) ? 'visible' : 'hidden',
             transition: 'max-width 0.65s cubic-bezier(0.4, 0, 0.2, 1), max-height 0.65s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.55s cubic-bezier(0.4, 0, 0.2, 1), transform 0.65s cubic-bezier(0.4, 0, 0.2, 1)',
             transformOrigin: 'left center',

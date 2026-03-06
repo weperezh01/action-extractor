@@ -1,10 +1,25 @@
 import Stripe from 'stripe'
 
-if (!process.env.STRIPE_SECRET_KEY) {
-  throw new Error('STRIPE_SECRET_KEY is not set')
+// Stripe is initialized lazily at runtime so the build succeeds without env vars.
+// API calls will fail with a clear error if STRIPE_SECRET_KEY is not set at runtime.
+let _stripe: Stripe | null = null
+
+export function getStripeClient(): Stripe {
+  if (!_stripe) {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      throw new Error('STRIPE_SECRET_KEY is not set')
+    }
+    _stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+  }
+  return _stripe
 }
 
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+// Named alias kept for backward compat with existing imports of `stripe`
+export const stripe = new Proxy({} as Stripe, {
+  get(_target, prop) {
+    return (getStripeClient() as unknown as Record<string | symbol, unknown>)[prop]
+  },
+})
 
 export const PLAN_PRICE_IDS = {
   starter: process.env.STRIPE_PRICE_STARTER_MONTHLY ?? '',

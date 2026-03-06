@@ -3,10 +3,11 @@
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useState, Suspense } from 'react'
-import { Check, Loader2, Zap } from 'lucide-react'
-import { FEATURE_KEYS } from '@/app/admin/plans/page'
+import { Check, HardDrive, Loader2, Zap } from 'lucide-react'
+import { FEATURE_KEYS } from '@/app/admin/plans/feature-keys'
 import { useLang } from '@/app/home/hooks/useLang'
 import { t } from '@/app/home/lib/i18n'
+import { formatStorageBytes } from '@/lib/storage-limits'
 
 interface DbPlan {
   id: string
@@ -16,6 +17,7 @@ interface DbPlan {
   stripe_price_id: string | null
   extractions_per_hour: number
   extractions_per_day?: number
+  storage_limit_bytes?: number
   features_json: string
   is_active: boolean
   display_order: number
@@ -243,8 +245,14 @@ function PricingContent() {
                   )}
                 </div>
 
-                <p className="mb-4 text-xs text-slate-500 dark:text-slate-400">
+                <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">
                   {plan.extractions_per_day ?? plan.extractions_per_hour} {t(lang, 'pricing.extractionsPerDay')}
+                </p>
+                <p className="mb-4 flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+                  <HardDrive size={11} className="shrink-0" />
+                  {plan.storage_limit_bytes
+                    ? formatStorageBytes(plan.storage_limit_bytes)
+                    : '100 MB'} almacenamiento
                 </p>
 
                 {/* Features */}

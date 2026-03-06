@@ -405,6 +405,7 @@ function ActionExtractor() {
   const [showBackToExtractorButton, setShowBackToExtractorButton] = useState(false)
   const [showGoToHistoryButton, setShowGoToHistoryButton] = useState(false)
   const [isManualFormOpen, setIsManualFormOpen] = useState(false)
+  const [isSearchFormOpen, setIsSearchFormOpen] = useState(false)
   const [globalPlaybookQuery, setGlobalPlaybookQuery] = useState('')
   const [activeFolderIds, setActiveFolderIds] = useState<string[]>([])
   const { folders, loadFolders, resetFolders, createFolder, deleteFolder } = useFolders()
@@ -822,6 +823,10 @@ function ActionExtractor() {
         charCount?: number
         sourceLabel?: string
         sourceType?: string
+        sourceFileName?: string
+        sourceFileSizeBytes?: number
+        sourceFileMimeType?: string
+        sourceFileUrl?: string | null
         error?: string
       } | null
 
@@ -846,6 +851,10 @@ function ActionExtractor() {
           text: data.text,
           charCount: data.charCount,
           sourceLabel: data.sourceLabel ?? file.name,
+          sourceFileName: data.sourceFileName ?? file.name,
+          sourceFileSizeBytes: data.sourceFileSizeBytes ?? null,
+          sourceFileMimeType: data.sourceFileMimeType ?? null,
+          sourceFileUrl: data.sourceFileUrl ?? null,
         })
         setUrl('')
       } else {
@@ -1529,6 +1538,10 @@ function ActionExtractor() {
         text: uploadedFile.text,
         sourceType: uploadedFile.sourceType,
         sourceLabel: uploadedFile.sourceLabel,
+        sourceFileName: uploadedFile.sourceFileName,
+        sourceFileSizeBytes: uploadedFile.sourceFileSizeBytes,
+        sourceFileMimeType: uploadedFile.sourceFileMimeType,
+        sourceFileUrl: uploadedFile.sourceFileUrl,
         mode: extractionModeToUse,
         outputLanguage,
       }
@@ -2379,6 +2392,11 @@ function ActionExtractor() {
       metadata: item.metadata,
       sourceType: item.sourceType,
       sourceLabel: item.sourceLabel ?? null,
+      sourceFileUrl: item.sourceFileUrl ?? null,
+      sourceFileName: item.sourceFileName ?? null,
+      sourceFileSizeBytes: item.sourceFileSizeBytes ?? null,
+      sourceFileMimeType: item.sourceFileMimeType ?? null,
+      hasSourceText: item.hasSourceText ?? false,
       isStarred: item.isStarred ?? false,
       accessRole: 'owner',
       ownerName: user?.name ?? null,
@@ -2405,6 +2423,11 @@ function ActionExtractor() {
       metadata: item.metadata,
       sourceType: item.sourceType,
       sourceLabel: item.sourceLabel ?? null,
+      sourceFileUrl: item.sourceFileUrl ?? null,
+      sourceFileName: item.sourceFileName ?? null,
+      sourceFileSizeBytes: item.sourceFileSizeBytes ?? null,
+      sourceFileMimeType: item.sourceFileMimeType ?? null,
+      hasSourceText: item.hasSourceText ?? false,
       accessRole: item.accessRole,
       ownerName: item.ownerName,
       ownerEmail: item.ownerEmail,
@@ -3174,7 +3197,7 @@ function ActionExtractor() {
               <div className="relative h-8 w-8 flex-shrink-0 overflow-hidden rounded-xl ring-2 ring-violet-500/30 dark:ring-violet-400/25">
                 <Image
                   src="/roi-logo.png"
-                  alt="ROI Action Extractor logo"
+                  alt="Notes Aide logo"
                   fill
                   sizes="32px"
                   className="object-cover"
@@ -3182,8 +3205,8 @@ function ActionExtractor() {
                 />
               </div>
               <span className="hidden font-bold tracking-tight text-zinc-900 sm:inline dark:text-zinc-100">
-                <span className="text-sm md:hidden">ROI Extractor</span>
-                <span className="hidden text-[15px] md:inline">ROI Action Extractor</span>
+                <span className="text-sm md:hidden">Notes Aide</span>
+                <span className="hidden text-[15px] md:inline">Notes Aide</span>
               </span>
             </div>
 
@@ -3341,7 +3364,7 @@ function ActionExtractor() {
             <div className="w-full max-w-md space-y-4">
               <div className="text-center">
                 <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                  ROI Action Extractor
+                  Notes Aide
                 </h1>
                 <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                   {resetTokenFromUrl
@@ -3396,7 +3419,7 @@ function ActionExtractor() {
         ) : (
           <>
             <div
-              className={`fixed bottom-4 left-0 top-[4.65rem] z-[45] w-[min(24rem,90vw)] transition-transform duration-300 ease-out md:top-[5.15rem] ${
+              className={`fixed bottom-4 left-0 top-[4.65rem] z-[45] w-[min(24rem,90vw)] lg:w-1/2 transition-transform duration-300 ease-out md:top-[5.15rem] ${
                 isCommunityDrawerOpen
                   ? 'pointer-events-auto translate-x-0'
                   : 'pointer-events-none -translate-x-full md:translate-x-[calc(-100%+56px)]'
@@ -3633,6 +3656,7 @@ function ActionExtractor() {
                       void loadHistory()
                     }}
                     onManualToggle={setIsManualFormOpen}
+                    onSearchToggle={setIsSearchFormOpen}
                     onOpenPublicPlaybook={openPublicPlaybookFromSearch}
                   />
                   )}
@@ -3643,6 +3667,7 @@ function ActionExtractor() {
                   outputLanguage={outputLanguage}
                   isProcessing={isProcessing}
                   isManualOpen={isManualFormOpen}
+                  isSearchOpen={isSearchFormOpen}
                   onExtractionModeChange={setExtractionMode}
                   onOutputLanguageChange={setOutputLanguage}
                   notionConfigured={notionConfigured}
