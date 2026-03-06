@@ -19,6 +19,7 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+RUN apk add --no-cache yt-dlp
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/package-lock.json ./package-lock.json
 COPY --from=builder /app/next.config.js ./next.config.js
@@ -28,6 +29,8 @@ COPY --from=builder /app/.next ./.next
 # Source files — required by the MCP server for code browsing at /api/mcp
 COPY --from=builder /app/app ./app
 COPY --from=builder /app/lib ./lib
+COPY --from=builder /app/messages ./messages
+COPY --from=builder /app/i18n ./i18n
 COPY --from=builder /app/CLAUDE.md ./CLAUDE.md
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 COPY --from=builder /app/tailwind.config.js ./tailwind.config.js
