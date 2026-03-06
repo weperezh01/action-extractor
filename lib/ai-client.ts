@@ -28,6 +28,8 @@ export interface AiCallResult {
   outputTokens: number
 }
 
+export const AI_PRICING_VERSION = '2026-03-06-official-v1'
+
 // Precios por millón de tokens (USD) — fuente: páginas oficiales de cada proveedor
 export const MODEL_PRICING_USD_PER_M: Record<string, { input: number; output: number }> = {
   'claude-opus-4-6': { input: 15.0, output: 75.0 },
@@ -36,16 +38,29 @@ export const MODEL_PRICING_USD_PER_M: Record<string, { input: number; output: nu
   'gpt-4o': { input: 2.5, output: 10.0 },
   'gpt-4o-mini': { input: 0.15, output: 0.6 },
   'o1-mini': { input: 1.1, output: 4.4 },
-  'gemini-2.0-flash': { input: 0.075, output: 0.3 },
-  'gemini-2.0-flash-lite': { input: 0.0375, output: 0.15 },
+  'gemini-2.0-flash': { input: 0.1, output: 0.4 },
+  'gemini-2.0-flash-lite': { input: 0.075, output: 0.3 },
   'gemini-1.5-pro': { input: 1.25, output: 5.0 },
   'gemini-1.5-flash': { input: 0.075, output: 0.3 },
+}
+
+export const TRANSCRIPTION_PRICING_USD: Record<string, { perMinute: number }> = {
+  'gpt-4o-transcribe': { perMinute: 0.006 },
+  'gpt-4o-transcribe-diarize': { perMinute: 0.006 },
+  'gpt-4o-mini-transcribe': { perMinute: 0.003 },
 }
 
 export function estimateCostUsd(model: string, inputTokens: number, outputTokens: number): number {
   const pricing = MODEL_PRICING_USD_PER_M[model]
   if (!pricing) return 0
   return (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output
+}
+
+export function estimateTranscriptionCostUsd(model: string, durationSeconds: number): number {
+  const pricing = TRANSCRIPTION_PRICING_USD[model]
+  if (!pricing) return 0
+  const minutes = Math.max(0, durationSeconds) / 60
+  return minutes * pricing.perMinute
 }
 
 export const PROVIDER_MODELS: Record<AiProvider, string[]> = {

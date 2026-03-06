@@ -10,6 +10,7 @@ const authMocks = vi.hoisted(() => ({
 }))
 
 const dbMocks = vi.hoisted(() => ({
+  consumeLoginRateLimit: vi.fn(),
   createSession: vi.fn(),
   findUserByEmail: vi.fn(),
   mapUserForClient: vi.fn((user: { id: string; name: string; email: string }) => ({
@@ -29,6 +30,7 @@ vi.mock('@/lib/auth', () => ({
 }))
 
 vi.mock('@/lib/db', () => ({
+  consumeLoginRateLimit: dbMocks.consumeLoginRateLimit,
   createSession: dbMocks.createSession,
   findUserByEmail: dbMocks.findUserByEmail,
   mapUserForClient: dbMocks.mapUserForClient,
@@ -49,6 +51,14 @@ function makeRequest(body: unknown) {
 describe('POST /api/auth/login', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    dbMocks.consumeLoginRateLimit.mockResolvedValue({
+      allowed: true,
+      limit: 10,
+      used: 1,
+      remaining: 9,
+      resetAt: '2026-03-06T00:00:00.000Z',
+      retryAfterSeconds: 60,
+    })
   })
 
   it('retorna 400 si faltan credenciales', async () => {

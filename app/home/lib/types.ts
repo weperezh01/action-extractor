@@ -6,6 +6,19 @@ export type ExtractionAccessRole = 'owner' | 'editor' | 'viewer'
 
 export type SourceType = 'youtube' | 'web_url' | 'pdf' | 'docx' | 'text' | 'manual'
 
+export type TranscriptSource =
+  | 'cache_exact'
+  | 'cache_transcript'
+  | 'cache_result'
+  | 'youtube_transcript'
+  | 'watch_page_caption_track'
+  | 'yt_dlp_subtitles'
+  | 'openai_audio_transcription'
+  | 'youtube_official_api'
+  | 'web'
+  | 'file'
+  | 'text'
+
 export interface Phase {
   id: number
   title: string
@@ -44,6 +57,7 @@ export interface ExtractResult {
   proTip: string
   metadata: ExtractMetadata
   sourceType?: SourceType
+  transcriptSource?: TranscriptSource | null
   sourceLabel?: string | null
   folderId?: string | null
   isStarred?: boolean

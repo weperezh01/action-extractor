@@ -9,6 +9,7 @@ const USE_TYPE_LABELS: Record<string, string> = {
   extraction: 'Extracción',
   chat: 'Chat',
   repair: 'Reparación JSON',
+  transcription: 'Transcripción',
 }
 
 export async function GET(req: NextRequest) {

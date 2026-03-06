@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
-import { Check, X, Plus, Pencil, Trash2, Save, RotateCcw, ChevronUp, ChevronDown } from 'lucide-react'
+import { Check, X, Plus, Pencil, Trash2, Save, RotateCcw } from 'lucide-react'
 import { formatStorageBytes } from '@/lib/storage-limits'
 
 // ── Feature definitions ──────────────────────────────────────────────────────
@@ -40,6 +40,9 @@ interface DbPlan {
   extractions_per_day: number
   chat_tokens_per_day: number
   storage_limit_bytes: number
+  target_gross_margin_pct: number
+  profitability_alert_enabled: boolean
+  estimated_monthly_fixed_cost_usd: number
   features_json: string
   is_active: boolean
   display_order: number
@@ -47,10 +50,64 @@ interface DbPlan {
   updated_at: string
 }
 
+interface PlanProfitabilityStat {
+  plan_id: string
+  plan_name: string
+  plan_display_name: string
+  period_days: number
+  active_users: number
+  price_monthly_usd: number
+  target_gross_margin_pct: number
+  profitability_alert_enabled: boolean
+  estimated_monthly_fixed_cost_usd: number
+  avg_monthly_ai_cost_per_user_usd: number
+  avg_monthly_storage_cost_per_user_usd: number
+  avg_monthly_total_cost_per_user_usd: number
+  p95_monthly_total_cost_per_user_usd: number
+  total_monthly_run_rate_cost_usd: number
+  actual_gross_margin_pct: number | null
+  avg_extraction_cost_usd: number
+  avg_chat_cost_per_token_usd: number
+  projected_cost_at_current_caps_usd: number
+  projected_gross_margin_pct: number | null
+  recommended_extractions_per_day: number | null
+  recommended_chat_tokens_per_day: number | null
+  current_extractions_per_day: number
+  current_chat_tokens_per_day: number
+  storage_limit_bytes: number
+  unprofitable_users: number
+  at_risk_users: number
+  status: 'healthy' | 'at_risk' | 'unprofitable'
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function cls(...args: (string | false | undefined)[]) {
   return args.filter(Boolean).join(' ')
+}
+
+function formatUsd(value: number, decimals = 2) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(value)
+}
+
+function formatMarginPct(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return 'N/A'
+  return `${(value * 100).toFixed(1)}%`
+}
+
+function profitabilityBadge(status: PlanProfitabilityStat['status']) {
+  if (status === 'healthy') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'
+  }
+  if (status === 'at_risk') {
+    return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
+  }
+  return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300'
 }
 
 const SEED_IDS = ['plan_free', 'plan_pro', 'plan_business']
@@ -85,13 +142,30 @@ function ToggleCell({
 
 export default function AdminPlansPage() {
   const [plans, setPlans] = useState<DbPlan[]>([])
+  const [profitability, setProfitability] = useState<PlanProfitabilityStat[]>([])
+  const [profitabilityLoading, setProfitabilityLoading] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
   // Inline edit state for value ladder table
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [editDraft, setEditDraft] = useState<Partial<DbPlan> & { displayName?: string; priceMonthlyUsd?: number; extractionsPerHour?: number; chatTokensPerDay?: number; storageLimitBytes?: number; stripePriceId?: string | null; isActive?: boolean; displayOrder?: number }>({})
+  const [editDraft, setEditDraft] = useState<
+    Partial<DbPlan> & {
+      displayName?: string
+      priceMonthlyUsd?: number
+      extractionsPerHour?: number
+      extractionsPerDay?: number
+      chatTokensPerDay?: number
+      storageLimitBytes?: number
+      targetGrossMarginPct?: number
+      estimatedMonthlyFixedCostUsd?: number
+      profitabilityAlertEnabled?: boolean
+      stripePriceId?: string | null
+      isActive?: boolean
+      displayOrder?: number
+    }
+  >({})
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
@@ -103,6 +177,12 @@ export default function AdminPlansPage() {
     priceMonthlyUsd: 0,
     stripePriceId: '',
     extractionsPerHour: 12,
+    extractionsPerDay: 3,
+    chatTokensPerDay: 10000,
+    storageLimitBytes: 104857600,
+    targetGrossMarginPct: 0.75,
+    estimatedMonthlyFixedCostUsd: 0,
+    profitabilityAlertEnabled: true,
     isActive: true,
     displayOrder: 99,
   })
@@ -135,7 +215,24 @@ export default function AdminPlansPage() {
     }
   }, [])
 
-  useEffect(() => { void loadPlans() }, [loadPlans])
+  const loadProfitability = useCallback(async () => {
+    setProfitabilityLoading(true)
+    try {
+      const res = await fetch('/api/admin/plans/profitability?days=30', { cache: 'no-store' })
+      const data = (await res.json().catch(() => null)) as { plans?: PlanProfitabilityStat[] } | null
+      if (res.ok && data?.plans) {
+        setProfitability(data.plans)
+      }
+    } catch {
+      // silent: the plans editor should still work if profitability analytics fail
+    } finally {
+      setProfitabilityLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void Promise.all([loadPlans(), loadProfitability()])
+  }, [loadPlans, loadProfitability])
 
   // ── Value ladder editing ───────────────────────────────────────────────────
 
@@ -145,8 +242,12 @@ export default function AdminPlansPage() {
       displayName: plan.display_name,
       priceMonthlyUsd: plan.price_monthly_usd,
       extractionsPerHour: plan.extractions_per_hour,
+      extractionsPerDay: plan.extractions_per_day,
       chatTokensPerDay: plan.chat_tokens_per_day,
       storageLimitBytes: plan.storage_limit_bytes,
+      targetGrossMarginPct: plan.target_gross_margin_pct,
+      estimatedMonthlyFixedCostUsd: plan.estimated_monthly_fixed_cost_usd,
+      profitabilityAlertEnabled: plan.profitability_alert_enabled,
       stripePriceId: plan.stripe_price_id ?? '',
       isActive: plan.is_active,
       displayOrder: plan.display_order,
@@ -169,8 +270,12 @@ export default function AdminPlansPage() {
           displayName: editDraft.displayName,
           priceMonthlyUsd: editDraft.priceMonthlyUsd,
           extractionsPerHour: editDraft.extractionsPerHour,
+          extractionsPerDay: editDraft.extractionsPerDay,
           chatTokensPerDay: editDraft.chatTokensPerDay,
           storageLimitBytes: editDraft.storageLimitBytes,
+          targetGrossMarginPct: editDraft.targetGrossMarginPct,
+          estimatedMonthlyFixedCostUsd: editDraft.estimatedMonthlyFixedCostUsd,
+          profitabilityAlertEnabled: editDraft.profitabilityAlertEnabled,
           stripePriceId: editDraft.stripePriceId || null,
           isActive: editDraft.isActive,
           displayOrder: editDraft.displayOrder,
@@ -180,6 +285,7 @@ export default function AdminPlansPage() {
       if (!res.ok) { setError(data?.error ?? 'Error al guardar.'); return }
       if (data?.plan) {
         setPlans((prev) => prev.map((p) => (p.id === planId ? data.plan! : p)))
+        void loadProfitability()
         setNotice('Plan actualizado correctamente.')
         setTimeout(() => setNotice(null), 3000)
       }
@@ -199,6 +305,7 @@ export default function AdminPlansPage() {
       const data = (await res.json().catch(() => null)) as { error?: string } | null
       if (!res.ok) { setError(data?.error ?? 'Error al eliminar.'); return }
       setPlans((prev) => prev.filter((p) => p.id !== planId))
+      void loadProfitability()
       setNotice('Plan eliminado.')
       setTimeout(() => setNotice(null), 3000)
     } catch {
@@ -233,11 +340,26 @@ export default function AdminPlansPage() {
       if (data?.plan) {
         setPlans((prev) => [...prev, data.plan!].sort((a, b) => a.display_order - b.display_order))
         setFeatureEdits((prev) => ({ ...prev, [data.plan!.id]: parseFeatures(data.plan!.features_json) }))
+        void loadProfitability()
         setNotice('Plan creado correctamente.')
         setTimeout(() => setNotice(null), 3000)
       }
       setShowNewForm(false)
-      setNewPlan({ name: '', displayName: '', priceMonthlyUsd: 0, stripePriceId: '', extractionsPerHour: 12, isActive: true, displayOrder: 99 })
+      setNewPlan({
+        name: '',
+        displayName: '',
+        priceMonthlyUsd: 0,
+        stripePriceId: '',
+        extractionsPerHour: 12,
+        extractionsPerDay: 3,
+        chatTokensPerDay: 10000,
+        storageLimitBytes: 104857600,
+        targetGrossMarginPct: 0.75,
+        estimatedMonthlyFixedCostUsd: 0,
+        profitabilityAlertEnabled: true,
+        isActive: true,
+        displayOrder: 99,
+      })
     } catch {
       setError('Error de conexión.')
     } finally {
@@ -289,6 +411,8 @@ export default function AdminPlansPage() {
     const original = parseFeatures(plan.features_json)
     return FEATURE_KEYS.some(({ key }) => current[key] !== original[key])
   }
+
+  const profitabilityByPlanId = new Map(profitability.map((item) => [item.plan_id, item]))
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -414,6 +538,66 @@ export default function AdminPlansPage() {
                     className="w-full h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                   />
                 </div>
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Extracciones/día</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={newPlan.extractionsPerDay}
+                    onChange={(e) => setNewPlan((p) => ({ ...p, extractionsPerDay: Number(e.target.value) }))}
+                    className="w-full h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Tokens chat/día</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1000}
+                    value={newPlan.chatTokensPerDay}
+                    onChange={(e) => setNewPlan((p) => ({ ...p, chatTokensPerDay: Number(e.target.value) }))}
+                    className="w-full h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Storage bytes</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1048576}
+                    value={newPlan.storageLimitBytes}
+                    onChange={(e) => setNewPlan((p) => ({ ...p, storageLimitBytes: Number(e.target.value) }))}
+                    className="w-full h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  />
+                  <p className="mt-1 text-[10px] text-slate-400">{formatStorageBytes(newPlan.storageLimitBytes)}</p>
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Margen meta (%)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={99}
+                    step={1}
+                    value={Math.round(newPlan.targetGrossMarginPct * 100)}
+                    onChange={(e) =>
+                      setNewPlan((p) => ({ ...p, targetGrossMarginPct: Number(e.target.value) / 100 }))
+                    }
+                    className="w-full h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Costo fijo mensual (USD)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={newPlan.estimatedMonthlyFixedCostUsd}
+                    onChange={(e) =>
+                      setNewPlan((p) => ({ ...p, estimatedMonthlyFixedCostUsd: Number(e.target.value) }))
+                    }
+                    className="w-full h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  />
+                </div>
                 <div className="sm:col-span-2">
                   <label className="block text-xs text-slate-500 mb-1">Stripe Price ID</label>
                   <input
@@ -443,6 +627,19 @@ export default function AdminPlansPage() {
                       className="rounded"
                     />
                     <span className="text-slate-700 dark:text-slate-200">Activo</span>
+                  </label>
+                </div>
+                <div className="flex items-end gap-1.5">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer h-9">
+                    <input
+                      type="checkbox"
+                      checked={newPlan.profitabilityAlertEnabled}
+                      onChange={(e) =>
+                        setNewPlan((p) => ({ ...p, profitabilityAlertEnabled: e.target.checked }))
+                      }
+                      className="rounded"
+                    />
+                    <span className="text-slate-700 dark:text-slate-200">Alertas de rentabilidad</span>
                   </label>
                 </div>
               </div>
@@ -478,6 +675,10 @@ export default function AdminPlansPage() {
                   <th className="px-4 py-3 text-right font-semibold text-slate-400">Extr./hora</th>
                   <th className="px-4 py-3 text-right font-semibold">Tokens chat/día</th>
                   <th className="px-4 py-3 text-right font-semibold">Almacenamiento</th>
+                  <th className="px-4 py-3 text-right font-semibold">Margen meta</th>
+                  <th className="px-4 py-3 text-right font-semibold">Costo fijo</th>
+                  <th className="px-4 py-3 text-center font-semibold">Alerta</th>
+                  <th className="px-4 py-3 text-center font-semibold">Estado</th>
                   <th className="px-4 py-3 text-left font-semibold">Stripe Price ID</th>
                   <th className="px-4 py-3 text-center font-semibold">Orden</th>
                   <th className="px-4 py-3 text-center font-semibold">Activo</th>
@@ -489,6 +690,7 @@ export default function AdminPlansPage() {
                   const isEditing = editingId === plan.id
                   const isDeleting = deletingId === plan.id
                   const isSeed = SEED_IDS.includes(plan.id)
+                  const planProfitability = profitabilityByPlanId.get(plan.id)
 
                   return (
                     <tr key={plan.id} className={cls('transition-colors', isEditing && 'bg-indigo-50/60 dark:bg-indigo-950/20')}>
@@ -529,8 +731,20 @@ export default function AdminPlansPage() {
 
                       {/* Extractions/día */}
                       <td className="px-4 py-3 text-right">
-                        <span className="tabular-nums font-semibold">{plan.extractions_per_day}</span>
-                        <p className="text-[10px] text-slate-400">por día</p>
+                        {isEditing ? (
+                          <input
+                            type="number"
+                            min={0}
+                            value={editDraft.extractionsPerDay ?? plan.extractions_per_day}
+                            onChange={(e) => setEditDraft((d) => ({ ...d, extractionsPerDay: Number(e.target.value) }))}
+                            className="h-8 w-20 rounded border border-indigo-300 bg-white px-2 text-sm text-right dark:border-indigo-700 dark:bg-slate-950 dark:text-slate-100"
+                          />
+                        ) : (
+                          <>
+                            <span className="tabular-nums font-semibold">{plan.extractions_per_day}</span>
+                            <p className="text-[10px] text-slate-400">por día</p>
+                          </>
+                        )}
                       </td>
 
                       {/* Extractions/hr (legacy) */}
@@ -578,6 +792,94 @@ export default function AdminPlansPage() {
                         ) : (
                           <span className="tabular-nums font-semibold">
                             {formatStorageBytes(plan.storage_limit_bytes)}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Margin target */}
+                      <td className="px-4 py-3 text-right">
+                        {isEditing ? (
+                          <input
+                            type="number"
+                            min={0}
+                            max={99}
+                            step={1}
+                            value={Math.round((editDraft.targetGrossMarginPct ?? plan.target_gross_margin_pct) * 100)}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({ ...d, targetGrossMarginPct: Number(e.target.value) / 100 }))
+                            }
+                            className="h-8 w-20 rounded border border-indigo-300 bg-white px-2 text-sm text-right dark:border-indigo-700 dark:bg-slate-950 dark:text-slate-100"
+                          />
+                        ) : (
+                          <span className="tabular-nums font-semibold">
+                            {formatMarginPct(plan.target_gross_margin_pct)}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Fixed monthly cost */}
+                      <td className="px-4 py-3 text-right">
+                        {isEditing ? (
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={editDraft.estimatedMonthlyFixedCostUsd ?? plan.estimated_monthly_fixed_cost_usd}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({
+                                ...d,
+                                estimatedMonthlyFixedCostUsd: Number(e.target.value),
+                              }))
+                            }
+                            className="h-8 w-24 rounded border border-indigo-300 bg-white px-2 text-sm text-right dark:border-indigo-700 dark:bg-slate-950 dark:text-slate-100"
+                          />
+                        ) : (
+                          <span className="tabular-nums text-slate-600 dark:text-slate-300">
+                            {formatUsd(plan.estimated_monthly_fixed_cost_usd)}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Profitability alert */}
+                      <td className="px-4 py-3 text-center">
+                        {isEditing ? (
+                          <input
+                            type="checkbox"
+                            checked={editDraft.profitabilityAlertEnabled ?? plan.profitability_alert_enabled}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({ ...d, profitabilityAlertEnabled: e.target.checked }))
+                            }
+                            className="rounded w-4 h-4"
+                          />
+                        ) : plan.profitability_alert_enabled ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                            <Check size={12} /> Sí
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs text-slate-400">
+                            <X size={12} /> No
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Profitability status */}
+                      <td className="px-4 py-3 text-center">
+                        {planProfitability ? (
+                          <div className="space-y-1">
+                            <span className={cls('inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold', profitabilityBadge(planProfitability.status))}>
+                              {planProfitability.status === 'healthy'
+                                ? 'Saludable'
+                                : planProfitability.status === 'at_risk'
+                                  ? 'En riesgo'
+                                  : 'No rentable'}
+                            </span>
+                            <p className="text-[10px] text-slate-400">
+                              {formatMarginPct(planProfitability.actual_gross_margin_pct)}
+                            </p>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-slate-400">
+                            {profitabilityLoading ? '...' : 'Sin datos'}
                           </span>
                         )}
                       </td>
@@ -687,7 +989,7 @@ export default function AdminPlansPage() {
 
                 {plans.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-5 py-8 text-center text-sm text-slate-400 dark:text-slate-500">
+                    <td colSpan={14} className="px-5 py-8 text-center text-sm text-slate-400 dark:text-slate-500">
                       No hay planes configurados.
                     </td>
                   </tr>
@@ -695,6 +997,108 @@ export default function AdminPlansPage() {
               </tbody>
             </table>
           </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800">
+            <div>
+              <h2 className="text-base font-semibold">Rentabilidad por Plan</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Costos reales mensualizados vs. precio y topes actuales del plan.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadProfitability()}
+              disabled={profitabilityLoading}
+              className="h-9 px-3 rounded-lg border border-slate-300 bg-white text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            >
+              {profitabilityLoading ? 'Actualizando...' : 'Actualizar'}
+            </button>
+          </div>
+
+          {profitabilityLoading && profitability.length === 0 ? (
+            <div className="px-5 py-8">
+              <div className="w-8 h-8 border-2 border-slate-300 border-t-indigo-600 rounded-full animate-spin" />
+            </div>
+          ) : profitability.length === 0 ? (
+            <div className="px-5 py-8 text-sm text-slate-500 dark:text-slate-400">
+              No hay datos de rentabilidad todavía.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 dark:border-slate-800 text-xs uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                    <th className="px-5 py-3 text-left font-semibold">Plan</th>
+                    <th className="px-4 py-3 text-right font-semibold">Usuarios</th>
+                    <th className="px-4 py-3 text-right font-semibold">Precio</th>
+                    <th className="px-4 py-3 text-right font-semibold">Costo prom./mes</th>
+                    <th className="px-4 py-3 text-right font-semibold">P95 costo/mes</th>
+                    <th className="px-4 py-3 text-right font-semibold">Margen actual</th>
+                    <th className="px-4 py-3 text-right font-semibold">Margen proyectado</th>
+                    <th className="px-4 py-3 text-right font-semibold">Límites recomendados</th>
+                    <th className="px-4 py-3 text-right font-semibold">Costo a tope</th>
+                    <th className="px-4 py-3 text-center font-semibold">Estado</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {profitability.map((plan) => (
+                    <tr key={plan.plan_id}>
+                      <td className="px-5 py-3">
+                        <div>
+                          <p className="font-semibold text-slate-900 dark:text-slate-100">{plan.plan_display_name}</p>
+                          <p className="text-xs text-slate-400 font-mono">{plan.plan_name}</p>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">{plan.active_users}</td>
+                      <td className="px-4 py-3 text-right tabular-nums">{formatUsd(plan.price_monthly_usd)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <p className="tabular-nums font-semibold">{formatUsd(plan.avg_monthly_total_cost_per_user_usd)}</p>
+                        <p className="text-[10px] text-slate-400">
+                          IA {formatUsd(plan.avg_monthly_ai_cost_per_user_usd)} + storage {formatUsd(plan.avg_monthly_storage_cost_per_user_usd)}
+                        </p>
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">{formatUsd(plan.p95_monthly_total_cost_per_user_usd)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <p className="tabular-nums font-semibold">{formatMarginPct(plan.actual_gross_margin_pct)}</p>
+                        <p className="text-[10px] text-slate-400">meta {formatMarginPct(plan.target_gross_margin_pct)}</p>
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">{formatMarginPct(plan.projected_gross_margin_pct)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <p className="tabular-nums">
+                          {plan.recommended_extractions_per_day ?? 'N/A'} extr./día
+                        </p>
+                        <p className="text-[10px] text-slate-400">
+                          {plan.recommended_chat_tokens_per_day?.toLocaleString('es-MX') ?? 'N/A'} tok./día
+                        </p>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <p className="tabular-nums font-semibold">{formatUsd(plan.projected_cost_at_current_caps_usd)}</p>
+                        <p className="text-[10px] text-slate-400">
+                          actual {plan.current_extractions_per_day} extr. / {plan.current_chat_tokens_per_day.toLocaleString('es-MX')} tok.
+                        </p>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <div className="space-y-1">
+                          <span className={cls('inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold', profitabilityBadge(plan.status))}>
+                            {plan.status === 'healthy'
+                              ? 'Saludable'
+                              : plan.status === 'at_risk'
+                                ? 'En riesgo'
+                                : 'No rentable'}
+                          </span>
+                          <p className="text-[10px] text-slate-400">
+                            {plan.unprofitable_users} no rent. · {plan.at_risk_users} riesgo
+                          </p>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
 
         {/* ── Tabla 2: Limitaciones por Plan ─────────────────────────────── */}

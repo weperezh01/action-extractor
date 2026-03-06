@@ -2,6 +2,17 @@ import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { flattenPlaybookPhases, normalizePlaybookPhases } from '@/lib/playbook-tree'
 import {
+  calculateGrossMarginPct,
+  calculateMaxVariableCostAllowed,
+  calculateMonthlyRunRate,
+  calculateProjectedPlanCapCost,
+  calculateRecommendedChatTokensPerDay,
+  calculateRecommendedExtractionsPerDay,
+  classifyProfitabilityStatus,
+  normalizeMarginPct,
+  type ProfitabilityStatus,
+} from '@/lib/profitability'
+import {
   buildSystemExtractionFolderIdForUser,
   isProtectedExtractionFolderIdForUser,
   listSystemExtractionFoldersForUser,
@@ -59,6 +70,7 @@ export interface DbExtraction {
   source_file_size_bytes: number | null
   source_file_mime_type: string | null
   has_source_text: boolean
+  transcript_source: string | null
 }
 
 export interface DbExtractionFolder {
@@ -570,6 +582,7 @@ interface DbExtractionRow {
   source_file_size_bytes?: number | null
   source_file_mime_type?: string | null
   has_source_text?: boolean | null
+  transcript_source?: string | null
 }
 
 interface DbExtractionFolderRow {
@@ -1380,17 +1393,25 @@ const INIT_SQL = `
     model TEXT NOT NULL,
     use_type TEXT NOT NULL DEFAULT 'extraction',
     user_id TEXT,
+    extraction_id TEXT,
+    source_type TEXT,
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cost_usd NUMERIC(10,6) NOT NULL DEFAULT 0,
+    pricing_version TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
   ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS user_id TEXT;
+  ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS extraction_id TEXT;
+  ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS source_type TEXT;
+  ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS pricing_version TEXT NOT NULL DEFAULT '';
 
   CREATE INDEX IF NOT EXISTS idx_ai_usage_log_created_at ON ai_usage_log(created_at);
   CREATE INDEX IF NOT EXISTS idx_ai_usage_log_provider_model ON ai_usage_log(provider, model);
   CREATE INDEX IF NOT EXISTS idx_ai_usage_log_user_id ON ai_usage_log(user_id);
+  CREATE INDEX IF NOT EXISTS idx_ai_usage_log_extraction_id ON ai_usage_log(extraction_id);
+  CREATE INDEX IF NOT EXISTS idx_ai_usage_log_use_type ON ai_usage_log(use_type);
 
   ALTER TABLE extractions ALTER COLUMN url DROP NOT NULL;
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'youtube';
@@ -1777,6 +1798,7 @@ const INIT_SQL = `
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_file_name TEXT;
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_file_size_bytes INTEGER;
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_file_mime_type TEXT;
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS transcript_source TEXT;
 
   CREATE INDEX IF NOT EXISTS idx_workspaces_owner ON workspaces(owner_user_id);
   CREATE INDEX IF NOT EXISTS idx_workspaces_slug ON workspaces(slug);
@@ -1910,15 +1932,23 @@ const INIT_SQL = `
 
   -- ── Storage limit per plan + per-user admin override ──────────────────────
   ALTER TABLE plans ADD COLUMN IF NOT EXISTS storage_limit_bytes BIGINT NOT NULL DEFAULT 104857600;
+  ALTER TABLE plans ADD COLUMN IF NOT EXISTS target_gross_margin_pct NUMERIC(5,4) NOT NULL DEFAULT 0.75;
+  ALTER TABLE plans ADD COLUMN IF NOT EXISTS profitability_alert_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+  ALTER TABLE plans ADD COLUMN IF NOT EXISTS estimated_monthly_fixed_cost_usd NUMERIC(10,4) NOT NULL DEFAULT 0;
   -- Seed correct limits for built-in plans only if still at the default (idempotent, respects admin edits)
   UPDATE plans SET storage_limit_bytes = 104857600   WHERE name = 'free'     AND storage_limit_bytes = 104857600;
   UPDATE plans SET storage_limit_bytes = 524288000   WHERE name = 'starter'  AND storage_limit_bytes = 104857600;
   UPDATE plans SET storage_limit_bytes = 2147483648  WHERE name = 'pro'      AND storage_limit_bytes = 104857600;
   UPDATE plans SET storage_limit_bytes = 10737418240 WHERE name = 'business' AND storage_limit_bytes = 104857600;
+  UPDATE plans SET target_gross_margin_pct = 0.00 WHERE name = 'free';
+  UPDATE plans SET target_gross_margin_pct = 0.70 WHERE name = 'starter';
+  UPDATE plans SET target_gross_margin_pct = 0.75 WHERE name = 'pro';
+  UPDATE plans SET target_gross_margin_pct = 0.80 WHERE name = 'business';
+  UPDATE plans SET profitability_alert_enabled = TRUE WHERE profitability_alert_enabled IS DISTINCT FROM TRUE;
   ALTER TABLE user_storage ADD COLUMN IF NOT EXISTS storage_limit_override_bytes BIGINT;
 `
 
-const DB_INIT_SIGNATURE = '2026-03-04-source-access-v1'
+const DB_INIT_SIGNATURE = '2026-03-06-profitability-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -1995,6 +2025,13 @@ function parseDbNullableInteger(value: unknown) {
   }
 
   return null
+}
+
+function getEstimatedStorageCostUsdPerByteMonth() {
+  const raw = process.env.ACTION_EXTRACTOR_STORAGE_COST_USD_PER_GB_MONTH
+  const parsed = Number.parseFloat(raw ?? '')
+  const perGb = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
+  return perGb / (1024 * 1024 * 1024)
 }
 
 function normalizeWorkspaceRole(value: unknown): WorkspaceRole {
@@ -2171,6 +2208,7 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
     source_file_size_bytes: row.source_file_size_bytes != null ? Number(row.source_file_size_bytes) : null,
     source_file_mime_type: row.source_file_mime_type ?? null,
     has_source_text: row.has_source_text === true || !!(row.source_text && row.source_text.length > 0),
+    transcript_source: row.transcript_source ?? null,
   }
 }
 
@@ -2797,6 +2835,7 @@ export async function deleteExpiredSessions() {
 }
 
 export async function createExtraction(input: {
+  id?: string
   userId: string
   url: string | null
   videoId: string | null
@@ -2814,10 +2853,11 @@ export async function createExtraction(input: {
   sourceFileName?: string | null
   sourceFileSizeBytes?: number | null
   sourceFileMimeType?: string | null
+  transcriptSource?: string | null
 }) {
   await ensureDbReady()
   await ensureDefaultExtractionFoldersForUser(input.userId)
-  const id = randomUUID()
+  const id = input.id ?? randomUUID()
   const sourceType = input.sourceType ?? 'youtube'
   const defaultFolderId = buildSystemExtractionFolderIdForUser({
     userId: input.userId,
@@ -2844,9 +2884,10 @@ export async function createExtraction(input: {
         source_file_url,
         source_file_name,
         source_file_size_bytes,
-        source_file_mime_type
+        source_file_mime_type,
+        transcript_source
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
       RETURNING
         id,
         user_id,
@@ -2868,7 +2909,8 @@ export async function createExtraction(input: {
         source_file_url,
         source_file_name,
         source_file_size_bytes,
-        source_file_mime_type
+        source_file_mime_type,
+        transcript_source
     `,
     [
       id,
@@ -2890,6 +2932,7 @@ export async function createExtraction(input: {
       input.sourceFileName ?? null,
       input.sourceFileSizeBytes ?? null,
       input.sourceFileMimeType ?? null,
+      input.transcriptSource ?? null,
     ]
   )
 
@@ -3014,6 +3057,7 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
         ranked.share_visibility,
         ranked.created_at,
         ranked.source_type,
+        ranked.transcript_source,
         ranked.source_label,
         ranked.folder_id,
         ranked.order_number,
@@ -3046,6 +3090,7 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
           share_visibility,
           created_at,
           source_type,
+          transcript_source,
           source_label,
           folder_id,
           is_starred,
@@ -7790,18 +7835,45 @@ export async function logAiUsage(input: {
   model: string
   useType: string
   userId?: string | null
+  extractionId?: string | null
+  sourceType?: string | null
   inputTokens: number
   outputTokens: number
   costUsd: number
+  pricingVersion?: string | null
 }): Promise<void> {
   await ensureDbReady()
   const id = randomUUID()
   await pool.query(
     `
-      INSERT INTO ai_usage_log (id, provider, model, use_type, user_id, input_tokens, output_tokens, cost_usd)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      INSERT INTO ai_usage_log (
+        id,
+        provider,
+        model,
+        use_type,
+        user_id,
+        extraction_id,
+        source_type,
+        input_tokens,
+        output_tokens,
+        cost_usd,
+        pricing_version
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     `,
-    [id, input.provider, input.model, input.useType, input.userId ?? null, input.inputTokens, input.outputTokens, input.costUsd]
+    [
+      id,
+      input.provider,
+      input.model,
+      input.useType,
+      input.userId ?? null,
+      input.extractionId ?? null,
+      input.sourceType ?? null,
+      input.inputTokens,
+      input.outputTokens,
+      input.costUsd,
+      input.pricingVersion ?? '',
+    ]
   )
 }
 
@@ -8097,6 +8169,506 @@ export async function getAdminAiCostStats(periodDays = 30): Promise<AdminAiCostS
   }
 }
 
+export interface ExtractionCostBreakdownRow {
+  use_type: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+}
+
+export interface ExtractionCostBreakdown {
+  extraction_id: string
+  total_calls: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost_usd: number
+  by_use_type: ExtractionCostBreakdownRow[]
+}
+
+export async function getExtractionCostBreakdown(extractionId: string): Promise<ExtractionCostBreakdown> {
+  await ensureDbReady()
+
+  const [totalsResult, byUseTypeResult] = await Promise.all([
+    pool.query<{
+      total_calls: number | string
+      total_input_tokens: number | string
+      total_output_tokens: number | string
+      total_cost_usd: string | number
+    }>(
+      `
+        SELECT
+          COUNT(*)::int AS total_calls,
+          COALESCE(SUM(input_tokens), 0)::bigint AS total_input_tokens,
+          COALESCE(SUM(output_tokens), 0)::bigint AS total_output_tokens,
+          COALESCE(SUM(cost_usd), 0) AS total_cost_usd
+        FROM ai_usage_log
+        WHERE extraction_id = $1
+      `,
+      [extractionId]
+    ),
+    pool.query<{
+      use_type: string
+      calls: number | string
+      input_tokens: number | string
+      output_tokens: number | string
+      cost_usd: string | number
+    }>(
+      `
+        SELECT
+          use_type,
+          COUNT(*)::int AS calls,
+          COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+          COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+          COALESCE(SUM(cost_usd), 0) AS cost_usd
+        FROM ai_usage_log
+        WHERE extraction_id = $1
+        GROUP BY use_type
+        ORDER BY SUM(cost_usd) DESC, use_type ASC
+      `,
+      [extractionId]
+    ),
+  ])
+
+  const totals = totalsResult.rows[0]
+  return {
+    extraction_id: extractionId,
+    total_calls: parseDbInteger(totals?.total_calls),
+    total_input_tokens: Number(totals?.total_input_tokens ?? 0),
+    total_output_tokens: Number(totals?.total_output_tokens ?? 0),
+    total_cost_usd: Number(totals?.total_cost_usd ?? 0),
+    by_use_type: byUseTypeResult.rows.map((row) => ({
+      use_type: row.use_type,
+      calls: parseDbInteger(row.calls),
+      input_tokens: Number(row.input_tokens ?? 0),
+      output_tokens: Number(row.output_tokens ?? 0),
+      cost_usd: Number(row.cost_usd ?? 0),
+    })),
+  }
+}
+
+export interface AdminUserProfitabilitySnapshot {
+  user_id: string
+  plan_name: string
+  plan_display_name: string
+  period_days: number
+  price_monthly_usd: number
+  target_gross_margin_pct: number
+  profitability_alert_enabled: boolean
+  estimated_monthly_fixed_cost_usd: number
+  ai_cost_period_usd: number
+  ai_cost_monthly_run_rate_usd: number
+  extraction_related_cost_period_usd: number
+  chat_cost_period_usd: number
+  chat_tokens_period: number
+  extractions_period: number
+  storage_used_bytes: number
+  storage_cost_monthly_usd: number
+  monthly_variable_cost_run_rate_usd: number
+  monthly_total_cost_run_rate_usd: number
+  max_variable_cost_allowed_usd: number
+  actual_gross_margin_pct: number | null
+  status: ProfitabilityStatus
+}
+
+export interface AdminPlanProfitabilityStat {
+  plan_id: string
+  plan_name: string
+  plan_display_name: string
+  period_days: number
+  active_users: number
+  price_monthly_usd: number
+  target_gross_margin_pct: number
+  profitability_alert_enabled: boolean
+  estimated_monthly_fixed_cost_usd: number
+  avg_monthly_ai_cost_per_user_usd: number
+  avg_monthly_storage_cost_per_user_usd: number
+  avg_monthly_total_cost_per_user_usd: number
+  p95_monthly_total_cost_per_user_usd: number
+  total_monthly_run_rate_cost_usd: number
+  actual_gross_margin_pct: number | null
+  avg_extraction_cost_usd: number
+  avg_chat_cost_per_token_usd: number
+  projected_cost_at_current_caps_usd: number
+  projected_gross_margin_pct: number | null
+  recommended_extractions_per_day: number | null
+  recommended_chat_tokens_per_day: number | null
+  current_extractions_per_day: number
+  current_chat_tokens_per_day: number
+  storage_limit_bytes: number
+  unprofitable_users: number
+  at_risk_users: number
+  status: ProfitabilityStatus
+}
+
+interface DbProfitabilityUserPlanRow {
+  user_id: string
+  plan_name: string
+  plan_display_name: string
+  plan_id: string
+  price_monthly_usd: string | number
+  extractions_per_day: string | number
+  chat_tokens_per_day: string | number
+  storage_limit_bytes: string | number | null
+  target_gross_margin_pct: string | number | null
+  profitability_alert_enabled: boolean | null
+  estimated_monthly_fixed_cost_usd: string | number | null
+  used_bytes: string | number | null
+}
+
+interface DbProfitabilityUsageRow {
+  user_id: string
+  use_type: string
+  cost_usd: string | number
+  input_tokens: string | number
+  output_tokens: string | number
+}
+
+interface DbProfitabilityExtractionCountRow {
+  user_id: string
+  extractions: string | number
+}
+
+function percentileFromSorted(values: number[], percentile: number) {
+  if (values.length === 0) return 0
+  const safePercentile = Math.min(100, Math.max(0, percentile))
+  const index = Math.min(
+    values.length - 1,
+    Math.max(0, Math.ceil((safePercentile / 100) * values.length) - 1)
+  )
+  return values[index] ?? 0
+}
+
+async function listProfitabilityUserPlanRows(): Promise<DbProfitabilityUserPlanRow[]> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbProfitabilityUserPlanRow>(
+    `
+      SELECT
+        u.id AS user_id,
+        COALESCE(up.plan, 'free') AS plan_name,
+        p.display_name AS plan_display_name,
+        p.id AS plan_id,
+        p.price_monthly_usd,
+        p.extractions_per_day,
+        p.chat_tokens_per_day,
+        p.storage_limit_bytes,
+        p.target_gross_margin_pct,
+        p.profitability_alert_enabled,
+        p.estimated_monthly_fixed_cost_usd,
+        COALESCE(us.used_bytes, 0) AS used_bytes
+      FROM users u
+      LEFT JOIN user_plans up
+        ON up.user_id = u.id
+       AND up.status = 'active'
+      INNER JOIN plans p
+        ON p.name = COALESCE(up.plan, 'free')
+      LEFT JOIN user_storage us
+        ON us.user_id = u.id
+      WHERE u.blocked_at IS NULL
+    `
+  )
+  return rows
+}
+
+async function listProfitabilityUsageRows(periodDays: number): Promise<DbProfitabilityUsageRow[]> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbProfitabilityUsageRow>(
+    `
+      SELECT
+        user_id,
+        use_type,
+        COALESCE(SUM(cost_usd), 0) AS cost_usd,
+        COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+        COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens
+      FROM ai_usage_log
+      WHERE user_id IS NOT NULL
+        AND created_at >= NOW() - ($1::int * INTERVAL '1 day')
+      GROUP BY user_id, use_type
+    `,
+    [periodDays]
+  )
+  return rows
+}
+
+async function listProfitabilityExtractionCountRows(
+  periodDays: number
+): Promise<DbProfitabilityExtractionCountRow[]> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbProfitabilityExtractionCountRow>(
+    `
+      SELECT
+        user_id,
+        COUNT(*)::int AS extractions
+      FROM extractions
+      WHERE created_at >= NOW() - ($1::int * INTERVAL '1 day')
+      GROUP BY user_id
+    `,
+    [periodDays]
+  )
+  return rows
+}
+
+export async function getAdminUserProfitability(
+  userId: string,
+  periodDays = 30
+): Promise<AdminUserProfitabilitySnapshot | null> {
+  await ensureDbReady()
+  const safeDays = Number.isFinite(periodDays) ? Math.min(90, Math.max(1, Math.trunc(periodDays))) : 30
+  const storageCostUsdPerByteMonth = getEstimatedStorageCostUsdPerByteMonth()
+
+  const [userPlanRows, usageRows, extractionRows] = await Promise.all([
+    listProfitabilityUserPlanRows(),
+    listProfitabilityUsageRows(safeDays),
+    listProfitabilityExtractionCountRows(safeDays),
+  ])
+
+  const planRow = userPlanRows.find((row) => row.user_id === userId)
+  if (!planRow) return null
+
+  const usage = usageRows.filter((row) => row.user_id === userId)
+  const aiCostPeriodUsd = usage.reduce((sum, row) => sum + Number(row.cost_usd ?? 0), 0)
+  const extractionRelatedCostPeriodUsd = usage
+    .filter((row) => ['extraction', 'repair', 'transcription'].includes(row.use_type))
+    .reduce((sum, row) => sum + Number(row.cost_usd ?? 0), 0)
+  const chatUsage = usage.filter((row) => row.use_type === 'chat')
+  const chatCostPeriodUsd = chatUsage.reduce((sum, row) => sum + Number(row.cost_usd ?? 0), 0)
+  const chatTokensPeriod = chatUsage.reduce(
+    (sum, row) => sum + Number(row.input_tokens ?? 0) + Number(row.output_tokens ?? 0),
+    0
+  )
+  const extractionCount = extractionRows.find((row) => row.user_id === userId)
+  const extractionsPeriod = parseDbInteger(extractionCount?.extractions ?? 0)
+  const storageUsedBytes = Number(planRow.used_bytes ?? 0)
+  const storageCostMonthlyUsd = storageUsedBytes * storageCostUsdPerByteMonth
+  const aiCostMonthlyRunRateUsd = calculateMonthlyRunRate(aiCostPeriodUsd, safeDays)
+  const monthlyVariableCostRunRateUsd = aiCostMonthlyRunRateUsd + storageCostMonthlyUsd
+  const estimatedMonthlyFixedCostUsd = Number(planRow.estimated_monthly_fixed_cost_usd ?? 0)
+  const monthlyTotalCostRunRateUsd = monthlyVariableCostRunRateUsd + estimatedMonthlyFixedCostUsd
+  const priceMonthlyUsd = Number(planRow.price_monthly_usd ?? 0)
+  const targetGrossMarginPct = normalizeMarginPct(Number(planRow.target_gross_margin_pct ?? 0.75))
+  const maxVariableCostAllowedUsd = Math.max(
+    0,
+    calculateMaxVariableCostAllowed(priceMonthlyUsd, targetGrossMarginPct) - estimatedMonthlyFixedCostUsd
+  )
+  const actualGrossMarginPct = calculateGrossMarginPct(priceMonthlyUsd, monthlyTotalCostRunRateUsd)
+  const status = classifyProfitabilityStatus({
+    actualMarginPct: actualGrossMarginPct,
+    projectedMarginPct: actualGrossMarginPct,
+    targetGrossMarginPct,
+  })
+
+  return {
+    user_id: userId,
+    plan_name: planRow.plan_name,
+    plan_display_name: planRow.plan_display_name,
+    period_days: safeDays,
+    price_monthly_usd: priceMonthlyUsd,
+    target_gross_margin_pct: targetGrossMarginPct,
+    profitability_alert_enabled: planRow.profitability_alert_enabled !== false,
+    estimated_monthly_fixed_cost_usd: estimatedMonthlyFixedCostUsd,
+    ai_cost_period_usd: aiCostPeriodUsd,
+    ai_cost_monthly_run_rate_usd: aiCostMonthlyRunRateUsd,
+    extraction_related_cost_period_usd: extractionRelatedCostPeriodUsd,
+    chat_cost_period_usd: chatCostPeriodUsd,
+    chat_tokens_period: chatTokensPeriod,
+    extractions_period: extractionsPeriod,
+    storage_used_bytes: storageUsedBytes,
+    storage_cost_monthly_usd: storageCostMonthlyUsd,
+    monthly_variable_cost_run_rate_usd: monthlyVariableCostRunRateUsd,
+    monthly_total_cost_run_rate_usd: monthlyTotalCostRunRateUsd,
+    max_variable_cost_allowed_usd: maxVariableCostAllowedUsd,
+    actual_gross_margin_pct: actualGrossMarginPct,
+    status,
+  }
+}
+
+export async function getAdminPlanProfitabilityStats(
+  periodDays = 30
+): Promise<{ period_days: number; plans: AdminPlanProfitabilityStat[] }> {
+  await ensureDbReady()
+  const safeDays = Number.isFinite(periodDays) ? Math.min(90, Math.max(1, Math.trunc(periodDays))) : 30
+  const storageCostUsdPerByteMonth = getEstimatedStorageCostUsdPerByteMonth()
+
+  const [plans, userPlanRows, usageRows, extractionRows] = await Promise.all([
+    listPlans(),
+    listProfitabilityUserPlanRows(),
+    listProfitabilityUsageRows(safeDays),
+    listProfitabilityExtractionCountRows(safeDays),
+  ])
+
+  const usageByUser = new Map<
+    string,
+    {
+      totalCostPeriodUsd: number
+      extractionRelatedCostPeriodUsd: number
+      chatCostPeriodUsd: number
+      chatTokensPeriod: number
+    }
+  >()
+
+  for (const row of usageRows) {
+    const current = usageByUser.get(row.user_id) ?? {
+      totalCostPeriodUsd: 0,
+      extractionRelatedCostPeriodUsd: 0,
+      chatCostPeriodUsd: 0,
+      chatTokensPeriod: 0,
+    }
+    const rowCost = Number(row.cost_usd ?? 0)
+    current.totalCostPeriodUsd += rowCost
+    if (['extraction', 'repair', 'transcription'].includes(row.use_type)) {
+      current.extractionRelatedCostPeriodUsd += rowCost
+    }
+    if (row.use_type === 'chat') {
+      current.chatCostPeriodUsd += rowCost
+      current.chatTokensPeriod += Number(row.input_tokens ?? 0) + Number(row.output_tokens ?? 0)
+    }
+    usageByUser.set(row.user_id, current)
+  }
+
+  const extractionCountByUser = new Map<string, number>(
+    extractionRows.map((row) => [row.user_id, parseDbInteger(row.extractions)])
+  )
+
+  const planUsers = new Map<
+    string,
+    Array<{
+      userId: string
+      totalMonthlyCostUsd: number
+      monthlyAiCostUsd: number
+      monthlyStorageCostUsd: number
+      extractionRelatedCostPeriodUsd: number
+      chatCostPeriodUsd: number
+      chatTokensPeriod: number
+      extractionCountPeriod: number
+    }>
+  >()
+
+  for (const row of userPlanRows) {
+    const usage = usageByUser.get(row.user_id)
+    const aiCostPeriodUsd = usage?.totalCostPeriodUsd ?? 0
+    const monthlyAiCostUsd = calculateMonthlyRunRate(aiCostPeriodUsd, safeDays)
+    const monthlyStorageCostUsd = Number(row.used_bytes ?? 0) * storageCostUsdPerByteMonth
+    const totalMonthlyCostUsd =
+      monthlyAiCostUsd + monthlyStorageCostUsd + Number(row.estimated_monthly_fixed_cost_usd ?? 0)
+
+    const bucket = planUsers.get(row.plan_name) ?? []
+    bucket.push({
+      userId: row.user_id,
+      totalMonthlyCostUsd,
+      monthlyAiCostUsd,
+      monthlyStorageCostUsd,
+      extractionRelatedCostPeriodUsd: usage?.extractionRelatedCostPeriodUsd ?? 0,
+      chatCostPeriodUsd: usage?.chatCostPeriodUsd ?? 0,
+      chatTokensPeriod: usage?.chatTokensPeriod ?? 0,
+      extractionCountPeriod: extractionCountByUser.get(row.user_id) ?? 0,
+    })
+    planUsers.set(row.plan_name, bucket)
+  }
+
+  const stats = plans.map((plan) => {
+    const users = planUsers.get(plan.name) ?? []
+    const activeUsers = users.length
+    const totalMonthlyRunRateCostUsd = users.reduce((sum, user) => sum + user.totalMonthlyCostUsd, 0)
+    const avgMonthlyAiCostPerUserUsd = activeUsers > 0
+      ? users.reduce((sum, user) => sum + user.monthlyAiCostUsd, 0) / activeUsers
+      : 0
+    const avgMonthlyStorageCostPerUserUsd = activeUsers > 0
+      ? users.reduce((sum, user) => sum + user.monthlyStorageCostUsd, 0) / activeUsers
+      : 0
+    const avgMonthlyTotalCostPerUserUsd = activeUsers > 0 ? totalMonthlyRunRateCostUsd / activeUsers : 0
+    const sortedMonthlyCosts = users
+      .map((user) => user.totalMonthlyCostUsd)
+      .sort((a, b) => a - b)
+    const p95MonthlyTotalCostPerUserUsd = percentileFromSorted(sortedMonthlyCosts, 95)
+    const extractionRelatedCostPeriodUsd = users.reduce(
+      (sum, user) => sum + user.extractionRelatedCostPeriodUsd,
+      0
+    )
+    const extractionCountPeriod = users.reduce((sum, user) => sum + user.extractionCountPeriod, 0)
+    const chatCostPeriodUsd = users.reduce((sum, user) => sum + user.chatCostPeriodUsd, 0)
+    const chatTokensPeriod = users.reduce((sum, user) => sum + user.chatTokensPeriod, 0)
+    const avgExtractionCostUsd =
+      extractionCountPeriod > 0 ? extractionRelatedCostPeriodUsd / extractionCountPeriod : 0
+    const avgChatCostPerTokenUsd = chatTokensPeriod > 0 ? chatCostPeriodUsd / chatTokensPeriod : 0
+    const maxVariableCostAllowedUsd = Math.max(
+      0,
+      calculateMaxVariableCostAllowed(plan.price_monthly_usd, plan.target_gross_margin_pct) -
+        plan.estimated_monthly_fixed_cost_usd
+    )
+    const projectedCostAtCurrentCaps = calculateProjectedPlanCapCost({
+      extractionsPerDay: plan.extractions_per_day,
+      avgExtractionCostUsd,
+      chatTokensPerDay: plan.chat_tokens_per_day,
+      avgChatCostPerTokenUsd,
+      avgMonthlyStorageCostUsd: avgMonthlyStorageCostPerUserUsd,
+    })
+    const projectedTotalCostUsd =
+      projectedCostAtCurrentCaps.totalCostUsd + plan.estimated_monthly_fixed_cost_usd
+    const actualGrossMarginPct = calculateGrossMarginPct(
+      plan.price_monthly_usd,
+      avgMonthlyTotalCostPerUserUsd
+    )
+    const projectedGrossMarginPct = calculateGrossMarginPct(plan.price_monthly_usd, projectedTotalCostUsd)
+    const recommendedExtractionsPerDay = calculateRecommendedExtractionsPerDay({
+      maxVariableCostAllowedUsd,
+      avgExtractionCostUsd,
+      currentChatCapCostUsd: projectedCostAtCurrentCaps.chatCapCostUsd,
+      currentStorageCostUsd: avgMonthlyStorageCostPerUserUsd,
+    })
+    const recommendedChatTokensPerDay = calculateRecommendedChatTokensPerDay({
+      maxVariableCostAllowedUsd,
+      avgChatCostPerTokenUsd,
+      currentExtractionCapCostUsd: projectedCostAtCurrentCaps.extractionCapCostUsd,
+      currentStorageCostUsd: avgMonthlyStorageCostPerUserUsd,
+    })
+    const unprofitableUsers = users.filter((user) => user.totalMonthlyCostUsd > plan.price_monthly_usd).length
+    const atRiskUsers = users.filter((user) => {
+      const margin = calculateGrossMarginPct(plan.price_monthly_usd, user.totalMonthlyCostUsd)
+      return (margin ?? 1) < plan.target_gross_margin_pct
+    }).length
+    const status = classifyProfitabilityStatus({
+      actualMarginPct: actualGrossMarginPct,
+      projectedMarginPct: projectedGrossMarginPct,
+      targetGrossMarginPct: plan.target_gross_margin_pct,
+    })
+
+    return {
+      plan_id: plan.id,
+      plan_name: plan.name,
+      plan_display_name: plan.display_name,
+      period_days: safeDays,
+      active_users: activeUsers,
+      price_monthly_usd: plan.price_monthly_usd,
+      target_gross_margin_pct: plan.target_gross_margin_pct,
+      profitability_alert_enabled: plan.profitability_alert_enabled,
+      estimated_monthly_fixed_cost_usd: plan.estimated_monthly_fixed_cost_usd,
+      avg_monthly_ai_cost_per_user_usd: avgMonthlyAiCostPerUserUsd,
+      avg_monthly_storage_cost_per_user_usd: avgMonthlyStorageCostPerUserUsd,
+      avg_monthly_total_cost_per_user_usd: avgMonthlyTotalCostPerUserUsd,
+      p95_monthly_total_cost_per_user_usd: p95MonthlyTotalCostPerUserUsd,
+      total_monthly_run_rate_cost_usd: totalMonthlyRunRateCostUsd,
+      actual_gross_margin_pct: actualGrossMarginPct,
+      avg_extraction_cost_usd: avgExtractionCostUsd,
+      avg_chat_cost_per_token_usd: avgChatCostPerTokenUsd,
+      projected_cost_at_current_caps_usd: projectedTotalCostUsd,
+      projected_gross_margin_pct: projectedGrossMarginPct,
+      recommended_extractions_per_day: recommendedExtractionsPerDay,
+      recommended_chat_tokens_per_day: recommendedChatTokensPerDay,
+      current_extractions_per_day: plan.extractions_per_day,
+      current_chat_tokens_per_day: plan.chat_tokens_per_day,
+      storage_limit_bytes: plan.storage_limit_bytes,
+      unprofitable_users: unprofitableUsers,
+      at_risk_users: atRiskUsers,
+      status,
+    } satisfies AdminPlanProfitabilityStat
+  })
+
+  return {
+    period_days: safeDays,
+    plans: stats,
+  }
+}
+
 // ── Plan Catalog (admin-managed) ─────────────────────────────────────────────
 
 export interface DbPlan {
@@ -8109,6 +8681,9 @@ export interface DbPlan {
   extractions_per_day: number
   chat_tokens_per_day: number
   storage_limit_bytes: number
+  target_gross_margin_pct: number
+  profitability_alert_enabled: boolean
+  estimated_monthly_fixed_cost_usd: number
   features_json: string
   is_active: boolean
   display_order: number
@@ -8126,6 +8701,9 @@ interface DbPlanRow {
   extractions_per_day: string | number | null
   chat_tokens_per_day: string | number | null
   storage_limit_bytes: string | number | null
+  target_gross_margin_pct: string | number | null
+  profitability_alert_enabled: boolean | null
+  estimated_monthly_fixed_cost_usd: string | number | null
   features_json: string
   is_active: boolean
   display_order: string | number
@@ -8144,6 +8722,10 @@ function mapPlanRow(row: DbPlanRow): DbPlan {
     extractions_per_day: parseDbInteger(row.extractions_per_day ?? 3),
     chat_tokens_per_day: parseDbInteger(row.chat_tokens_per_day ?? 10000),
     storage_limit_bytes: row.storage_limit_bytes != null ? Number(row.storage_limit_bytes) : 104857600,
+    target_gross_margin_pct: row.target_gross_margin_pct != null ? Number(row.target_gross_margin_pct) : 0.75,
+    profitability_alert_enabled: row.profitability_alert_enabled !== false,
+    estimated_monthly_fixed_cost_usd:
+      row.estimated_monthly_fixed_cost_usd != null ? Number(row.estimated_monthly_fixed_cost_usd) : 0,
     features_json: row.features_json,
     is_active: Boolean(row.is_active),
     display_order: parseDbInteger(row.display_order),
@@ -8156,7 +8738,9 @@ export async function listPlans(): Promise<DbPlan[]> {
   await ensureDbReady()
   const { rows } = await pool.query<DbPlanRow>(
     `SELECT id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-            extractions_per_day, chat_tokens_per_day, storage_limit_bytes, features_json, is_active, display_order, created_at, updated_at
+            extractions_per_day, chat_tokens_per_day, storage_limit_bytes, target_gross_margin_pct,
+            profitability_alert_enabled, estimated_monthly_fixed_cost_usd,
+            features_json, is_active, display_order, created_at, updated_at
      FROM plans
      ORDER BY display_order ASC, created_at ASC`
   )
@@ -8167,7 +8751,9 @@ export async function getPlanByName(name: string): Promise<DbPlan | null> {
   await ensureDbReady()
   const { rows } = await pool.query<DbPlanRow>(
     `SELECT id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-            extractions_per_day, chat_tokens_per_day, storage_limit_bytes, features_json, is_active, display_order, created_at, updated_at
+            extractions_per_day, chat_tokens_per_day, storage_limit_bytes, target_gross_margin_pct,
+            profitability_alert_enabled, estimated_monthly_fixed_cost_usd,
+            features_json, is_active, display_order, created_at, updated_at
      FROM plans WHERE name = $1 LIMIT 1`,
     [name]
   )
@@ -8180,7 +8766,12 @@ export async function createPlan(input: {
   priceMonthlyUsd: number
   stripePriceId: string | null
   extractionsPerHour: number
+  extractionsPerDay?: number
+  chatTokensPerDay?: number
   storageLimitBytes?: number
+  targetGrossMarginPct?: number
+  profitabilityAlertEnabled?: boolean
+  estimatedMonthlyFixedCostUsd?: number
   featuresJson: string
   isActive: boolean
   displayOrder: number
@@ -8190,10 +8781,14 @@ export async function createPlan(input: {
   const { rows } = await pool.query<DbPlanRow>(
     `INSERT INTO plans
        (id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-        storage_limit_bytes, features_json, is_active, display_order)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        extractions_per_day, chat_tokens_per_day, storage_limit_bytes, target_gross_margin_pct,
+        profitability_alert_enabled, estimated_monthly_fixed_cost_usd,
+        features_json, is_active, display_order)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
      RETURNING id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-               extractions_per_day, chat_tokens_per_day, storage_limit_bytes, features_json, is_active, display_order, created_at, updated_at`,
+               extractions_per_day, chat_tokens_per_day, storage_limit_bytes, target_gross_margin_pct,
+               profitability_alert_enabled, estimated_monthly_fixed_cost_usd,
+               features_json, is_active, display_order, created_at, updated_at`,
     [
       id,
       input.name.toLowerCase().trim(),
@@ -8201,7 +8796,12 @@ export async function createPlan(input: {
       input.priceMonthlyUsd,
       input.stripePriceId || null,
       input.extractionsPerHour,
+      input.extractionsPerDay ?? 3,
+      input.chatTokensPerDay ?? 10000,
       input.storageLimitBytes ?? 104857600,
+      normalizeMarginPct(input.targetGrossMarginPct ?? 0.75),
+      input.profitabilityAlertEnabled !== false,
+      input.estimatedMonthlyFixedCostUsd ?? 0,
       input.featuresJson,
       input.isActive,
       input.displayOrder,
@@ -8218,8 +8818,12 @@ export async function updatePlan(
     priceMonthlyUsd: number
     stripePriceId: string | null
     extractionsPerHour: number
+    extractionsPerDay: number
     chatTokensPerDay: number
     storageLimitBytes: number
+    targetGrossMarginPct: number
+    profitabilityAlertEnabled: boolean
+    estimatedMonthlyFixedCostUsd: number
     featuresJson: string
     isActive: boolean
     displayOrder: number
@@ -8236,20 +8840,47 @@ export async function updatePlan(
   if (input.priceMonthlyUsd !== undefined) { setClauses.push(`price_monthly_usd = $${idx++}`); values.push(input.priceMonthlyUsd) }
   if ('stripePriceId' in input) { setClauses.push(`stripe_price_id = $${idx++}`); values.push(input.stripePriceId || null) }
   if (input.extractionsPerHour !== undefined) { setClauses.push(`extractions_per_hour = $${idx++}`); values.push(input.extractionsPerHour) }
+  if (input.extractionsPerDay !== undefined) { setClauses.push(`extractions_per_day = $${idx++}`); values.push(input.extractionsPerDay) }
   if (input.chatTokensPerDay !== undefined) { setClauses.push(`chat_tokens_per_day = $${idx++}`); values.push(input.chatTokensPerDay) }
   if (input.storageLimitBytes !== undefined) { setClauses.push(`storage_limit_bytes = $${idx++}`); values.push(input.storageLimitBytes) }
+  if (input.targetGrossMarginPct !== undefined) {
+    setClauses.push(`target_gross_margin_pct = $${idx++}`)
+    values.push(normalizeMarginPct(input.targetGrossMarginPct))
+  }
+  if (input.profitabilityAlertEnabled !== undefined) {
+    setClauses.push(`profitability_alert_enabled = $${idx++}`)
+    values.push(input.profitabilityAlertEnabled)
+  }
+  if (input.estimatedMonthlyFixedCostUsd !== undefined) {
+    setClauses.push(`estimated_monthly_fixed_cost_usd = $${idx++}`)
+    values.push(input.estimatedMonthlyFixedCostUsd)
+  }
   if (input.featuresJson !== undefined) { setClauses.push(`features_json = $${idx++}`); values.push(input.featuresJson) }
   if (input.isActive !== undefined) { setClauses.push(`is_active = $${idx++}`); values.push(input.isActive) }
   if (input.displayOrder !== undefined) { setClauses.push(`display_order = $${idx++}`); values.push(input.displayOrder) }
 
-  if (values.length === 0) return getPlanByName(id) // nothing to update
+  if (values.length === 0) {
+    const { rows } = await pool.query<DbPlanRow>(
+      `SELECT id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
+              extractions_per_day, chat_tokens_per_day, storage_limit_bytes, target_gross_margin_pct,
+              profitability_alert_enabled, estimated_monthly_fixed_cost_usd,
+              features_json, is_active, display_order, created_at, updated_at
+       FROM plans
+       WHERE id = $1
+       LIMIT 1`,
+      [id]
+    )
+    return rows[0] ? mapPlanRow(rows[0]) : null
+  }
 
   values.push(id)
   const { rows } = await pool.query<DbPlanRow>(
     `UPDATE plans SET ${setClauses.join(', ')}
      WHERE id = $${idx}
      RETURNING id, name, display_name, price_monthly_usd, stripe_price_id, extractions_per_hour,
-               extractions_per_day, chat_tokens_per_day, storage_limit_bytes, features_json, is_active, display_order, created_at, updated_at`,
+               extractions_per_day, chat_tokens_per_day, storage_limit_bytes, target_gross_margin_pct,
+               profitability_alert_enabled, estimated_monthly_fixed_cost_usd,
+               features_json, is_active, display_order, created_at, updated_at`,
     values
   )
   return rows[0] ? mapPlanRow(rows[0]) : null

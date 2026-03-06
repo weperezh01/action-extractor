@@ -43,7 +43,7 @@ function toClientPost(post: DbCommunityPost) {
       email: post.user_email,
       following: post.following_author,
     },
-    attachments: post.attachments.map((attachment) => ({
+    attachments: (post.attachments ?? []).map((attachment) => ({
       id: attachment.id,
       attachmentType: attachment.attachment_type,
       storageProvider: attachment.storage_provider,

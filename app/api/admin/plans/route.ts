@@ -25,6 +25,12 @@ export async function POST(req: NextRequest) {
     priceMonthlyUsd?: unknown
     stripePriceId?: unknown
     extractionsPerHour?: unknown
+    extractionsPerDay?: unknown
+    chatTokensPerDay?: unknown
+    storageLimitBytes?: unknown
+    targetGrossMarginPct?: unknown
+    profitabilityAlertEnabled?: unknown
+    estimatedMonthlyFixedCostUsd?: unknown
     featuresJson?: unknown
     isActive?: unknown
     displayOrder?: unknown
@@ -36,10 +42,16 @@ export async function POST(req: NextRequest) {
   const displayName = typeof body.displayName === 'string' ? body.displayName.trim() : ''
   const priceMonthlyUsd = Number(body.priceMonthlyUsd ?? 0)
   const extractionsPerHour = Number(body.extractionsPerHour ?? 12)
+  const extractionsPerDay = Number(body.extractionsPerDay ?? 3)
+  const chatTokensPerDay = Number(body.chatTokensPerDay ?? 10000)
+  const storageLimitBytes = Number(body.storageLimitBytes ?? 104857600)
+  const targetGrossMarginPct = Number(body.targetGrossMarginPct ?? 0.75)
+  const estimatedMonthlyFixedCostUsd = Number(body.estimatedMonthlyFixedCostUsd ?? 0)
   const displayOrder = Number(body.displayOrder ?? 0)
   const stripePriceId = typeof body.stripePriceId === 'string' ? body.stripePriceId.trim() : null
   const featuresJson = typeof body.featuresJson === 'string' ? body.featuresJson : '{}'
   const isActive = body.isActive !== false
+  const profitabilityAlertEnabled = body.profitabilityAlertEnabled !== false
 
   if (!name || !displayName) {
     return NextResponse.json({ error: 'name y displayName son requeridos.' }, { status: 400 })
@@ -49,6 +61,21 @@ export async function POST(req: NextRequest) {
   }
   if (!Number.isFinite(extractionsPerHour) || extractionsPerHour < 1) {
     return NextResponse.json({ error: 'extractionsPerHour debe ser ≥ 1.' }, { status: 400 })
+  }
+  if (!Number.isFinite(extractionsPerDay) || extractionsPerDay < 0) {
+    return NextResponse.json({ error: 'extractionsPerDay debe ser ≥ 0.' }, { status: 400 })
+  }
+  if (!Number.isFinite(chatTokensPerDay) || chatTokensPerDay < 0) {
+    return NextResponse.json({ error: 'chatTokensPerDay debe ser ≥ 0.' }, { status: 400 })
+  }
+  if (!Number.isFinite(storageLimitBytes) || storageLimitBytes < 0) {
+    return NextResponse.json({ error: 'storageLimitBytes debe ser ≥ 0.' }, { status: 400 })
+  }
+  if (!Number.isFinite(targetGrossMarginPct) || targetGrossMarginPct < 0 || targetGrossMarginPct >= 1) {
+    return NextResponse.json({ error: 'targetGrossMarginPct debe estar entre 0 y 0.99.' }, { status: 400 })
+  }
+  if (!Number.isFinite(estimatedMonthlyFixedCostUsd) || estimatedMonthlyFixedCostUsd < 0) {
+    return NextResponse.json({ error: 'estimatedMonthlyFixedCostUsd debe ser ≥ 0.' }, { status: 400 })
   }
 
   // Validate featuresJson
@@ -62,6 +89,12 @@ export async function POST(req: NextRequest) {
     priceMonthlyUsd,
     stripePriceId: stripePriceId || null,
     extractionsPerHour,
+    extractionsPerDay,
+    chatTokensPerDay,
+    storageLimitBytes,
+    targetGrossMarginPct,
+    profitabilityAlertEnabled,
+    estimatedMonthlyFixedCostUsd,
     featuresJson,
     isActive,
     displayOrder,

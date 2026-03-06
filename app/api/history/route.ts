@@ -49,6 +49,7 @@ export async function GET(req: NextRequest) {
     }),
     createdAt: row.created_at,
     sourceType: row.source_type ?? 'youtube',
+    transcriptSource: row.transcript_source ?? null,
     sourceLabel: row.source_label ?? null,
     sourceFileUrl: row.source_file_url ?? null,
     sourceFileName: row.source_file_name ?? null,

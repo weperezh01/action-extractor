@@ -12,6 +12,7 @@ import {
   type TranscriptResponse,
 } from '@danielxceron/youtube-transcript'
 import OpenAI, { toFile } from 'openai'
+import { AI_PRICING_VERSION, estimateTranscriptionCostUsd } from '@/lib/ai-client'
 
 const execFileAsync = promisify(execFile)
 
@@ -55,6 +56,28 @@ type YtDlpTranscriptResult = {
   segments: TranscriptResponse[] | null
   attempted: boolean
   reason: string | null
+}
+
+export type YoutubeTranscriptResolvedSource =
+  | 'youtube_transcript'
+  | 'watch_page_caption_track'
+  | 'yt_dlp_subtitles'
+  | 'openai_audio_transcription'
+  | 'youtube_official_api'
+
+export interface YoutubeTranscriptUsageEvent {
+  provider: 'openai'
+  model: string
+  useType: 'transcription'
+  costUsd: number
+  durationSeconds: number
+  pricingVersion: string
+}
+
+export interface YoutubeTranscriptResolution {
+  segments: TranscriptResponse[]
+  source: YoutubeTranscriptResolvedSource
+  usageEvents: YoutubeTranscriptUsageEvent[]
 }
 
 export class YoutubeTranscriptTemporarilyUnavailableError extends Error {
@@ -180,10 +203,102 @@ function parseJsonTranscript(body: string, lang: string): TranscriptResponse[] {
   }
 }
 
+function decodeTimestampToSeconds(value: string) {
+  const normalized = value.trim().replace(',', '.')
+  const parts = normalized.split(':').map((part) => Number.parseFloat(part))
+  if (parts.some((part) => !Number.isFinite(part))) return null
+  if (parts.length === 3) {
+    return parts[0]! * 3600 + parts[1]! * 60 + parts[2]!
+  }
+  if (parts.length === 2) {
+    return parts[0]! * 60 + parts[1]!
+  }
+  if (parts.length === 1) {
+    return parts[0]!
+  }
+  return null
+}
+
+function parseTimedTextTranscript(
+  body: string,
+  lang: string,
+  separatorPattern: RegExp
+): TranscriptResponse[] {
+  const lines = body.replace(/\r\n?/g, '\n').split('\n')
+  const segments: TranscriptResponse[] = []
+
+  let index = 0
+  while (index < lines.length) {
+    const rawLine = lines[index]?.trim() ?? ''
+    if (!rawLine || /^\d+$/.test(rawLine)) {
+      index += 1
+      continue
+    }
+
+    const timingMatch = rawLine.match(separatorPattern)
+    if (!timingMatch) {
+      index += 1
+      continue
+    }
+
+    const startSeconds = decodeTimestampToSeconds(timingMatch[1] ?? '')
+    const endSeconds = decodeTimestampToSeconds(timingMatch[2] ?? '')
+    index += 1
+
+    const textLines: string[] = []
+    while (index < lines.length) {
+      const textLine = lines[index] ?? ''
+      if (!textLine.trim()) break
+      if (/^\d+$/.test(textLine.trim()) && textLines.length === 0) break
+      textLines.push(textLine)
+      index += 1
+    }
+
+    const text = decodeHtmlEntities(
+      textLines
+        .join(' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    )
+
+    if (text && startSeconds !== null && endSeconds !== null && endSeconds >= startSeconds) {
+      segments.push({
+        text,
+        duration: endSeconds - startSeconds,
+        offset: startSeconds,
+        lang,
+      })
+    }
+
+    while (index < lines.length && !lines[index]?.trim()) {
+      index += 1
+    }
+  }
+
+  return segments
+}
+
+function parseVttTranscript(body: string, lang: string): TranscriptResponse[] {
+  return parseTimedTextTranscript(body, lang, /([\d:.,]+)\s+-->\s+([\d:.,]+)/)
+}
+
+function parseSrtTranscript(body: string, lang: string): TranscriptResponse[] {
+  return parseTimedTextTranscript(body, lang, /([\d:.,]+)\s+-->\s+([\d:.,]+)/)
+}
+
 function parseTranscriptBody(body: string, lang: string): TranscriptResponse[] {
-  if (!body.trim()) return []
-  if (body.trim().startsWith('{')) {
+  const trimmed = body.trim()
+  if (!trimmed) return []
+  if (trimmed.startsWith('{')) {
     return parseJsonTranscript(body, lang)
+  }
+  if (trimmed.startsWith('WEBVTT') || trimmed.includes('-->')) {
+    const vttSegments = parseVttTranscript(body, lang)
+    if (vttSegments.length > 0) {
+      return vttSegments
+    }
+    return parseSrtTranscript(body, lang)
   }
   return parseXmlTranscript(body, lang)
 }
@@ -608,7 +723,7 @@ async function transcribeMediaWithOpenAi(params: {
   const transcription = await openai.audio.transcriptions.create({
     file: transcriptionFile,
     model: DEFAULT_STT_MODEL as 'gpt-4o-mini-transcribe',
-    response_format: 'json',
+    response_format: 'verbose_json',
     ...(params.languageHint ? { language: params.languageHint } : {}),
   })
 
@@ -617,13 +732,21 @@ async function transcribeMediaWithOpenAi(params: {
     throw new Error('OpenAI transcription returned empty text.')
   }
 
-  return text
+  const durationSeconds =
+    typeof (transcription as { duration?: unknown }).duration === 'number'
+      ? (transcription as { duration: number }).duration
+      : 0
+
+  return {
+    text,
+    durationSeconds,
+  }
 }
 
 async function transcribeFromMediaCandidates(params: {
   mediaCandidates: MediaCandidate[]
   languageHint?: string
-}): Promise<TranscriptResponse[] | null> {
+}): Promise<{ segments: TranscriptResponse[]; usageEvent: YoutubeTranscriptUsageEvent } | null> {
   if (!isOpenAiSttAvailable()) {
     return null
   }
@@ -636,20 +759,30 @@ async function transcribeFromMediaCandidates(params: {
     }
 
     try {
-      const text = await transcribeMediaWithOpenAi({
+      const transcription = await transcribeMediaWithOpenAi({
         bytes,
         mimeType: candidate.mimeType,
         languageHint: params.languageHint,
       })
 
-      return [
-        {
-          text,
-          duration: 0,
-          offset: 0,
-          lang: params.languageHint,
+      return {
+        segments: [
+          {
+            text: transcription.text,
+            duration: transcription.durationSeconds,
+            offset: 0,
+            lang: params.languageHint,
+          },
+        ],
+        usageEvent: {
+          provider: 'openai',
+          model: DEFAULT_STT_MODEL,
+          useType: 'transcription',
+          costUsd: estimateTranscriptionCostUsd(DEFAULT_STT_MODEL, transcription.durationSeconds),
+          durationSeconds: transcription.durationSeconds,
+          pricingVersion: AI_PRICING_VERSION,
         },
-      ]
+      }
     } catch {
       continue
     }
@@ -658,13 +791,118 @@ async function transcribeFromMediaCandidates(params: {
   throw new Error('Audio fallback could not transcribe any available media candidate.')
 }
 
-export async function fetchYoutubeTranscriptWithFallback(videoId: string): Promise<TranscriptResponse[]> {
+async function resolveOfficialYoutubeAccessToken() {
+  const direct = process.env.YOUTUBE_OFFICIAL_ACCESS_TOKEN?.trim()
+  if (direct) return direct
+
+  const refreshToken = process.env.YOUTUBE_OFFICIAL_REFRESH_TOKEN?.trim()
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim()
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim()
+
+  if (!refreshToken || !clientId || !clientSecret) {
+    return ''
+  }
+
+  const body = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken,
+    grant_type: 'refresh_token',
+  })
+
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+    cache: 'no-store',
+  })
+
+  if (!response.ok) {
+    return ''
+  }
+
+  const payload = (await response.json().catch(() => null)) as { access_token?: unknown } | null
+  return typeof payload?.access_token === 'string' ? payload.access_token.trim() : ''
+}
+
+async function fetchYoutubeOfficialTranscript(videoId: string): Promise<TranscriptResponse[] | null> {
+  try {
+    const accessToken = await resolveOfficialYoutubeAccessToken()
+    if (!accessToken) {
+      return null
+    }
+
+    const captionsResponse = await fetch(
+      `https://www.googleapis.com/youtube/v3/captions?part=snippet&videoId=${encodeURIComponent(videoId)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        cache: 'no-store',
+      }
+    )
+
+    if (!captionsResponse.ok) {
+      return null
+    }
+
+    const captionsPayload = (await captionsResponse.json().catch(() => null)) as {
+      items?: Array<{
+        id?: string
+        snippet?: {
+          language?: string
+          trackKind?: string
+          isDraft?: boolean
+        }
+      }>
+    } | null
+
+    const tracks = Array.isArray(captionsPayload?.items) ? captionsPayload.items : []
+    const selectedTrack = tracks.find((track) => track.id && track.snippet?.isDraft !== true)
+    const captionId = selectedTrack?.id?.trim()
+    if (!captionId) {
+      return null
+    }
+
+    for (const format of ['vtt', 'srt']) {
+      const downloadResponse = await fetch(
+        `https://www.googleapis.com/youtube/v3/captions/${encodeURIComponent(captionId)}?tfmt=${format}`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+          cache: 'no-store',
+        }
+      )
+
+      if (!downloadResponse.ok) {
+        continue
+      }
+
+      const body = await downloadResponse.text()
+      const segments = parseTranscriptBody(body, selectedTrack?.snippet?.language?.trim() || 'en')
+      if (segments.length > 0) {
+        return segments
+      }
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
+
+export async function resolveYoutubeTranscriptWithFallback(videoId: string): Promise<YoutubeTranscriptResolution> {
   let primaryError: unknown = null
 
   try {
     const segments = await YoutubeTranscript.fetchTranscript(videoId)
     if (segments.length > 0) {
-      return segments
+      return {
+        segments,
+        source: 'youtube_transcript',
+        usageEvents: [],
+      }
     }
     primaryError = new YoutubeTranscriptEmptyError(videoId, 'youtube-transcript')
   } catch (error: unknown) {
@@ -677,6 +915,14 @@ export async function fetchYoutubeTranscriptWithFallback(videoId: string): Promi
   const watchPageData = await fetchWatchPageData(videoId)
   const tracks = watchPageData.captionTracks
   if (tracks.length === 0) {
+    const officialSegments = await fetchYoutubeOfficialTranscript(videoId)
+    if (officialSegments && officialSegments.length > 0) {
+      return {
+        segments: officialSegments,
+        source: 'youtube_official_api',
+        usageEvents: [],
+      }
+    }
     if (primaryError) {
       throw primaryError
     }
@@ -686,31 +932,61 @@ export async function fetchYoutubeTranscriptWithFallback(videoId: string): Promi
   for (const track of sortTracksByPriority(tracks)) {
     const segments = await fetchTrackTranscript(track)
     if (segments.length > 0) {
-      return segments
+      return {
+        segments,
+        source: 'watch_page_caption_track',
+        usageEvents: [],
+      }
     }
   }
 
   const availableLanguages = Array.from(new Set(tracks.map((track) => track.languageCode).filter(Boolean)))
   const ytDlpResult = await fetchTranscriptWithYtDlp(videoId, availableLanguages)
   if (ytDlpResult.segments && ytDlpResult.segments.length > 0) {
-    return ytDlpResult.segments
+    return {
+      segments: ytDlpResult.segments,
+      source: 'yt_dlp_subtitles',
+      usageEvents: [],
+    }
   }
 
   const sttLanguageHint = availableLanguages.includes('en') ? 'en' : availableLanguages[0]
 
   try {
-    const sttSegments = await transcribeFromMediaCandidates({
+    const sttResult = await transcribeFromMediaCandidates({
       mediaCandidates: watchPageData.mediaCandidates,
       languageHint: sttLanguageHint,
     })
-    if (sttSegments && sttSegments.length > 0) {
-      return sttSegments
+    if (sttResult && sttResult.segments.length > 0) {
+      return {
+        segments: sttResult.segments,
+        source: 'openai_audio_transcription',
+        usageEvents: [sttResult.usageEvent],
+      }
     }
   } catch (error: unknown) {
+    const officialSegments = await fetchYoutubeOfficialTranscript(videoId)
+    if (officialSegments && officialSegments.length > 0) {
+      return {
+        segments: officialSegments,
+        source: 'youtube_official_api',
+        usageEvents: [],
+      }
+    }
+
     throw new YoutubeTranscriptTemporarilyUnavailableError(videoId, availableLanguages, {
       audioFallbackAttempted: true,
       audioFallbackReason: error instanceof Error ? error.message : 'Unknown STT fallback error',
     })
+  }
+
+  const officialSegments = await fetchYoutubeOfficialTranscript(videoId)
+  if (officialSegments && officialSegments.length > 0) {
+    return {
+      segments: officialSegments,
+      source: 'youtube_official_api',
+      usageEvents: [],
+    }
   }
 
   throw new YoutubeTranscriptTemporarilyUnavailableError(videoId, availableLanguages, {
@@ -725,4 +1001,9 @@ export async function fetchYoutubeTranscriptWithFallback(videoId: string): Promi
       return reasons.filter((reason): reason is string => typeof reason === 'string' && reason.length > 0).join(' ')
     })(),
   })
+}
+
+export async function fetchYoutubeTranscriptWithFallback(videoId: string): Promise<TranscriptResponse[]> {
+  const result = await resolveYoutubeTranscriptWithFallback(videoId)
+  return result.segments
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
@@ -20,7 +21,7 @@ import {
   getExtractionPromptVersion,
   parseExtractionModelText,
 } from '@/lib/extract-core'
-import { type AiProvider, callAi, estimateCostUsd, isProviderAvailable } from '@/lib/ai-client'
+import { AI_PRICING_VERSION, type AiProvider, callAi, estimateCostUsd, isProviderAvailable } from '@/lib/ai-client'
 import { normalizeExtractionMode } from '@/lib/extraction-modes'
 import {
   normalizeExtractionOutputLanguage,
@@ -36,7 +37,7 @@ import { resolveVideoPreview } from '@/lib/video-preview'
 import { detectSourceType } from '@/lib/source-detector'
 import { extractWebContent, truncateForAi } from '@/lib/content-extractor'
 import { flattenItemsAsText, normalizePlaybookPhases } from '@/lib/playbook-tree'
-import { fetchYoutubeTranscriptWithFallback } from '@/lib/youtube-transcript-fallback'
+import { resolveYoutubeTranscriptWithFallback } from '@/lib/youtube-transcript-fallback'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -173,8 +174,22 @@ async function parseExtractionWithRepair(params: {
   resolvedOutputLanguage: ResolvedExtractionOutputLanguage
   originalTime: string
   savedTime: string
+  userId?: string | null
+  extractionId?: string | null
+  sourceType?: string | null
 }) {
-  const { modelText, provider, model, mode, resolvedOutputLanguage, originalTime, savedTime } = params
+  const {
+    modelText,
+    provider,
+    model,
+    mode,
+    resolvedOutputLanguage,
+    originalTime,
+    savedTime,
+    userId,
+    extractionId,
+    sourceType,
+  } = params
 
   const parseWithTime = (text: string) =>
     parseExtractionModelText(
@@ -227,9 +242,13 @@ async function parseExtractionWithRepair(params: {
           provider,
           model,
           useType: 'repair',
+          userId,
+          extractionId,
+          sourceType,
           inputTokens: repairResult.inputTokens,
           outputTokens: repairResult.outputTokens,
           costUsd: estimateCostUsd(model, repairResult.inputTokens, repairResult.outputTokens),
+          pricingVersion: AI_PRICING_VERSION,
         })
 
         return parseWithTime(repairResult.text)
@@ -371,6 +390,7 @@ export async function POST(req: NextRequest) {
         metadataJson: JSON.stringify(responsePayload.metadata),
         sourceType,
         sourceLabel: videoPreview.videoTitle ?? bodySourceLabel,
+        transcriptSource: 'cache_exact',
       })
       const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
 
@@ -388,6 +408,7 @@ export async function POST(req: NextRequest) {
         createdAt: saved.created_at,
         cached: true,
         sourceType,
+        transcriptSource: 'cache_exact',
         sourceLabel: saved.source_label,
         folderId: saved.folder_id,
         hasSourceText: false,
@@ -406,26 +427,41 @@ export async function POST(req: NextRequest) {
       return createRateLimitResponse(rateLimit)
     }
 
+    const pendingExtractionId = randomUUID()
+
     // Obtain content based on source type
     let contentText = ''
     let contentTitle: string | null = null
-    let transcriptSource: 'cache_transcript' | 'youtube' | 'cache_result' | 'web' | 'file' | 'text' = 'youtube'
+    let transcriptSource:
+      | 'cache_transcript'
+      | 'cache_result'
+      | 'youtube_transcript'
+      | 'watch_page_caption_track'
+      | 'yt_dlp_subtitles'
+      | 'openai_audio_transcription'
+      | 'youtube_official_api'
+      | 'web'
+      | 'file'
+      | 'text' = 'youtube_transcript'
 
     if (sourceType === 'youtube') {
       let transcriptText = fallbackVideoCache?.transcript_text?.trim() ?? ''
-      transcriptSource = transcriptText ? 'cache_transcript' : 'youtube'
+      transcriptSource = transcriptText ? 'cache_transcript' : 'youtube_transcript'
       const transcriptFallbackFromCache = fallbackVideoCache
         ? buildTranscriptFallbackFromCachedExtraction(fallbackVideoCache)
         : ''
 
       if (!transcriptText) {
         try {
-          const segments = await retryWithBackoff(() => fetchYoutubeTranscriptWithFallback(videoId!), {
-            maxAttempts: 3,
-            shouldRetry: (transcriptError) => classifyTranscriptError(transcriptError).retryable,
-          })
+          const transcriptResolution = await retryWithBackoff(
+            () => resolveYoutubeTranscriptWithFallback(videoId!),
+            {
+              maxAttempts: 3,
+              shouldRetry: (transcriptError) => classifyTranscriptError(transcriptError).retryable,
+            }
+          )
 
-          if (!segments.length) {
+          if (!transcriptResolution.segments.length) {
             if (transcriptFallbackFromCache) {
               transcriptText = transcriptFallbackFromCache
               transcriptSource = 'cache_result'
@@ -436,8 +472,22 @@ export async function POST(req: NextRequest) {
               )
             }
           } else {
-            transcriptText = segments.map((segment) => segment.text).join(' ')
-            transcriptSource = 'youtube'
+            transcriptText = transcriptResolution.segments.map((segment) => segment.text).join(' ')
+            transcriptSource = transcriptResolution.source
+            for (const usageEvent of transcriptResolution.usageEvents) {
+              void logAiUsage({
+                provider: usageEvent.provider,
+                model: usageEvent.model,
+                useType: usageEvent.useType,
+                userId: user.id,
+                extractionId: pendingExtractionId,
+                sourceType,
+                inputTokens: 0,
+                outputTokens: 0,
+                costUsd: usageEvent.costUsd,
+                pricingVersion: usageEvent.pricingVersion,
+              })
+            }
           }
         } catch (error: unknown) {
           if (transcriptFallbackFromCache) {
@@ -460,6 +510,10 @@ export async function POST(req: NextRequest) {
         const msg = err instanceof Error ? err.message : 'No se pudo descargar la página.'
         return NextResponse.json({ error: msg }, { status: 422 })
       }
+    } else if (sourceType === 'text') {
+      contentText = rawText
+      contentTitle = bodySourceLabel
+      transcriptSource = 'text'
     } else {
       contentText = rawText
       contentTitle = bodySourceLabel
@@ -506,9 +560,12 @@ export async function POST(req: NextRequest) {
         model: EXTRACTION_MODEL,
         useType: 'extraction',
         userId: user.id,
+        extractionId: pendingExtractionId,
+        sourceType,
         inputTokens: aiResult.inputTokens,
         outputTokens: aiResult.outputTokens,
         costUsd: estimateCostUsd(EXTRACTION_MODEL, aiResult.inputTokens, aiResult.outputTokens),
+        pricingVersion: AI_PRICING_VERSION,
       })
     } catch (error: unknown) {
       const modelError = classifyModelError(error)
@@ -525,6 +582,9 @@ export async function POST(req: NextRequest) {
         savedTime,
         mode,
         resolvedOutputLanguage,
+        userId: user.id,
+        extractionId: pendingExtractionId,
+        sourceType,
       })
     } catch (error: unknown) {
       const modelError = classifyModelError(error)
@@ -556,6 +616,7 @@ export async function POST(req: NextRequest) {
     const sourceTextToStore = sourceType !== 'youtube' ? contentText || null : null
 
     const saved = await createExtraction({
+      id: pendingExtractionId,
       userId: user.id,
       url: rawUrl || null,
       videoId: videoId ?? null,
@@ -573,6 +634,7 @@ export async function POST(req: NextRequest) {
       sourceFileName: bodySourceFileName,
       sourceFileSizeBytes: bodySourceFileSizeBytes,
       sourceFileMimeType: bodySourceFileMimeType,
+      transcriptSource,
     })
     const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
 
@@ -590,6 +652,7 @@ export async function POST(req: NextRequest) {
       createdAt: saved.created_at,
       cached: false,
       sourceType,
+      transcriptSource: saved.transcript_source,
       sourceLabel: saved.source_label,
       folderId: saved.folder_id,
       sourceFileUrl: saved.source_file_url,

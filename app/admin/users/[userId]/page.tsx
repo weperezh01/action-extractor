@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
+import { formatStorageBytes } from '@/lib/storage-limits'
 
 // ─── Credit detail types ──────────────────────────────────────────────────────
 
@@ -159,6 +160,30 @@ interface UserMonthlyPayload {
   costDetail: CostDetail
 }
 
+interface UserProfitabilitySnapshot {
+  user_id: string
+  plan_name: string
+  plan_display_name: string
+  period_days: number
+  price_monthly_usd: number
+  target_gross_margin_pct: number
+  profitability_alert_enabled: boolean
+  estimated_monthly_fixed_cost_usd: number
+  ai_cost_period_usd: number
+  ai_cost_monthly_run_rate_usd: number
+  extraction_related_cost_period_usd: number
+  chat_cost_period_usd: number
+  chat_tokens_period: number
+  extractions_period: number
+  storage_used_bytes: number
+  storage_cost_monthly_usd: number
+  monthly_variable_cost_run_rate_usd: number
+  monthly_total_cost_run_rate_usd: number
+  max_variable_cost_allowed_usd: number
+  actual_gross_margin_pct: number | null
+  status: 'healthy' | 'at_risk' | 'unprofitable'
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const MODEL_LABELS: Record<string, string> = {
@@ -184,6 +209,7 @@ const USE_TYPE_LABELS: Record<string, string> = {
   extraction: 'Extracción de video',
   chat: 'Chat de conocimiento',
   repair: 'Reparación JSON',
+  transcription: 'Transcripción',
 }
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
@@ -208,6 +234,21 @@ function formatDate(iso: string | null) {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium' }).format(d)
+}
+
+function formatMarginPct(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return 'N/A'
+  return `${(value * 100).toFixed(1)}%`
+}
+
+function profitabilityBadge(status: UserProfitabilitySnapshot['status']) {
+  if (status === 'healthy') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'
+  }
+  if (status === 'at_risk') {
+    return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
+  }
+  return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300'
 }
 
 // ─── Sparkbar chart (monthly costs) ──────────────────────────────────────────
@@ -248,7 +289,9 @@ function MonthlyBarChart({ months }: { months: MonthStat[] }) {
 export default function UserDetailPage({ params }: { params: { userId: string } }) {
   const { userId } = params
   const [payload, setPayload] = useState<UserMonthlyPayload | null>(null)
+  const [profitability, setProfitability] = useState<UserProfitabilitySnapshot | null>(null)
   const [loading, setLoading] = useState(true)
+  const [profitabilityLoading, setProfitabilityLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [creditDetail, setCreditDetail] = useState<UserCreditDetail | null>(null)
   const [chatTokens, setChatTokens] = useState<{ limit: number; used: number; remaining: number; allowed: boolean } | null>(null)
@@ -269,6 +312,23 @@ export default function UserDetailPage({ params }: { params: { userId: string } 
     } catch { /* silent */ }
   }
 
+  const loadProfitability = async () => {
+    setProfitabilityLoading(true)
+    try {
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/profitability?days=30`, {
+        cache: 'no-store',
+      })
+      const data = (await res.json().catch(() => null)) as (UserProfitabilitySnapshot & { error?: string }) | null
+      if (res.ok && data && !data.error) {
+        setProfitability(data)
+      }
+    } catch {
+      // silent
+    } finally {
+      setProfitabilityLoading(false)
+    }
+  }
+
   useEffect(() => {
     void (async () => {
       try {
@@ -276,6 +336,7 @@ export default function UserDetailPage({ params }: { params: { userId: string } 
           fetch(`/api/admin/users/${encodeURIComponent(userId)}/monthly`, { cache: 'no-store' }),
           loadCreditDetail(),
           loadChatTokens(),
+          loadProfitability(),
         ])
         const data = (await monthlyRes.json().catch(() => null)) as (UserMonthlyPayload & { error?: string }) | null
         if (!monthlyRes.ok || !data) {
@@ -423,6 +484,101 @@ export default function UserDetailPage({ params }: { params: { userId: string } 
             </p>
           </div>
         </div>
+
+        {/* ── Profitability snapshot ── */}
+        {(profitabilityLoading || profitability) && (
+          <section className="rounded-xl border border-amber-200 bg-white p-5 dark:border-amber-800/50 dark:bg-slate-900">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <div>
+                <h2 className="text-base font-semibold">Rentabilidad de la Suscripción</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Ingreso del plan vs. costo mensualizado real de este usuario.
+                </p>
+              </div>
+              {profitabilityLoading ? (
+                <div className="w-4 h-4 border-2 border-amber-300 border-t-amber-600 rounded-full animate-spin" />
+              ) : profitability ? (
+                <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${profitabilityBadge(profitability.status)}`}>
+                  {profitability.status === 'healthy'
+                    ? 'Saludable'
+                    : profitability.status === 'at_risk'
+                      ? 'En riesgo'
+                      : 'No rentable'}
+                </span>
+              ) : null}
+            </div>
+
+            {profitability && (
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                    <p className="text-[10px] uppercase font-semibold text-slate-400 mb-1">Plan actual</p>
+                    <p className="text-lg font-bold">{profitability.plan_display_name}</p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">{profitability.plan_name}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                    <p className="text-[10px] uppercase font-semibold text-slate-400 mb-1">Ingreso mensual</p>
+                    <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">
+                      {formatUsd(profitability.price_monthly_usd, 2)}
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      meta {formatMarginPct(profitability.target_gross_margin_pct)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                    <p className="text-[10px] uppercase font-semibold text-slate-400 mb-1">Costo mensual actual</p>
+                    <p className="text-lg font-bold text-amber-700 dark:text-amber-300">
+                      {formatUsd(profitability.monthly_total_cost_run_rate_usd, 2)}
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      variable permitido {formatUsd(profitability.max_variable_cost_allowed_usd, 2)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                    <p className="text-[10px] uppercase font-semibold text-slate-400 mb-1">Margen bruto real</p>
+                    <p className="text-lg font-bold">
+                      {formatMarginPct(profitability.actual_gross_margin_pct)}
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      ventana {profitability.period_days} días
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/20">
+                    <p className="text-[10px] uppercase font-semibold text-slate-400 mb-1">AI mensualizada</p>
+                    <p className="text-lg font-bold">{formatUsd(profitability.ai_cost_monthly_run_rate_usd, 2)}</p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      período {formatUsd(profitability.ai_cost_period_usd, 4)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/20">
+                    <p className="text-[10px] uppercase font-semibold text-slate-400 mb-1">Storage mensualizado</p>
+                    <p className="text-lg font-bold">{formatUsd(profitability.storage_cost_monthly_usd, 2)}</p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      usado {formatStorageBytes(profitability.storage_used_bytes)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/20">
+                    <p className="text-[10px] uppercase font-semibold text-slate-400 mb-1">Costo fijo mensual</p>
+                    <p className="text-lg font-bold">{formatUsd(profitability.estimated_monthly_fixed_cost_usd, 2)}</p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      alertas {profitability.profitability_alert_enabled ? 'activas' : 'desactivadas'}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/20">
+                    <p className="text-[10px] uppercase font-semibold text-slate-400 mb-1">Uso período</p>
+                    <p className="text-lg font-bold">{profitability.extractions_period} extracciones</p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {formatTokens(profitability.chat_tokens_period)} tokens chat
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
 
         {/* ── Chat token KPI ── */}
         {chatTokens && (
@@ -575,13 +731,13 @@ export default function UserDetailPage({ params }: { params: { userId: string } 
                       <th className="px-3 py-2 text-right font-semibold text-slate-500 uppercase">Tok. entrada</th>
                       <th className="px-3 py-2 text-right font-semibold text-slate-500 uppercase">Tok. salida</th>
                       <th className="px-3 py-2 text-right font-semibold text-indigo-600 dark:text-indigo-400 uppercase">Costo IA</th>
-                      <th className="px-3 py-2 text-right font-semibold text-slate-500 uppercase">Precio sugerido (3×)</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-500 uppercase">Costo/extracción</th>
                     </tr>
                   </thead>
                   <tbody>
                     {[...months].reverse().map((m, idx) => {
-                      const suggested = m.cost_usd * 3
                       const isCurrentMonth = idx === 0
+                      const avgExtractionCost = m.extractions > 0 ? m.cost_usd / m.extractions : null
                       return (
                         <tr
                           key={m.month}
@@ -606,8 +762,8 @@ export default function UserDetailPage({ params }: { params: { userId: string } 
                           <td className="px-3 py-2.5 text-right font-mono font-semibold text-indigo-700 dark:text-indigo-300">
                             {m.cost_usd > 0 ? formatUsd(m.cost_usd) : <span className="text-slate-400">$0.0000</span>}
                           </td>
-                          <td className="px-3 py-2.5 text-right font-mono text-emerald-700 dark:text-emerald-400">
-                            {suggested > 0 ? formatUsd(suggested, 2) : <span className="text-slate-400">—</span>}
+                          <td className="px-3 py-2.5 text-right font-mono text-slate-700 dark:text-slate-300">
+                            {avgExtractionCost !== null ? formatUsd(avgExtractionCost) : <span className="text-slate-400">—</span>}
                           </td>
                         </tr>
                       )
@@ -632,19 +788,19 @@ export default function UserDetailPage({ params }: { params: { userId: string } 
                         <td className="px-3 py-2.5 text-right font-mono text-indigo-700 dark:text-indigo-300">
                           {formatUsd(months.reduce((s, m) => s + m.cost_usd, 0))}
                         </td>
-                        <td className="px-3 py-2.5 text-right font-mono text-emerald-700 dark:text-emerald-400">
-                          {formatUsd(months.reduce((s, m) => s + m.cost_usd, 0) * 3, 2)}
+                        <td className="px-3 py-2.5 text-right font-mono text-slate-700 dark:text-slate-300">
+                          {months.reduce((s, m) => s + m.extractions, 0) > 0
+                            ? formatUsd(
+                                months.reduce((s, m) => s + m.cost_usd, 0) /
+                                  months.reduce((s, m) => s + m.extractions, 0)
+                              )
+                            : '—'}
                         </td>
                       </tr>
                     </tfoot>
                   )}
                 </table>
               </div>
-
-              {/* Pricing context note */}
-              <p className="mt-3 text-[11px] text-slate-400 dark:text-slate-500">
-                * "Precio sugerido (3×)" es el mínimo recomendado para cubrir costos de IA con margen operativo básico. Ajusta según tu modelo de negocio.
-              </p>
             </>
           )}
         </div>
@@ -697,12 +853,18 @@ export default function UserDetailPage({ params }: { params: { userId: string } 
 
                 {costDetail.total_cost_usd > 0 && (
                   <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-950/20">
-                    <p className="text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Punto de equilibrio mensual</p>
-                    {currentMonth ? (
+                    <p className="text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Rentabilidad actual</p>
+                    {profitability ? (
+                      <p className="text-xs text-amber-700 dark:text-amber-400">
+                        Plan <span className="font-bold">{profitability.plan_display_name}</span>: ingreso{' '}
+                        <span className="font-bold">{formatUsd(profitability.price_monthly_usd, 2)}</span> vs costo mensualizado{' '}
+                        <span className="font-bold">{formatUsd(profitability.monthly_total_cost_run_rate_usd, 2)}</span>.
+                        Margen actual <span className="font-bold">{formatMarginPct(profitability.actual_gross_margin_pct)}</span>.
+                      </p>
+                    ) : currentMonth ? (
                       <p className="text-xs text-amber-700 dark:text-amber-400">
                         Este mes ha costado <span className="font-bold">{formatUsd(currentMonth.cost_usd)}</span>.
-                        Para ser rentable con margen 3×:{' '}
-                        <span className="font-bold">{formatUsd(currentMonth.cost_usd * 3, 2)}</span>/mes.
+                        Revisa el panel superior de rentabilidad para comparar contra el ingreso del plan.
                       </p>
                     ) : (
                       <p className="text-xs text-amber-700 dark:text-amber-400">

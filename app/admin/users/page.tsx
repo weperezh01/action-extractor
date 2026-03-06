@@ -41,6 +41,30 @@ interface UserAiCostDetail {
   by_use_type: Array<{ use_type: string; calls: number; cost_usd: number }>
 }
 
+interface UserProfitabilitySnapshot {
+  user_id: string
+  plan_name: string
+  plan_display_name: string
+  period_days: number
+  price_monthly_usd: number
+  target_gross_margin_pct: number
+  profitability_alert_enabled: boolean
+  estimated_monthly_fixed_cost_usd: number
+  ai_cost_period_usd: number
+  ai_cost_monthly_run_rate_usd: number
+  extraction_related_cost_period_usd: number
+  chat_cost_period_usd: number
+  chat_tokens_period: number
+  extractions_period: number
+  storage_used_bytes: number
+  storage_cost_monthly_usd: number
+  monthly_variable_cost_run_rate_usd: number
+  monthly_total_cost_run_rate_usd: number
+  max_variable_cost_allowed_usd: number
+  actual_gross_margin_pct: number | null
+  status: 'healthy' | 'at_risk' | 'unprofitable'
+}
+
 const MODEL_LABELS: Record<string, string> = {
   'claude-opus-4-6': 'Claude Opus 4.6',
   'claude-sonnet-4-6': 'Claude Sonnet 4.6',
@@ -64,6 +88,22 @@ const USE_TYPE_LABELS: Record<string, string> = {
   extraction: 'Extracción',
   chat: 'Chat',
   repair: 'Reparación JSON',
+  transcription: 'Transcripción',
+}
+
+function formatMarginPct(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return 'N/A'
+  return `${(value * 100).toFixed(1)}%`
+}
+
+function profitabilityBadge(status: UserProfitabilitySnapshot['status']) {
+  if (status === 'healthy') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'
+  }
+  if (status === 'at_risk') {
+    return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
+  }
+  return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300'
 }
 
 function formatTokens(n: number) {
@@ -143,6 +183,8 @@ export default function AdminUsersPage() {
   const [detailPayload, setDetailPayload] = useState<AdminUserExtractionsResponse | null>(null)
   const [costDetail, setCostDetail] = useState<UserAiCostDetail | null>(null)
   const [costLoading, setCostLoading] = useState(false)
+  const [profitabilitySnapshot, setProfitabilitySnapshot] = useState<UserProfitabilitySnapshot | null>(null)
+  const [profitabilityLoading, setProfitabilityLoading] = useState(false)
 
   const [togglingUserId, setTogglingUserId] = useState<string | null>(null)
 
@@ -265,13 +307,32 @@ export default function AdminUsersPage() {
     }
   }, [])
 
+  const loadUserProfitability = useCallback(async (userId: string) => {
+    setProfitabilityLoading(true)
+    setProfitabilitySnapshot(null)
+    try {
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/profitability?days=30`, {
+        cache: 'no-store',
+      })
+      const data = (await res.json().catch(() => null)) as (UserProfitabilitySnapshot & { error?: string }) | null
+      if (res.ok && data && !data.error) {
+        setProfitabilitySnapshot(data)
+      }
+    } catch {
+      // silencioso
+    } finally {
+      setProfitabilityLoading(false)
+    }
+  }, [])
+
   const handleSelectUser = useCallback(
     (userId: string) => {
       setSelectedUserId(userId)
       void loadUserExtractions(userId)
       void loadUserCostDetail(userId)
+      void loadUserProfitability(userId)
     },
-    [loadUserExtractions, loadUserCostDetail]
+    [loadUserExtractions, loadUserCostDetail, loadUserProfitability]
   )
 
   const handleToggleBlock = useCallback(
@@ -544,24 +605,64 @@ export default function AdminUsersPage() {
         )}
 
         {/* Cost detail panel — shown when a user is selected */}
-        {selectedUserId && (costLoading || costDetail) && (
+        {selectedUserId && (costLoading || profitabilityLoading || costDetail || profitabilitySnapshot) && (
           <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 dark:border-indigo-800/50 dark:bg-indigo-950/20 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
               <div>
-                <h2 className="text-base font-semibold text-indigo-900 dark:text-indigo-200">Consumo IA del usuario</h2>
+                <h2 className="text-base font-semibold text-indigo-900 dark:text-indigo-200">Consumo y rentabilidad</h2>
                 {detailPayload?.user && (
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                     {detailPayload.user.name} · {detailPayload.user.email}
                   </p>
                 )}
               </div>
-              {costLoading && (
+              {(costLoading || profitabilityLoading) && (
                 <div className="w-4 h-4 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
               )}
             </div>
 
             {costDetail && (
               <>
+                {profitabilitySnapshot && (
+                  <div className="grid gap-3 sm:grid-cols-4 mb-4">
+                    <div className="rounded-lg border border-indigo-100 bg-white p-3 dark:border-indigo-900/50 dark:bg-slate-900">
+                      <p className="text-[10px] uppercase text-slate-400 font-semibold">Plan</p>
+                      <p className="text-sm font-bold mt-0.5">{profitabilitySnapshot.plan_display_name}</p>
+                      <p className="text-[10px] text-slate-400">{formatCurrencyUsd(profitabilitySnapshot.price_monthly_usd)}</p>
+                    </div>
+                    <div className="rounded-lg border border-indigo-100 bg-white p-3 dark:border-indigo-900/50 dark:bg-slate-900">
+                      <p className="text-[10px] uppercase text-slate-400 font-semibold">Costo mensual</p>
+                      <p className="text-xl font-bold mt-0.5 text-amber-700 dark:text-amber-300">
+                        {formatCurrencyUsd(profitabilitySnapshot.monthly_total_cost_run_rate_usd)}
+                      </p>
+                      <p className="text-[10px] text-slate-400">
+                        permitido {formatCurrencyUsd(profitabilitySnapshot.max_variable_cost_allowed_usd)}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-indigo-100 bg-white p-3 dark:border-indigo-900/50 dark:bg-slate-900">
+                      <p className="text-[10px] uppercase text-slate-400 font-semibold">Margen bruto</p>
+                      <p className="text-xl font-bold mt-0.5">
+                        {formatMarginPct(profitabilitySnapshot.actual_gross_margin_pct)}
+                      </p>
+                      <p className="text-[10px] text-slate-400">
+                        meta {formatMarginPct(profitabilitySnapshot.target_gross_margin_pct)}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-indigo-100 bg-white p-3 dark:border-indigo-900/50 dark:bg-slate-900">
+                      <p className="text-[10px] uppercase text-slate-400 font-semibold">Estado</p>
+                      <div className="mt-1.5">
+                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${profitabilityBadge(profitabilitySnapshot.status)}`}>
+                          {profitabilitySnapshot.status === 'healthy'
+                            ? 'Saludable'
+                            : profitabilitySnapshot.status === 'at_risk'
+                              ? 'En riesgo'
+                              : 'No rentable'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Summary row */}
                 <div className="grid gap-3 sm:grid-cols-4 mb-4">
                   <div className="rounded-lg border border-indigo-100 bg-white p-3 dark:border-indigo-900/50 dark:bg-slate-900">
@@ -647,12 +748,19 @@ export default function AdminUsersPage() {
                       {/* ROI hint */}
                       {costDetail.total_cost_usd > 0 && (
                         <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-950/20">
-                          <p className="text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Punto de equilibrio</p>
-                          <p className="text-xs text-amber-700 dark:text-amber-400">
-                            Para cubrir costos, este usuario debería pagar al menos{' '}
-                            <span className="font-bold">{formatCurrencyUsd(costDetail.total_cost_usd)}</span>.
-                            Con un margen del 3×: <span className="font-bold">{formatCurrencyUsd(costDetail.total_cost_usd * 3)}</span>/período.
-                          </p>
+                          <p className="text-xs font-semibold text-amber-800 dark:text-amber-300 mb-1">Lectura rápida</p>
+                          {profitabilitySnapshot ? (
+                            <p className="text-xs text-amber-700 dark:text-amber-400">
+                              Ingreso del plan <span className="font-bold">{formatCurrencyUsd(profitabilitySnapshot.price_monthly_usd)}</span> vs costo mensualizado{' '}
+                              <span className="font-bold">{formatCurrencyUsd(profitabilitySnapshot.monthly_total_cost_run_rate_usd)}</span>.
+                              Margen actual <span className="font-bold">{formatMarginPct(profitabilitySnapshot.actual_gross_margin_pct)}</span>.
+                            </p>
+                          ) : (
+                            <p className="text-xs text-amber-700 dark:text-amber-400">
+                              Costo acumulado medido: <span className="font-bold">{formatCurrencyUsd(costDetail.total_cost_usd)}</span>.
+                              Abre el detalle del usuario para ver la rentabilidad contra su plan.
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>
