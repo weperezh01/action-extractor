@@ -95,7 +95,7 @@ export function SharePageContent({ extraction, token, tasks, attachments }: Shar
                 href="/"
                 className="text-lg font-black tracking-tight text-slate-900 transition-colors hover:text-indigo-600 dark:text-slate-100 dark:hover:text-indigo-300"
               >
-                Roi Action Extractor
+                Notes Aide Action Extractor
               </Link>
               <p className="text-sm text-slate-500 dark:text-slate-400">{t(lang, 'share.sharedResult')}</p>
             </div>

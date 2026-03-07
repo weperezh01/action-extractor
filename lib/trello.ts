@@ -95,7 +95,7 @@ export function buildTrelloAuthorizeUrl(state: string) {
     response_type: 'token',
     scope: 'read,write',
     expiration: 'never',
-    name: 'ROI Action Extractor',
+    name: 'Notes Aide Action Extractor',
     callback_method: 'fragment',
     return_url: returnUrl.toString(),
   })
@@ -220,7 +220,7 @@ async function createFallbackBoardAndList(input: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      name: 'ROI Action Extractor',
+      name: 'Notes Aide Action Extractor',
       defaultLists: true,
       prefs_permissionLevel: 'private',
     }),
@@ -247,7 +247,7 @@ async function createFallbackBoardAndList(input: {
   const boardName =
     boardData && typeof boardData.name === 'string'
       ? boardData.name
-      : 'ROI Action Extractor'
+      : 'Notes Aide Action Extractor'
   if (!boardId) {
     throw new TrelloApiError(
       'Trello creó el tablero pero no devolvió un id válido.',

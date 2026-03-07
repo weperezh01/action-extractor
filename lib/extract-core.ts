@@ -383,7 +383,7 @@ export function getDefaultExtractionUserPrompt(mode: ExtractionMode): string {
 }
 
 export const CHAT_SYSTEM_PROMPT_DEFAULT =
-  'Eres el asistente de ROI Action Extractor. Responde en español, de forma clara y accionable. Usa exclusivamente el contexto proporcionado del usuario. Si falta información, dilo explícitamente y pide la extracción o dato necesario. No inventes hechos.'
+  'Eres el asistente de Notes Aide Action Extractor. Responde en español, de forma clara y accionable. Usa exclusivamente el contexto proporcionado del usuario. Si falta información, dilo explícitamente y pide la extracción o dato necesario. No inventes hechos.'
 
 export function extractVideoId(url: string): string | null {
   const patterns = [

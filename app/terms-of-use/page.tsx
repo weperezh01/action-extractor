@@ -2,68 +2,67 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 
 export const metadata: Metadata = {
-  title: 'Términos de Uso | Notes Aide',
-  description: 'Términos de uso temporales para Notes Aide.',
+  title: 'Terms of Service | Notes Aide',
+  description: 'Terms of service for Notes Aide.',
 }
 
 export default function TermsOfUsePage() {
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900 px-6 py-12">
       <div className="mx-auto max-w-3xl bg-white border border-slate-200 rounded-2xl shadow-sm p-8 md:p-10">
-        <p className="text-sm text-slate-500 mb-3">Vigencia: 20 de febrero de 2026</p>
-        <h1 className="text-3xl font-bold tracking-tight mb-6">Términos de Uso (Temporal)</h1>
+        <p className="text-sm text-slate-500 mb-3">Effective: February 20, 2026</p>
+        <h1 className="text-3xl font-bold tracking-tight mb-6">Terms of Service</h1>
 
         <p className="text-slate-700 leading-relaxed mb-5">
-          Estos términos regulan el uso de Notes Aide. Este documento es temporal y será sustituido por
-          una versión legal final.
+          These terms govern the use of Notes Aide. By accessing or using the platform, you agree to these terms.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8 mb-3">1. Aceptación</h2>
+        <h2 className="text-xl font-semibold mt-8 mb-3">1. Acceptance</h2>
         <p className="text-slate-700 leading-relaxed">
-          Al usar la plataforma, aceptas estos términos y cualquier actualización futura publicada en este sitio.
+          By using the platform, you accept these terms and any future updates published on this site.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8 mb-3">2. Uso permitido</h2>
+        <h2 className="text-xl font-semibold mt-8 mb-3">2. Permitted Use</h2>
         <p className="text-slate-700 leading-relaxed">
-          Debes usar el servicio de forma legal y responsable. No está permitido usar la plataforma para actividades
-          ilícitas, abuso de servicios externos o vulneración de derechos de terceros.
+          You must use the service lawfully and responsibly. Using the platform for illegal activities,
+          abuse of external services, or violation of third-party rights is prohibited.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8 mb-3">3. Cuenta y acceso</h2>
+        <h2 className="text-xl font-semibold mt-8 mb-3">3. Account and Access</h2>
         <p className="text-slate-700 leading-relaxed">
-          Eres responsable de mantener la confidencialidad de tus credenciales y de toda actividad realizada desde tu
-          cuenta.
+          You are responsible for maintaining the confidentiality of your credentials and for all activity
+          conducted from your account.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8 mb-3">4. Integraciones de terceros</h2>
+        <h2 className="text-xl font-semibold mt-8 mb-3">4. Third-Party Integrations</h2>
         <p className="text-slate-700 leading-relaxed">
-          Algunas funciones dependen de terceros (por ejemplo Notion). El uso de esas integraciones también está sujeto
-          a las políticas y términos del proveedor correspondiente.
+          Some features depend on third-party services (e.g., Notion, Trello, Todoist, Google Docs).
+          Use of these integrations is also subject to the policies and terms of the respective provider.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8 mb-3">5. Limitación de responsabilidad</h2>
+        <h2 className="text-xl font-semibold mt-8 mb-3">5. Limitation of Liability</h2>
         <p className="text-slate-700 leading-relaxed">
-          El servicio se ofrece sobre base de mejor esfuerzo. No garantizamos disponibilidad continua ni resultados
-          comerciales específicos derivados del contenido generado.
+          The service is provided on a best-effort basis. We do not guarantee continuous availability or
+          specific commercial outcomes derived from the generated content.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8 mb-3">6. Cambios y terminación</h2>
+        <h2 className="text-xl font-semibold mt-8 mb-3">6. Changes and Termination</h2>
         <p className="text-slate-700 leading-relaxed">
-          Podemos actualizar funciones y términos cuando sea necesario. También podemos suspender acceso ante uso
-          indebido o incumplimiento.
+          We may update features and terms as necessary. We may also suspend access in response to misuse
+          or non-compliance.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8 mb-3">7. Contacto</h2>
+        <h2 className="text-xl font-semibold mt-8 mb-3">7. Contact</h2>
         <p className="text-slate-700 leading-relaxed mb-8">
-          Correo: <a className="text-indigo-600 hover:text-indigo-700" href="mailto:wdperezh@gmail.com">wdperezh@gmail.com</a>
+          Email: <a className="text-indigo-600 hover:text-indigo-700" href="mailto:support@notesaide.com">support@notesaide.com</a>
         </p>
 
         <div className="pt-6 border-t border-slate-200 flex flex-wrap gap-4 text-sm">
           <Link className="text-indigo-600 hover:text-indigo-700" href="/">
-            Volver al inicio
+            Back to home
           </Link>
           <Link className="text-indigo-600 hover:text-indigo-700" href="/privacy-policy">
-            Ver Política de Privacidad
+            View Privacy Policy
           </Link>
         </div>
       </div>

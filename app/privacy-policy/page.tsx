@@ -2,63 +2,62 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 
 export const metadata: Metadata = {
-  title: 'Política de Privacidad | Notes Aide',
-  description: 'Política de privacidad temporal para Notes Aide.',
+  title: 'Privacy Policy | Notes Aide',
+  description: 'Privacy policy for Notes Aide.',
 }
 
 export default function PrivacyPolicyPage() {
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900 px-6 py-12">
       <div className="mx-auto max-w-3xl bg-white border border-slate-200 rounded-2xl shadow-sm p-8 md:p-10">
-        <p className="text-sm text-slate-500 mb-3">Vigencia: 20 de febrero de 2026</p>
-        <h1 className="text-3xl font-bold tracking-tight mb-6">Política de Privacidad (Temporal)</h1>
+        <p className="text-sm text-slate-500 mb-3">Effective: February 20, 2026</p>
+        <h1 className="text-3xl font-bold tracking-tight mb-6">Privacy Policy</h1>
 
         <p className="text-slate-700 leading-relaxed mb-5">
-          Esta política describe cómo Notes Aide recopila, usa y protege la información de los usuarios.
-          Este documento es temporal y será reemplazado por una versión legal final.
+          This policy describes how Notes Aide collects, uses, and protects user information.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8 mb-3">1. Datos que recopilamos</h2>
+        <h2 className="text-xl font-semibold mt-8 mb-3">1. Data We Collect</h2>
         <p className="text-slate-700 leading-relaxed">
-          Recopilamos datos de cuenta (nombre, correo), datos de uso de la plataforma, URLs de videos procesados y
-          resultados de extracción. Si conectas Notion, también se almacena el token OAuth necesario para exportar
-          contenido a tu workspace.
+          We collect account data (name, email), platform usage data, URLs of processed content, and
+          extraction results. If you connect integrations such as Notion, we also store the OAuth token
+          required to export content to your workspace.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8 mb-3">2. Uso de la información</h2>
+        <h2 className="text-xl font-semibold mt-8 mb-3">2. Use of Information</h2>
         <p className="text-slate-700 leading-relaxed">
-          Usamos la información para operar el servicio, autenticar usuarios, guardar historial de extracciones,
-          habilitar exportaciones (por ejemplo a Notion) y mejorar estabilidad y seguridad.
+          We use information to operate the service, authenticate users, maintain extraction history,
+          enable exports (e.g., to Notion, Trello, Todoist, Google Docs), and improve stability and security.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8 mb-3">3. Compartición de datos</h2>
+        <h2 className="text-xl font-semibold mt-8 mb-3">3. Data Sharing</h2>
         <p className="text-slate-700 leading-relaxed">
-          No vendemos datos personales. Algunos datos pueden procesarse mediante proveedores de infraestructura y APIs
-          externas estrictamente para entregar la funcionalidad solicitada por el usuario.
+          We do not sell personal data. Some data may be processed by infrastructure providers and external
+          APIs strictly to deliver the functionality requested by the user.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8 mb-3">4. Conservación y seguridad</h2>
+        <h2 className="text-xl font-semibold mt-8 mb-3">4. Retention and Security</h2>
         <p className="text-slate-700 leading-relaxed">
-          Implementamos controles razonables para proteger la información. Conservamos datos durante el tiempo necesario
-          para operar el servicio o cumplir obligaciones técnicas y legales.
+          We implement reasonable controls to protect information. We retain data for as long as necessary
+          to operate the service or fulfill technical and legal obligations.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8 mb-3">5. Derechos del usuario</h2>
+        <h2 className="text-xl font-semibold mt-8 mb-3">5. User Rights</h2>
         <p className="text-slate-700 leading-relaxed">
-          Puedes solicitar actualización o eliminación de datos de cuenta escribiendo al correo de contacto.
+          You may request updates or deletion of your account data by writing to the contact email below.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8 mb-3">6. Contacto</h2>
+        <h2 className="text-xl font-semibold mt-8 mb-3">6. Contact</h2>
         <p className="text-slate-700 leading-relaxed mb-8">
-          Correo: <a className="text-indigo-600 hover:text-indigo-700" href="mailto:wdperezh@gmail.com">wdperezh@gmail.com</a>
+          Email: <a className="text-indigo-600 hover:text-indigo-700" href="mailto:support@notesaide.com">support@notesaide.com</a>
         </p>
 
         <div className="pt-6 border-t border-slate-200 flex flex-wrap gap-4 text-sm">
           <Link className="text-indigo-600 hover:text-indigo-700" href="/">
-            Volver al inicio
+            Back to home
           </Link>
           <Link className="text-indigo-600 hover:text-indigo-700" href="/terms-of-use">
-            Ver Términos de Uso
+            View Terms of Service
           </Link>
         </div>
       </div>

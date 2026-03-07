@@ -21,6 +21,7 @@ import {
 import { HeroWorkflowPreview } from '@/app/home/components/landing/HeroWorkflowPreview'
 import { LandingPricingTable } from '@/app/home/components/landing/LandingPricingTable'
 import { UseCasesTabs } from '@/app/home/components/landing/UseCasesTabs'
+import { ViewsExplorer } from '@/app/home/components/landing/ViewsExplorer'
 import { NotesAideLogo } from '@/app/components/NotesAideLogo'
 import { useLang } from '@/app/home/hooks/useLang'
 import { applyTheme, getThemeStorageKey, resolveInitialTheme } from '@/app/home/lib/utils'
@@ -204,6 +205,7 @@ export default function LandingPage() {
       ? [
           { href: '#how-it-works', label: 'Cómo funciona' },
           { href: '#extraction-modes', label: 'Formatos' },
+          { href: '#views', label: 'Vistas' },
           { href: '#use-cases', label: 'Casos de uso' },
           { href: '#integrations', label: 'Integraciones' },
           { href: '#pricing', label: 'Pricing' },
@@ -212,6 +214,7 @@ export default function LandingPage() {
       : [
           { href: '#how-it-works', label: 'How it works' },
           { href: '#extraction-modes', label: 'Formats' },
+          { href: '#views', label: 'Views' },
           { href: '#use-cases', label: 'Use cases' },
           { href: '#integrations', label: 'Integrations' },
           { href: '#pricing', label: 'Pricing' },
@@ -553,6 +556,30 @@ export default function LandingPage() {
                 </article>
               ))}
             </div>
+          </div>
+        </section>
+
+        <section
+          id="views"
+          className={`${viewportSectionClass} border-y border-zinc-200/70 bg-white/70 dark:border-white/10 dark:bg-zinc-900/25`}
+        >
+          <div className={`${containerClass} w-full`}>
+            <SectionHeader
+              kicker={lang === 'es' ? 'Vistas' : 'Views'}
+              title={
+                lang === 'es'
+                  ? 'Nueve maneras de ver la misma extracción'
+                  : 'Nine ways to see the same extraction'
+              }
+              description={
+                lang === 'es'
+                  ? 'La animación superior va rápido. Aquí puedes revisar con calma qué hace cada vista, cuándo conviene usarla y qué tipo de lectura te entrega.'
+                  : 'The animated preview moves fast. Here you can review what each view does, when it is useful, and what kind of reading it gives you.'
+              }
+              align="center"
+            />
+
+            <ViewsExplorer lang={lang} />
           </div>
         </section>
 

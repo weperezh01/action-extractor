@@ -3,4 +3,4 @@ WORKDIR /app
 COPY package*.json ./
 RUN apk add --no-cache yt-dlp && npm install
 EXPOSE 3030
-CMD ["npm", "run", "dev"]
+CMD ["sh", "-c", "mkdir -p .next && find .next -mindepth 1 -maxdepth 1 -exec rm -rf {} + && npm run dev"]

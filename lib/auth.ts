@@ -19,7 +19,7 @@ const SESSION_DURATION_DAYS = 30
 const PASSWORD_KEY_LENGTH = 64
 const RESET_TOKEN_EXPIRY_HOURS = 1
 const EMAIL_VERIFICATION_TOKEN_EXPIRY_HOURS = 24
-const DEFAULT_ADMIN_EMAILS = ['wdperezh@gmail.com']
+const DEFAULT_ADMIN_EMAILS = ['support@notesaide.com']
 
 interface SessionUser {
   id: string
