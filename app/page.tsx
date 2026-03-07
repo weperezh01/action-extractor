@@ -1,8 +1,7 @@
 'use client'
 
-import { type ReactNode, useEffect, useState } from 'react'
+import { type MouseEvent as ReactMouseEvent, type ReactNode, useEffect, useState } from 'react'
 import Link from 'next/link'
-import Image from 'next/image'
 import {
   ArrowRight,
   Brain,
@@ -18,9 +17,11 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
-  Target,
-  Workflow,
 } from 'lucide-react'
+import { HeroWorkflowPreview } from '@/app/home/components/landing/HeroWorkflowPreview'
+import { LandingPricingTable } from '@/app/home/components/landing/LandingPricingTable'
+import { UseCasesTabs } from '@/app/home/components/landing/UseCasesTabs'
+import { NotesAideLogo } from '@/app/components/NotesAideLogo'
 import { useLang } from '@/app/home/hooks/useLang'
 import { applyTheme, getThemeStorageKey, resolveInitialTheme } from '@/app/home/lib/utils'
 import { t } from '@/app/home/lib/i18n'
@@ -29,12 +30,18 @@ import { GuestExtractorSection } from '@/app/home/components/GuestExtractorSecti
 
 const containerClass = 'mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8'
 const sectionClass = 'py-16 md:py-24'
+const viewportSectionClass =
+  'flex min-h-[calc(100svh-4.5rem)] scroll-mt-24 flex-col justify-center py-14 md:py-16 lg:py-20'
 const cardBaseClass =
   'rounded-2xl border border-zinc-200/80 bg-white/90 shadow-[0_20px_44px_-28px_rgba(15,23,42,0.5)] backdrop-blur transition-all duration-200 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/30'
 const primaryButtonClass =
   'inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-6 py-3 text-sm font-bold text-white shadow-[0_18px_44px_-18px_rgba(6,182,212,0.65)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-cyan-700 hover:shadow-[0_20px_52px_-16px_rgba(6,182,212,0.7)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-zinc-950'
 const secondaryButtonClass =
   'inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-300 bg-white px-6 py-3 text-sm font-semibold text-zinc-700 transition-all duration-200 hover:-translate-y-0.5 hover:border-zinc-400 hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:border-white/15 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-white/30 dark:hover:bg-zinc-800 dark:hover:text-white dark:focus-visible:ring-offset-zinc-950'
+const heroPrimaryButtonClass =
+  'inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-cyan-600 px-6 text-sm font-semibold text-white shadow-[0_14px_34px_-20px_rgba(6,182,212,0.65)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-cyan-700 hover:shadow-[0_18px_44px_-18px_rgba(6,182,212,0.7)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-zinc-950'
+const heroSecondaryButtonClass =
+  'inline-flex h-12 items-center justify-center gap-2 rounded-xl border border-zinc-300 bg-white px-6 text-sm font-medium text-zinc-700 transition-all duration-200 hover:-translate-y-0.5 hover:border-zinc-400 hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:border-white/15 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-white/30 dark:hover:bg-zinc-800 dark:hover:text-white dark:focus-visible:ring-offset-zinc-950'
 const iconShellClass =
   'inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/70 bg-white/85 dark:border-white/10 dark:bg-zinc-900'
 const chipClass =
@@ -70,10 +77,22 @@ function SectionHeader({ kicker, title, description, align = 'center' }: Section
 }
 
 function StatPill({ value, label }: { value: string; label: string }) {
+  const isLongValue = value.length > 3
+
   return (
-    <div className={`${cardBaseClass} rounded-2xl p-4`}>
-      <p className="text-2xl font-black text-zinc-900 dark:text-white">{value}</p>
-      <p className="mt-1 text-xs leading-snug text-zinc-500 dark:text-zinc-400">{label}</p>
+    <div className="flex min-h-[124px] h-full flex-col justify-between rounded-[22px] border border-zinc-200/70 bg-white px-5 py-4 shadow-[0_12px_30px_rgba(15,23,42,0.06)] dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/20">
+      <p
+        className={`leading-none tracking-[-0.03em] text-zinc-900 dark:text-white ${
+          isLongValue
+            ? 'text-[18px] font-black xl:text-[20px]'
+            : 'text-[20px] font-black xl:text-[22px]'
+        }`}
+      >
+        {value}
+      </p>
+      <p className="mt-3 max-w-[14ch] text-[13px] leading-[1.35] text-zinc-500 dark:text-zinc-400">
+        {label}
+      </p>
     </div>
   )
 }
@@ -185,48 +204,27 @@ export default function LandingPage() {
       ? [
           { href: '#how-it-works', label: 'Cómo funciona' },
           { href: '#extraction-modes', label: 'Formatos' },
+          { href: '#use-cases', label: 'Casos de uso' },
           { href: '#integrations', label: 'Integraciones' },
+          { href: '#pricing', label: 'Pricing' },
           { href: '#faq', label: 'FAQ' },
         ]
       : [
           { href: '#how-it-works', label: 'How it works' },
           { href: '#extraction-modes', label: 'Formats' },
+          { href: '#use-cases', label: 'Use cases' },
           { href: '#integrations', label: 'Integrations' },
+          { href: '#pricing', label: 'Pricing' },
           { href: '#faq', label: 'FAQ' },
         ]
 
   const trustTools = ['Notion', 'Trello', 'Todoist', 'Google Docs']
-
-  const previewBlocks =
-    lang === 'es'
-      ? [
-          {
-            title: 'Plan de acción',
-            text: '3 fases con prioridades, tareas y próximos pasos ejecutables.',
-          },
-          {
-            title: 'Resumen ejecutivo',
-            text: 'Hallazgos clave y decisiones sugeridas para actuar más rápido.',
-          },
-          {
-            title: 'Exportación',
-            text: 'Envío en un clic a tus herramientas de trabajo favoritas.',
-          },
-        ]
-      : [
-          {
-            title: 'Action plan',
-            text: '3 phases with priorities, tasks, and immediate execution steps.',
-          },
-          {
-            title: 'Executive summary',
-            text: 'Key findings and decision-ready recommendations in one view.',
-          },
-          {
-            title: 'Export',
-            text: 'One-click delivery to the tools your team already uses.',
-          },
-        ]
+  const heroStats = [
+    { value: t(lang, 'hero.stat1.value'), label: t(lang, 'hero.stat1.label') },
+    { value: t(lang, 'hero.stat2.value'), label: t(lang, 'hero.stat2.label') },
+    { value: t(lang, 'hero.stat3.value'), label: t(lang, 'hero.stat3.label') },
+    { value: t(lang, 'hero.stat4.value'), label: t(lang, 'hero.stat4.label') },
+  ]
 
   const faqItems =
     lang === 'es'
@@ -293,20 +291,51 @@ export default function LandingPage() {
           },
         ]
 
-  const scrollToGuest = () => {
-    const target = document.getElementById('guest-extractor')
+  const smoothScrollToSection = (
+    targetId: string,
+    { duration = 1200, extraOffset = 16 }: { duration?: number; extraOffset?: number } = {},
+  ) => {
+    const target = document.getElementById(targetId)
     if (!target) return
+
     const start = window.scrollY
-    const end = target.getBoundingClientRect().top + window.scrollY - 24
-    const duration = 950
+    const navHeight = document.querySelector('nav')?.getBoundingClientRect().height ?? 0
+    const end = target.getBoundingClientRect().top + window.scrollY - navHeight - extraOffset
     const startTime = performance.now()
     const ease = (n: number) => (n < 0.5 ? 2 * n * n : -1 + (4 - 2 * n) * n)
+
     const step = (now: number) => {
       const elapsed = Math.min((now - startTime) / duration, 1)
       window.scrollTo(0, start + (end - start) * ease(elapsed))
-      if (elapsed < 1) requestAnimationFrame(step)
+      if (elapsed < 1) {
+        requestAnimationFrame(step)
+        return
+      }
+
+      window.history.replaceState(null, '', `#${targetId}`)
     }
+
     requestAnimationFrame(step)
+  }
+
+  const handleNavAnchorClick = (event: ReactMouseEvent<HTMLAnchorElement>, href: string) => {
+    if (
+      !href.startsWith('#') ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey ||
+      event.button !== 0
+    ) {
+      return
+    }
+
+    event.preventDefault()
+    smoothScrollToSection(href.slice(1), { duration: 1250, extraOffset: 18 })
+  }
+
+  const scrollToGuest = () => {
+    smoothScrollToSection('guest-extractor', { duration: 1050, extraOffset: 18 })
   }
 
   return (
@@ -320,22 +349,11 @@ export default function LandingPage() {
 
       <nav className="sticky top-0 z-20 border-b border-white/60 bg-white/75 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/75">
         <div className={`${containerClass} flex items-center justify-between py-3`}>
-          <div className="flex items-center gap-3">
-            <div className="relative h-9 w-9 overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-white/15 dark:bg-zinc-900">
-              <Image
-                src="/roi-logo-clean.png"
-                alt="Notes Aide logo"
-                fill
-                sizes="36px"
-                className="object-contain"
-                priority
-              />
-            </div>
-            <div className="leading-tight">
-              <p className="text-[13px] font-black tracking-tight text-zinc-900 dark:text-zinc-100 md:text-[15px]">
-                Notes Aide
-              </p>
-            </div>
+          <div className="flex items-center">
+            <NotesAideLogo
+              className="h-10 w-[172px] text-zinc-900 sm:h-11 sm:w-[210px] md:h-12 md:w-[244px] dark:text-zinc-100"
+              title="Notes Aide"
+            />
           </div>
 
           <div className="flex items-center gap-2 md:gap-3">
@@ -344,6 +362,7 @@ export default function LandingPage() {
                 <a
                   key={item.href}
                   href={item.href}
+                  onClick={(event) => handleNavAnchorClick(event, item.href)}
                   className="transition-colors hover:text-zinc-900 dark:hover:text-zinc-100"
                 >
                   {item.label}
@@ -392,146 +411,97 @@ export default function LandingPage() {
       </nav>
 
       <main>
-        <section className="relative pb-16 pt-12 md:pb-20 md:pt-16">
-          <div className={`${containerClass} grid gap-10 lg:grid-cols-[minmax(0,1.06fr)_minmax(0,0.94fr)] lg:items-center`}>
-            <div>
-              <span className="mb-6 inline-flex items-center gap-2 rounded-full border border-cyan-200 bg-cyan-50 px-4 py-1.5 text-xs font-bold uppercase tracking-[0.14em] text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-900/20 dark:text-cyan-300">
-                <Sparkles size={12} />
-                {t(lang, 'landing.hero.badge')}
-              </span>
-
-              <h1 className="max-w-3xl text-[2.6rem] font-black leading-[1.03] tracking-tight text-zinc-900 dark:text-white sm:text-5xl md:text-6xl xl:text-7xl">
-                {t(lang, 'landing.hero.headline1')}{' '}
-                <span className="bg-gradient-to-r from-cyan-600 via-emerald-500 to-amber-500 bg-clip-text text-transparent">
-                  {t(lang, 'landing.hero.headline2')}
+        <section className="relative flex min-h-[calc(100svh-4.5rem)] items-center py-10 md:py-12 lg:py-16">
+          <div className={`${containerClass} grid w-full gap-10 lg:grid-cols-[minmax(0,0.97fr)_minmax(0,1.03fr)] lg:gap-8 lg:items-stretch xl:grid-cols-[minmax(0,0.94fr)_minmax(0,1.06fr)]`}>
+            <div className="lg:flex lg:flex-col lg:justify-center">
+              <div className="flex w-full flex-col items-start justify-center lg:max-w-[620px] xl:max-w-[680px] 2xl:max-w-[720px]">
+                <span className="mb-4 inline-flex w-fit items-center gap-2 rounded-full border border-cyan-200 bg-cyan-50 px-4 py-2 text-[12px] font-semibold uppercase tracking-[0.18em] text-cyan-700 shadow-[0_12px_28px_-24px_rgba(8,145,178,0.45)] dark:border-cyan-500/30 dark:bg-cyan-900/20 dark:text-cyan-300 xl:mb-5">
+                  <Sparkles size={12} />
+                  {t(lang, 'landing.hero.badge')}
                 </span>
-              </h1>
 
-              <p className="mt-5 max-w-[62ch] text-base leading-relaxed text-zinc-600 dark:text-zinc-300 md:text-lg">
-                {t(lang, 'landing.hero.sub')}
-              </p>
-
-              <div className="mt-8 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
-                <Link href="/app?mode=register" className={primaryButtonClass}>
-                  {t(lang, 'landing.hero.cta')}
-                  <ArrowRight size={16} />
-                </Link>
-
-                <button type="button" onClick={scrollToGuest} className={secondaryButtonClass}>
-                  <PlayCircle size={16} />
-                  {lang === 'es' ? 'Ver ejemplo' : 'See example'}
-                </button>
-              </div>
-
-              <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
-                {t(lang, 'landing.hero.signin')}{' '}
-                <Link
-                  href="/app?mode=login"
-                  className="font-semibold text-cyan-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:text-cyan-300 dark:focus-visible:ring-offset-zinc-950"
+                <h1
+                  className="max-w-[520px] self-center text-center text-[44px] font-black leading-[0.95] tracking-[-0.04em] text-zinc-900 dark:text-white sm:text-[56px] md:text-[60px] xl:max-w-[560px] xl:text-[68px] 2xl:max-w-[600px] 2xl:text-[72px]"
+                  style={{ textWrap: 'balance' }}
                 >
-                  {t(lang, 'landing.hero.signinLink')}
-                </Link>
-              </p>
-
-              <div className="mt-5 flex flex-wrap items-center gap-2">
-                {trustTools.map((tool) => (
-                  <span
-                    key={tool}
-                    className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-semibold text-zinc-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300"
-                  >
-                    <CheckCircle size={12} className="text-emerald-500" aria-hidden="true" />
-                    {tool}
+                  {t(lang, 'landing.hero.headline1')}{' '}
+                  <span className="bg-gradient-to-r from-cyan-600 via-emerald-500 to-amber-500 bg-clip-text text-transparent">
+                    {t(lang, 'landing.hero.headline2')}
                   </span>
-                ))}
-              </div>
+                </h1>
 
-              <p className="mt-3 inline-flex items-center gap-2 rounded-full border border-zinc-200/70 bg-white/80 px-3 py-1 text-xs font-medium text-zinc-500 dark:border-white/10 dark:bg-zinc-900/70 dark:text-zinc-400">
-                <ShieldCheck size={13} className="text-cyan-600 dark:text-cyan-300" />
-                {lang === 'es'
-                  ? 'Privacidad y control de contenido para tu equipo.'
-                  : 'Privacy-first content handling for teams.'}
-              </p>
-
-              <div className="mt-9 grid gap-3 sm:grid-cols-3">
-                {[
-                  { value: t(lang, 'hero.stat1.value'), label: t(lang, 'hero.stat1.label') },
-                  { value: t(lang, 'hero.stat2.value'), label: t(lang, 'hero.stat2.label') },
-                  { value: t(lang, 'hero.stat3.value'), label: t(lang, 'hero.stat3.label') },
-                ].map((s) => (
-                  <StatPill key={s.label} value={s.value} label={s.label} />
-                ))}
-              </div>
-            </div>
-
-            <div className={`${cardBaseClass} rounded-3xl p-6 md:p-7`}>
-              <div className="flex items-center justify-between gap-3">
-                <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-900/20 dark:text-emerald-300">
-                  <Target size={12} />
-                  {lang === 'es' ? 'Preview del resultado' : 'Live output preview'}
-                </span>
-                <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">Notes Aide</span>
-              </div>
-
-              <div className="mt-5 rounded-2xl border border-zinc-200/80 bg-white p-4 dark:border-white/10 dark:bg-zinc-900">
-                <p className="text-[11px] font-bold uppercase tracking-[0.13em] text-zinc-400 dark:text-zinc-500">
-                  {lang === 'es' ? 'Input' : 'Input'}
+                <p className="mt-5 max-w-[560px] text-[17px] leading-[1.72] tracking-[-0.01em] text-zinc-600 dark:text-zinc-300 xl:mt-6 xl:max-w-[590px] xl:text-[18px] xl:leading-[1.75] 2xl:max-w-[620px]">
+                  {t(lang, 'landing.hero.sub')}
                 </p>
-                <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-300">
-                  <span className="truncate">youtube.com/watch?v=...</span>
-                  <span className="shrink-0 rounded-md bg-cyan-100 px-2 py-0.5 text-[10px] font-bold text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">
-                    {lang === 'es' ? 'Plan de Acción' : 'Action Plan'}
-                  </span>
+
+                <div className="mt-7 flex self-center flex-col items-center gap-3 sm:flex-row sm:flex-wrap sm:justify-center xl:gap-4">
+                  <Link href="/app?mode=register" className={heroPrimaryButtonClass}>
+                    {t(lang, 'landing.hero.cta')}
+                    <ArrowRight size={16} />
+                  </Link>
+
+                  <button type="button" onClick={scrollToGuest} className={heroSecondaryButtonClass}>
+                    <PlayCircle size={16} />
+                    {lang === 'es' ? 'Ver ejemplo' : 'See example'}
+                  </button>
                 </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {[
-                    lang === 'es' ? 'YouTube' : 'YouTube',
-                    'PDF',
-                    lang === 'es' ? 'Word' : 'Word',
-                    lang === 'es' ? 'Texto' : 'Text',
-                  ].map((source, idx) => (
+
+                <p className="mt-4 self-center text-center text-sm text-zinc-500 dark:text-zinc-400">
+                  {t(lang, 'landing.hero.signin')}{' '}
+                  <Link
+                    href="/app?mode=login"
+                    className="font-medium text-cyan-700 underline-offset-4 hover:text-cyan-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:text-cyan-300 dark:hover:text-cyan-200 dark:focus-visible:ring-offset-zinc-950"
+                  >
+                    {t(lang, 'landing.hero.signinLink')}
+                  </Link>
+                </p>
+
+                <div className="mt-5 flex max-w-[38rem] self-center flex-wrap items-center justify-center gap-2.5">
+                  {trustTools.map((tool) => (
                     <span
-                      key={source}
-                      className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
-                        idx === 0
-                          ? 'border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-500/40 dark:bg-cyan-900/20 dark:text-cyan-300'
-                          : 'border-zinc-200 bg-white text-zinc-500 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-400'
-                      }`}
+                      key={tool}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-600 shadow-[0_1px_0_rgba(15,23,42,0.02)] dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300"
                     >
-                      {source}
+                      <CheckCircle size={12} className="text-emerald-500" aria-hidden="true" />
+                      {tool}
                     </span>
                   ))}
                 </div>
-              </div>
 
-              <div className="mt-5 space-y-3">
-                {previewBlocks.map((block) => (
-                  <article
-                    key={block.title}
-                    className="rounded-xl border border-zinc-200/70 bg-white px-4 py-3 dark:border-white/10 dark:bg-zinc-900"
-                  >
-                    <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{block.title}</p>
-                    <p className="mt-1 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">{block.text}</p>
-                  </article>
-                ))}
-              </div>
-
-              <div className="mt-6 rounded-2xl border border-cyan-200/70 bg-gradient-to-br from-cyan-50 to-emerald-50 p-4 dark:border-cyan-500/20 dark:from-cyan-950/30 dark:to-emerald-950/20">
-                <div className="flex items-center gap-2 text-sm font-bold text-zinc-800 dark:text-zinc-100">
-                  <Workflow size={16} className="text-cyan-600 dark:text-cyan-300" />
-                  {lang === 'es' ? 'Pipeline en 3 pasos' : '3-step workflow'}
-                </div>
-                <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+                <p className="mt-3 inline-flex w-fit self-center items-center justify-center gap-2 rounded-full border border-zinc-200/70 bg-white/80 px-3.5 py-1.5 text-center text-xs font-medium text-zinc-500 dark:border-white/10 dark:bg-zinc-900/70 dark:text-zinc-400">
+                  <ShieldCheck size={13} className="text-cyan-600 dark:text-cyan-300" />
                   {lang === 'es'
-                    ? 'Input → Extracción IA → Exportación. Sin copiar/pegar ni reformatear.'
-                    : 'Input → AI extraction → export. No copy/paste, no reformatting.'}
+                    ? 'Privacidad y control de contenido para tu equipo.'
+                    : 'Privacy-first content handling for teams.'}
                 </p>
+
+                <div className="mt-8 grid w-full max-w-[24rem] self-center grid-cols-2 gap-3 sm:max-w-[28rem] xl:max-w-none xl:self-auto xl:grid-cols-4 xl:gap-4">
+                  {heroStats.map((stat) => (
+                    <StatPill key={stat.label} value={stat.value} label={stat.label} />
+                  ))}
+                </div>
               </div>
+            </div>
+
+            <div className="lg:flex lg:h-full lg:w-full">
+              <HeroWorkflowPreview lang={lang} mode="main" />
             </div>
           </div>
         </section>
 
-        <section id="how-it-works" className="border-y border-zinc-200/70 bg-white/70 py-16 dark:border-white/10 dark:bg-zinc-900/25 md:py-24">
-          <div className={containerClass}>
+        <section
+          id="actionable-outputs"
+          className={`${viewportSectionClass} border-t border-zinc-200/70 dark:border-white/10`}
+        >
+          <div className={`${containerClass} flex flex-1 items-center`}>
+            <div className="mx-auto flex w-full max-w-[72rem]">
+              <HeroWorkflowPreview lang={lang} mode="secondary" />
+            </div>
+          </div>
+        </section>
+
+        <section id="how-it-works" className={`${viewportSectionClass} border-y border-zinc-200/70 bg-white/70 dark:border-white/10 dark:bg-zinc-900/25`}>
+          <div className={`${containerClass} w-full`}>
             <SectionHeader
               kicker={lang === 'es' ? 'Proceso' : 'Process'}
               title={t(lang, 'landing.how.title')}
@@ -562,8 +532,8 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section id="extraction-modes" className={sectionClass}>
-          <div className={containerClass}>
+        <section id="extraction-modes" className={viewportSectionClass}>
+          <div className={`${containerClass} w-full`}>
             <SectionHeader
               kicker={lang === 'es' ? 'Formatos de salida' : 'Output formats'}
               title={t(lang, 'landing.modes.title')}
@@ -586,8 +556,29 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section id="integrations" className="border-y border-zinc-200/70 bg-zinc-100/70 py-16 dark:border-white/10 dark:bg-zinc-900/30 md:py-20">
-          <div className={`${containerClass} grid gap-8 md:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] md:items-center`}>
+        <section id="use-cases" className={`${viewportSectionClass} border-y border-zinc-200/70 bg-white/70 dark:border-white/10 dark:bg-zinc-900/25`}>
+          <div className={`${containerClass} w-full`}>
+            <SectionHeader
+              kicker={lang === 'es' ? 'Casos de uso' : 'Use cases'}
+              title={
+                lang === 'es'
+                  ? 'Cómo se adapta a cada perfil'
+                  : 'How the workflow adapts to each role'
+              }
+              description={
+                lang === 'es'
+                  ? 'Selecciona un perfil y revisa el problema operativo que resuelve Notes Aide.'
+                  : 'Select a role and review the operational problem Notes Aide is built to solve.'
+              }
+              align="center"
+            />
+
+            <UseCasesTabs lang={lang} />
+          </div>
+        </section>
+
+        <section id="integrations" className={`${viewportSectionClass} border-y border-zinc-200/70 bg-zinc-100/70 dark:border-white/10 dark:bg-zinc-900/30`}>
+          <div className={`${containerClass} grid w-full gap-8 md:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] md:items-center`}>
             <SectionHeader
               kicker={lang === 'es' ? 'Stack conectado' : 'Connected stack'}
               title={t(lang, 'landing.integrations.title')}
@@ -603,8 +594,29 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section id="faq" className="py-16 md:py-24">
-          <div className={containerClass}>
+        <section id="pricing" className={viewportSectionClass}>
+          <div className={`${containerClass} w-full`}>
+            <SectionHeader
+              kicker="Pricing"
+              title={
+                lang === 'es'
+                  ? 'Planes claros para crecer sin fricción'
+                  : 'Straightforward plans that scale with your workflow'
+              }
+              description={
+                lang === 'es'
+                  ? 'Una estructura comercial simple para empezar rápido, operar a diario o desplegar Notes Aide con tu equipo.'
+                  : 'A simple commercial structure to start fast, operate daily, or roll out Notes Aide across your team.'
+              }
+              align="center"
+            />
+
+            <LandingPricingTable lang={lang} />
+          </div>
+        </section>
+
+        <section id="faq" className={viewportSectionClass}>
+          <div className={`${containerClass} w-full`}>
             <SectionHeader
               kicker={lang === 'es' ? 'Resolvemos dudas' : 'Objection handling'}
               title={lang === 'es' ? 'Preguntas frecuentes' : 'Frequently asked questions'}
@@ -624,8 +636,8 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section className="border-y border-zinc-200/70 bg-white/70 py-20 dark:border-white/10 dark:bg-zinc-900/30 md:py-24">
-          <div className="mx-auto max-w-3xl px-4 text-center sm:px-6 lg:px-8">
+        <section className={`${viewportSectionClass} border-y border-zinc-200/70 bg-white/70 dark:border-white/10 dark:bg-zinc-900/30`}>
+          <div className="mx-auto w-full max-w-3xl px-4 text-center sm:px-6 lg:px-8">
             <h2 className="text-4xl font-black tracking-tight text-zinc-900 dark:text-white md:text-5xl">
               {t(lang, 'landing.finalcta.title')}
             </h2>
@@ -644,9 +656,9 @@ export default function LandingPage() {
 
         <section
           id="guest-extractor"
-          className="flex min-h-[calc(100svh-3.5rem)] flex-col justify-center border-t border-zinc-200/70 py-14 dark:border-white/10"
+          className={`${viewportSectionClass} border-t border-zinc-200/70 dark:border-white/10`}
         >
-          <div className={containerClass}>
+          <div className={`${containerClass} w-full`}>
             <div className="mb-10 text-center">
               <h2 className="text-3xl font-black tracking-tight text-zinc-900 dark:text-white md:text-4xl">
                 {t(lang, 'landing.guest.title')}

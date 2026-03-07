@@ -29,6 +29,8 @@ const dict = {
     'hero.stat2.label': 'extraction modes',
     'hero.stat3.value': '1-Click',
     'hero.stat3.label': 'integrated export',
+    'hero.stat4.value': '9',
+    'hero.stat4.label': 'different view types',
     'hero.cta.register': 'Create account',
     'hero.cta.login': 'I already have an account',
     'hero.preview.title': 'Preview',
@@ -60,7 +62,7 @@ const dict = {
     'landing.hero.headline1': 'Stop watching,',
     'landing.hero.headline2': 'start executing.',
     'landing.hero.sub':
-      'Paste a YouTube link, upload a PDF or Word document, or add plain text to get a structured action plan, executive summary, business ideas, or key quotes in seconds.',
+      'Paste any YouTube link, PDF, Word document, or plain text. Our AI reads up to 50,000 characters and instantly extracts structured action plans, summaries, and insights, ready to send to your favorite workspace.',
     'landing.hero.cta': 'Start for free',
     'landing.hero.signin': 'Already have an account?',
     'landing.hero.signinLink': 'Sign in',
@@ -69,34 +71,50 @@ const dict = {
     'landing.how.title': 'How it works',
     'landing.how.step1.title': 'Paste any URL',
     'landing.how.step1.desc':
-      'YouTube video, web article, PDF, Word document, or plain text. We extract the full content automatically.',
+      'We handle the heavy lifting. Paste a URL or upload a file. Notes Aide automatically bypasses paywalls (where applicable), cleans messy HTML, and transcribes YouTube videos using advanced audio models.',
     'landing.how.step2.title': 'AI extracts the action',
     'landing.how.step2.desc':
-      'Our AI reads the full content and structures it into the format you choose.',
+      'Choose your objective. Unlike generic AI, our backend uses highly specialized, role-based prompts (Business Strategist, Angel Investor, Copywriter) to guarantee consistent, perfectly formatted outputs every time.',
     'landing.how.step3.title': 'Export & execute',
     'landing.how.step3.desc':
-      'One click to Notion, Trello, Todoist or Google Docs. Copy as Markdown. Done.',
+      'Send it where you work. With one click, your structured markdown is delivered as a Notion page, a Trello card, a Todoist task, or a Google Doc.',
 
     // ── landing · extraction modes ──
     'landing.modes.title': 'Four ways to extract value',
     'landing.modes.sub': 'Choose the output format that fits your workflow.',
     'landing.mode1.title': 'Action Plan',
     'landing.mode1.desc':
-      'Phased plan with concrete steps, priorities, and a pro tip for immediate execution.',
+      "Driven by a 'Business Strategist' AI. Get 4-6 concrete phases, measurable items, and a counter-intuitive Pro Tip for immediate execution.",
     'landing.mode2.title': 'Executive Summary',
     'landing.mode2.desc':
-      'Decision-ready briefing with key insights, findings, and strategic recommendations.',
+      'Act like a CEO. Get a high-level briefing with mandatory success metrics and decision-ready recommendations.',
     'landing.mode3.title': 'Business Ideas',
     'landing.mode3.desc':
-      'Market opportunities extracted from the content, with MVP definition and success metrics.',
+      "Evaluated by an 'Angel Investor' AI. Discover 4-5 market opportunities, complete with MVP definitions and primary risk assessments.",
     'landing.mode4.title': 'Key Quotes',
     'landing.mode4.desc':
-      'The most impactful quotes and ideas with practical context and direct applications.',
+      'Curated for Copywriters. Extract impactful quotes with practical applications and ready-to-use social media post ideas.',
 
     // ── landing · integrations ──
     'landing.integrations.title': 'Export everywhere you work',
     'landing.integrations.sub':
       'One-click export to your favorite productivity tools. No copy-paste, no reformatting.',
+
+    // ── landing · use cases ──
+    'landing.usecases.title': 'Built for professionals who execute',
+    'landing.usecases.sub': 'See how teams across industries use Notes Aide to turn content into action.',
+    'landing.usecase1.title': 'Consultants & Strategists',
+    'landing.usecase1.desc':
+      'Turn lengthy market reports into Executive Summaries. Our AI acts as an analyst, delivering structured briefings with mandatory metrics ready for corporate clients.',
+    'landing.usecase2.title': 'Trainers & Professors',
+    'landing.usecase2.desc':
+      'Upload PDF manuals (up to 10MB) or analyze entire YouTube playlists. Extract core concepts and generate phased Action Plans to design curriculums or quick-reference study guides.',
+    'landing.usecase3.title': 'Content Creators',
+    'landing.usecase3.desc':
+      'Paste any YouTube link and use the Key Quotes mode. We transcribe the audio, skip the fluff, and extract impactful statements with practical context for your social media.',
+    'landing.usecase4.title': 'Project Managers',
+    'landing.usecase4.desc':
+      'Transform raw meeting notes into viable projects. Get concrete phases with the Action Plan mode and send it in one click as a fully documented Trello card or Todoist task.',
 
     // ── landing · final CTA ──
     'landing.finalcta.title': 'Start extracting value today',
@@ -612,6 +630,8 @@ const dict = {
     'hero.stat2.label': 'modos de extracción',
     'hero.stat3.value': '1-Click',
     'hero.stat3.label': 'exportación integrada',
+    'hero.stat4.value': '9',
+    'hero.stat4.label': 'tipos de vistas diferentes',
     'hero.cta.register': 'Crear cuenta',
     'hero.cta.login': 'Ya tengo cuenta',
     'hero.preview.title': 'Vista previa',
@@ -643,7 +663,7 @@ const dict = {
     'landing.hero.headline1': 'Deja de ver,',
     'landing.hero.headline2': 'empieza a ejecutar.',
     'landing.hero.sub':
-      'Pega un enlace de YouTube, sube un PDF o documento de Word, o agrega texto plano para obtener un plan de acción estructurado, resumen ejecutivo, ideas de negocio o frases clave en segundos.',
+      'Pega cualquier enlace de YouTube, PDF, documento de Word o texto plano. Nuestra IA lee hasta 50,000 caracteres y extrae al instante planes de acción estructurados, resúmenes e insights, listos para enviar a tu espacio de trabajo favorito.',
     'landing.hero.cta': 'Comenzar gratis',
     'landing.hero.signin': '¿Ya tienes cuenta?',
     'landing.hero.signinLink': 'Inicia sesión',
@@ -652,34 +672,50 @@ const dict = {
     'landing.how.title': 'Cómo funciona',
     'landing.how.step1.title': 'Pega cualquier URL',
     'landing.how.step1.desc':
-      'Video de YouTube, artículo web, PDF, documento de Word o texto plano. Extraemos el contenido completo automáticamente.',
+      'Nosotros nos encargamos del trabajo pesado. Pega una URL o sube un archivo. Notes Aide evita paywalls automáticamente (cuando aplica), limpia HTML desordenado y transcribe videos de YouTube usando modelos de audio avanzados.',
     'landing.how.step2.title': 'La IA extrae la acción',
     'landing.how.step2.desc':
-      'Nuestra IA analiza todo el contenido y lo estructura en el formato que eliges.',
+      'Elige tu objetivo. A diferencia de la IA genérica, nuestro backend usa prompts especializados por rol (Estratega de Negocios, Ángel Inversionista, Copywriter) para garantizar resultados consistentes y perfectamente formateados cada vez.',
     'landing.how.step3.title': 'Exporta y ejecuta',
     'landing.how.step3.desc':
-      'Un clic a Notion, Trello, Todoist o Google Docs. Copia como Markdown. Listo.',
+      'Envíalo donde trabajas. Con un clic, tu markdown estructurado se entrega como una página de Notion, una tarjeta de Trello, una tarea de Todoist o un Google Doc.',
 
     // ── landing · extraction modes ──
     'landing.modes.title': 'Cuatro formas de extraer valor',
     'landing.modes.sub': 'Elige el formato de salida que encaja con tu flujo de trabajo.',
     'landing.mode1.title': 'Plan de Acción',
     'landing.mode1.desc':
-      'Plan por fases con pasos concretos, prioridades y un tip profesional para ejecución inmediata.',
+      "Impulsado por una IA 'Estratega de Negocios'. Obtén 4-6 fases concretas, ítems medibles y un Pro Tip contraintuitivo para ejecución inmediata.",
     'landing.mode2.title': 'Resumen Ejecutivo',
     'landing.mode2.desc':
-      'Briefing listo para decidir con insights clave, hallazgos y recomendaciones estratégicas.',
+      'Actúa como un CEO. Obtén un briefing de alto nivel con métricas de éxito obligatorias y recomendaciones listas para decidir.',
     'landing.mode3.title': 'Ideas de Negocio',
     'landing.mode3.desc':
-      'Oportunidades de mercado extraídas del contenido, con definición de MVP y métricas de éxito.',
+      "Evaluado por una IA 'Ángel Inversionista'. Descubre 4-5 oportunidades de mercado, completas con definiciones de MVP y evaluaciones de riesgo principales.",
     'landing.mode4.title': 'Frases Clave',
     'landing.mode4.desc':
-      'Las frases más impactantes con contexto práctico y aplicaciones directas.',
+      'Curado para Copywriters. Extrae frases impactantes con aplicaciones prácticas e ideas listas para publicar en redes sociales.',
 
     // ── landing · integrations ──
     'landing.integrations.title': 'Exporta donde trabajas',
     'landing.integrations.sub':
       'Exportación con un clic a tus herramientas favoritas. Sin copiar, sin reformatear.',
+
+    // ── landing · use cases ──
+    'landing.usecases.title': 'Diseñado para profesionales que ejecutan',
+    'landing.usecases.sub': 'Descubre cómo equipos de distintas industrias usan Notes Aide para convertir contenido en acción.',
+    'landing.usecase1.title': 'Consultores y Estrategas',
+    'landing.usecase1.desc':
+      'Convierte largos reportes de mercado en Resúmenes Ejecutivos. Nuestra IA actúa como analista, entregando briefings estructurados con métricas obligatorias listos para clientes corporativos.',
+    'landing.usecase2.title': 'Formadores y Profesores',
+    'landing.usecase2.desc':
+      'Sube manuales en PDF (hasta 10MB) o analiza playlists completas de YouTube. Extrae conceptos clave y genera Planes de Acción por fases para diseñar currículos o guías de estudio rápidas.',
+    'landing.usecase3.title': 'Creadores de Contenido',
+    'landing.usecase3.desc':
+      'Pega cualquier enlace de YouTube y usa el modo Frases Clave. Transcribimos el audio, eliminamos el relleno y extraemos declaraciones impactantes con contexto práctico para tus redes sociales.',
+    'landing.usecase4.title': 'Gerentes de Proyecto',
+    'landing.usecase4.desc':
+      'Transforma notas de reuniones en proyectos viables. Obtén fases concretas con el modo Plan de Acción y envíalo con un clic como una tarjeta de Trello o tarea de Todoist completamente documentada.',
 
     // ── landing · final CTA ──
     'landing.finalcta.title': 'Empieza a extraer valor hoy',
