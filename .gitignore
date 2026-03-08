@@ -12,3 +12,5 @@ tsconfig.tsbuildinfo
 *.log
 npm-debug.log*
 .pnpm-debug.log*
+vendor/yt-dlp/
+vendor/yt-dlp-venv/

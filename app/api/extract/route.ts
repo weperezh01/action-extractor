@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
-import { getUserFromRequest } from '@/lib/auth'
+import { getUserFromRequest, isAdminEmail } from '@/lib/auth'
 import {
   createExtraction,
   findExtractionOrderNumberForUser,
@@ -8,9 +8,9 @@ import {
   findVideoCacheByVideoId,
   getAppSetting,
   getPromptOverride,
-  logAiUsage,
   upsertVideoCache,
 } from '@/lib/db'
+import { logAiUsageSafely, type AiUsageLogInput } from '@/lib/ai-usage-log'
 import { classifyModelError, classifyTranscriptError, retryWithBackoff } from '@/lib/extract-resilience'
 import {
   buildExtractionUserPrompt,
@@ -175,8 +175,8 @@ async function parseExtractionWithRepair(params: {
   originalTime: string
   savedTime: string
   userId?: string | null
-  extractionId?: string | null
   sourceType?: string | null
+  onUsage?: (usage: Omit<AiUsageLogInput, 'extractionId'>) => Promise<void> | void
 }) {
   const {
     modelText,
@@ -187,8 +187,8 @@ async function parseExtractionWithRepair(params: {
     originalTime,
     savedTime,
     userId,
-    extractionId,
     sourceType,
+    onUsage,
   } = params
 
   const parseWithTime = (text: string) =>
@@ -238,12 +238,11 @@ async function parseExtractionWithRepair(params: {
           continue
         }
 
-        void logAiUsage({
+        await onUsage?.({
           provider,
           model,
           useType: 'repair',
           userId,
-          extractionId,
           sourceType,
           inputTokens: repairResult.inputTokens,
           outputTokens: repairResult.outputTokens,
@@ -268,6 +267,7 @@ async function parseExtractionWithRepair(params: {
 export async function POST(req: NextRequest) {
   try {
     const user = await getUserFromRequest(req)
+    const isAdminUser = Boolean(user?.email && isAdminEmail(user.email))
     if (!user) {
       return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
@@ -422,12 +422,15 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const rateLimit = await consumeUserExtractionRateLimit(user.id)
-    if (!rateLimit.allowed) {
-      return createRateLimitResponse(rateLimit)
+    if (!isAdminUser) {
+      const rateLimit = await consumeUserExtractionRateLimit(user.id)
+      if (!rateLimit.allowed) {
+        return createRateLimitResponse(rateLimit)
+      }
     }
 
     const pendingExtractionId = randomUUID()
+    const pendingAiUsageLogs: Array<Omit<AiUsageLogInput, 'extractionId'>> = []
 
     // Obtain content based on source type
     let contentText = ''
@@ -435,8 +438,8 @@ export async function POST(req: NextRequest) {
     let transcriptSource:
       | 'cache_transcript'
       | 'cache_result'
+      | 'custom_extractor'
       | 'youtube_transcript'
-      | 'watch_page_caption_track'
       | 'yt_dlp_subtitles'
       | 'openai_audio_transcription'
       | 'youtube_official_api'
@@ -475,12 +478,11 @@ export async function POST(req: NextRequest) {
             transcriptText = transcriptResolution.segments.map((segment) => segment.text).join(' ')
             transcriptSource = transcriptResolution.source
             for (const usageEvent of transcriptResolution.usageEvents) {
-              void logAiUsage({
+              pendingAiUsageLogs.push({
                 provider: usageEvent.provider,
                 model: usageEvent.model,
                 useType: usageEvent.useType,
                 userId: user.id,
-                extractionId: pendingExtractionId,
                 sourceType,
                 inputTokens: 0,
                 outputTokens: 0,
@@ -555,12 +557,11 @@ export async function POST(req: NextRequest) {
         }
       )
       modelText = aiResult.text
-      void logAiUsage({
+      pendingAiUsageLogs.push({
         provider: EXTRACTION_PROVIDER,
         model: EXTRACTION_MODEL,
         useType: 'extraction',
         userId: user.id,
-        extractionId: pendingExtractionId,
         sourceType,
         inputTokens: aiResult.inputTokens,
         outputTokens: aiResult.outputTokens,
@@ -583,8 +584,10 @@ export async function POST(req: NextRequest) {
         mode,
         resolvedOutputLanguage,
         userId: user.id,
-        extractionId: pendingExtractionId,
         sourceType,
+        onUsage: (usage) => {
+          pendingAiUsageLogs.push(usage)
+        },
       })
     } catch (error: unknown) {
       const modelError = classifyModelError(error)
@@ -636,6 +639,14 @@ export async function POST(req: NextRequest) {
       sourceFileMimeType: bodySourceFileMimeType,
       transcriptSource,
     })
+
+    for (const usage of pendingAiUsageLogs) {
+      await logAiUsageSafely({
+        ...usage,
+        extractionId: saved.id,
+      })
+    }
+
     const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
 
     return NextResponse.json({

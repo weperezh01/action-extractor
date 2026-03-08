@@ -12,8 +12,8 @@ import {
   listChatMessagesForUser,
   listExtractionsByUser,
   listExtractionTasksWithEventsForUser,
-  logAiUsage,
 } from '@/lib/db'
+import { logAiUsageSafely } from '@/lib/ai-usage-log'
 import { CHAT_SYSTEM_PROMPT_DEFAULT } from '@/lib/extract-core'
 import { type AiProvider, callAi, estimateCostUsd, isProviderAvailable } from '@/lib/ai-client'
 
@@ -368,7 +368,7 @@ export async function POST(req: NextRequest) {
       maxTokens: CHAT_MAX_TOKENS,
     })
     const rawText = chatAiResult.text
-    void logAiUsage({
+    await logAiUsageSafely({
       provider: resolvedChatProvider,
       model: resolvedChatModel,
       useType: 'chat',

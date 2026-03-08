@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest, isAdminEmail } from '@/lib/auth'
-import { findAdminUserById, listExtractionsByUser } from '@/lib/db'
+import { findAdminUserById, listAdminExtractionsByUser } from '@/lib/db'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -38,7 +38,7 @@ export async function GET(
       return NextResponse.json({ error: 'Usuario no encontrado.' }, { status: 404 })
     }
 
-    const rows = await listExtractionsByUser(userId, limit)
+    const rows = await listAdminExtractionsByUser(userId, limit)
 
     return NextResponse.json({
       user: targetUser,
@@ -51,6 +51,12 @@ export async function GET(
         extraction_mode: row.extraction_mode,
         objective: row.objective,
         created_at: row.created_at,
+        source_type: row.source_type ?? 'youtube',
+        transcript_source: row.transcript_source ?? null,
+        total_ai_calls: row.total_ai_calls,
+        total_ai_cost_usd: row.total_ai_cost_usd,
+        audio_transcription_calls: row.audio_transcription_calls,
+        audio_transcription_cost_usd: row.audio_transcription_cost_usd,
       })),
       limit,
     })

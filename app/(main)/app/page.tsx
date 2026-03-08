@@ -372,7 +372,9 @@ function ActionExtractor() {
   const [rateLimitUsed, setRateLimitUsed] = useState<number | null>(null)
   const [rateLimitTotal, setRateLimitTotal] = useState<number | null>(null)
   const [extraCredits, setExtraCredits] = useState<number | null>(null)
+  const [hasUnlimitedExtractions, setHasUnlimitedExtractions] = useState(false)
   const [rateLimitExceeded, setRateLimitExceeded] = useState(false)
+  const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null)
   const [chatTokenUsed, setChatTokenUsed] = useState<number | null>(null)
   const [chatTokenLimit, setChatTokenLimit] = useState<number | null>(null)
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false)
@@ -1538,6 +1540,8 @@ function ActionExtractor() {
     setShouldScrollToResult(true)
     setError(null)
     setNotice(null)
+    setRateLimitExceeded(false)
+    setRateLimitMessage(null)
     setResult(null)
     setStackedResultIds([])
     setActivePhasesByPlaybookId({})
@@ -1625,6 +1629,7 @@ function ActionExtractor() {
           if (!fromCache) {
             setRateLimitUsed((prev) => prev !== null ? prev + 1 : null)
             setRateLimitExceeded(false)
+            setRateLimitMessage(null)
           }
           void loadHistory()
         }
@@ -1675,6 +1680,9 @@ function ActionExtractor() {
         }
         if (res.status === 429) {
           setRateLimitExceeded(true)
+          setRateLimitMessage(apiError)
+          setError(null)
+          return
         }
         setError(apiError)
         return
@@ -3071,7 +3079,8 @@ function ActionExtractor() {
         ])
         if (!cancelled) {
           if (rlRes.ok) {
-            const data = (await rlRes.json()) as { used?: number; limit?: number; extra_credits?: number }
+            const data = (await rlRes.json()) as { used?: number; limit?: number; extra_credits?: number; isUnlimited?: boolean }
+            setHasUnlimitedExtractions(data.isUnlimited === true)
             if (typeof data.used === 'number') setRateLimitUsed(data.used)
             if (typeof data.limit === 'number') setRateLimitTotal(data.limit)
             if (typeof data.extra_credits === 'number') setExtraCredits(data.extra_credits)
@@ -3189,7 +3198,7 @@ function ActionExtractor() {
             {user ? (
               <>
                 {/* Rate limit badge */}
-                {rateLimitTotal !== null && rateLimitUsed !== null && (
+                {!hasUnlimitedExtractions && rateLimitTotal !== null && rateLimitUsed !== null && (
                   <span
                     title={`${rateLimitTotal - rateLimitUsed} ${t(lang, 'app.rateLimitTooltip')} ${rateLimitTotal} ${t(lang, 'app.rateLimitDay')}${extraCredits ? ` · +${extraCredits} ${t(lang, 'app.extraCreditsLabel')}` : ''}`}
                     className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold sm:flex ${
@@ -3668,15 +3677,17 @@ function ActionExtractor() {
                 {rateLimitExceeded && (
                   <div className="mx-auto mb-8 w-full max-w-3xl rounded-xl border border-amber-200 bg-amber-50 p-4 flex flex-wrap items-center justify-between gap-3 dark:border-amber-800 dark:bg-amber-900/20">
                     <p className="text-sm text-amber-700 dark:text-amber-300">
-                      {t(lang, 'app.rateLimitExceeded')}
-                      {extraCredits ? ` ${t(lang, 'app.creditsRemaining')} ${extraCredits} ${t(lang, 'app.creditsSuffix')}` : ` ${t(lang, 'app.buyCreditsPrompt')}`}
+                      {rateLimitMessage ?? t(lang, 'app.rateLimitExceeded')}
+                      {extraCredits ? ` ${t(lang, 'app.creditsRemaining')} ${extraCredits} ${t(lang, 'app.creditsSuffix')}` : ''}
                     </p>
-                    <Link
-                      href="/pricing#credits"
-                      className="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
-                    >
-                      {t(lang, 'app.buyCredits')}
-                    </Link>
+                    {!hasUnlimitedExtractions && (
+                      <Link
+                        href="/pricing#credits"
+                        className="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+                      >
+                        {t(lang, 'app.buyCredits')}
+                      </Link>
+                    )}
                   </div>
                 )}
 

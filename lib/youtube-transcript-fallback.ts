@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,38 +14,36 @@ import {
 } from '@danielxceron/youtube-transcript'
 import OpenAI, { toFile } from 'openai'
 import { AI_PRICING_VERSION, estimateTranscriptionCostUsd } from '@/lib/ai-client'
+import { fetchTranscriptCustom } from '@/lib/youtube-transcript-custom'
+import {
+  WATCH_PAGE_ACCEPT_LANGUAGE,
+  WATCH_PAGE_USER_AGENT,
+  fetchYoutubeWatchPageData,
+  parseTranscriptBody,
+  type MediaCandidate,
+} from '@/lib/youtube-transcript-shared'
 
 const execFileAsync = promisify(execFile)
 
-const WATCH_PAGE_USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
-const WATCH_PAGE_ACCEPT_LANGUAGE = 'en-US,en;q=0.9'
-
-const RE_XML_TRANSCRIPT = /<text start="([^"]*)" dur="([^"]*)">([^<]*)<\/text>/g
-const RE_XML_TRANSCRIPT_ASR = /<p t="(\d+)" d="(\d+)"[^>]*>([\s\S]*?)<\/p>/g
-const RE_XML_TRANSCRIPT_ASR_SEGMENT = /<s[^>]*>([^<]*)<\/s>/g
-
-type CaptionTrack = {
-  baseUrl: string
-  languageCode: string
-  kind: 'asr' | 'manual'
-}
-
-type MediaCandidate = {
-  url: string
-  mimeType: string
-  contentLength: number | null
-}
-
-type WatchPageData = {
-  captionTracks: CaptionTrack[]
-  mediaCandidates: MediaCandidate[]
-}
-
 const DEFAULT_STT_MODEL = process.env.YOUTUBE_AUDIO_STT_MODEL?.trim() || 'gpt-4o-mini-transcribe'
 const DEFAULT_STT_MAX_BYTES = Number.parseInt(process.env.YOUTUBE_AUDIO_STT_MAX_BYTES ?? '', 10) || 95 * 1024 * 1024
+const DEFAULT_STT_DIRECT_MAX_BYTES =
+  Number.parseInt(process.env.YOUTUBE_AUDIO_STT_DIRECT_MAX_BYTES ?? '', 10) || 20 * 1024 * 1024
 const DEFAULT_STT_TIMEOUT_MS = Number.parseInt(process.env.YOUTUBE_AUDIO_STT_TIMEOUT_MS ?? '', 10) || 180_000
-const DEFAULT_YTDLP_BIN = process.env.YOUTUBE_YTDLP_BIN?.trim() || 'yt-dlp'
+const DEFAULT_STT_SEGMENT_SECONDS = Number.parseInt(process.env.YOUTUBE_AUDIO_STT_SEGMENT_SECONDS ?? '', 10) || 480
+const DEFAULT_FFMPEG_BIN = process.env.FFMPEG_BIN?.trim() || 'ffmpeg'
+const DEFAULT_FFPROBE_BIN = process.env.FFPROBE_BIN?.trim() || 'ffprobe'
+const DOCKER_LOCAL_YTDLP_BIN = join(process.cwd(), 'vendor', 'yt-dlp-venv', 'bin', 'yt-dlp')
+const LOCAL_YTDLP_BIN = join(process.cwd(), 'vendor', 'yt-dlp', 'yt-dlp')
+const DEFAULT_YTDLP_BIN =
+  process.env.YOUTUBE_YTDLP_BIN?.trim() ||
+  (existsSync('/.dockerenv')
+    ? existsSync(DOCKER_LOCAL_YTDLP_BIN)
+      ? DOCKER_LOCAL_YTDLP_BIN
+      : 'yt-dlp'
+    : existsSync(LOCAL_YTDLP_BIN)
+      ? LOCAL_YTDLP_BIN
+      : 'yt-dlp')
 const DEFAULT_YTDLP_TIMEOUT_MS = Number.parseInt(process.env.YOUTUBE_YTDLP_TIMEOUT_MS ?? '', 10) || 120_000
 const DEFAULT_YTDLP_MAX_SUBTITLE_BYTES =
   Number.parseInt(process.env.YOUTUBE_YTDLP_MAX_SUBTITLE_BYTES ?? '', 10) || 12 * 1024 * 1024
@@ -58,9 +57,16 @@ type YtDlpTranscriptResult = {
   reason: string | null
 }
 
+type YtDlpAudioSttResult = {
+  segments: TranscriptResponse[] | null
+  usageEvent: YoutubeTranscriptUsageEvent | null
+  attempted: boolean
+  reason: string | null
+}
+
 export type YoutubeTranscriptResolvedSource =
+  | 'custom_extractor'
   | 'youtube_transcript'
-  | 'watch_page_caption_track'
   | 'yt_dlp_subtitles'
   | 'openai_audio_transcription'
   | 'youtube_official_api'
@@ -78,6 +84,19 @@ export interface YoutubeTranscriptResolution {
   segments: TranscriptResponse[]
   source: YoutubeTranscriptResolvedSource
   usageEvents: YoutubeTranscriptUsageEvent[]
+}
+
+export interface YoutubeTranscriptStatusUpdate {
+  step: string
+  message: string
+}
+
+type YoutubeTranscriptStatusHandler = (
+  update: YoutubeTranscriptStatusUpdate
+) => void | Promise<void>
+
+interface ResolveYoutubeTranscriptOptions {
+  onStatus?: YoutubeTranscriptStatusHandler
 }
 
 export class YoutubeTranscriptTemporarilyUnavailableError extends Error {
@@ -100,408 +119,6 @@ export class YoutubeTranscriptTemporarilyUnavailableError extends Error {
     this.audioFallbackAttempted = options?.audioFallbackAttempted ?? false
     this.audioFallbackReason = options?.audioFallbackReason ?? null
   }
-}
-
-function decodeHtmlEntities(text: string) {
-  return text
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&#39;/g, "'")
-    .replace(/&#x27;/g, "'")
-}
-
-function parseXmlTranscript(body: string, lang: string): TranscriptResponse[] {
-  RE_XML_TRANSCRIPT.lastIndex = 0
-  const transcriptSegments: TranscriptResponse[] = []
-  let transcriptMatch: RegExpExecArray | null = RE_XML_TRANSCRIPT.exec(body)
-  while (transcriptMatch) {
-    const text = decodeHtmlEntities(transcriptMatch[3] ?? '').trim()
-    if (text) {
-      transcriptSegments.push({
-        text,
-        duration: Number.parseFloat(transcriptMatch[2] ?? '0'),
-        offset: Number.parseFloat(transcriptMatch[1] ?? '0'),
-        lang,
-      })
-    }
-    transcriptMatch = RE_XML_TRANSCRIPT.exec(body)
-  }
-
-  if (transcriptSegments.length > 0) {
-    return transcriptSegments
-  }
-
-  RE_XML_TRANSCRIPT_ASR.lastIndex = 0
-  const asrSegments: TranscriptResponse[] = []
-  let asrMatch: RegExpExecArray | null = RE_XML_TRANSCRIPT_ASR.exec(body)
-  while (asrMatch) {
-    const blockBody = asrMatch[3] ?? ''
-    const partTexts: string[] = []
-
-    RE_XML_TRANSCRIPT_ASR_SEGMENT.lastIndex = 0
-    let segmentMatch: RegExpExecArray | null = RE_XML_TRANSCRIPT_ASR_SEGMENT.exec(blockBody)
-    while (segmentMatch) {
-      partTexts.push(segmentMatch[1] ?? '')
-      segmentMatch = RE_XML_TRANSCRIPT_ASR_SEGMENT.exec(blockBody)
-    }
-
-    const text = (partTexts.length > 0 ? partTexts.join('') : blockBody.replace(/<[^>]*>/g, '')).trim()
-    if (text) {
-      asrSegments.push({
-        text: decodeHtmlEntities(text),
-        duration: Number(asrMatch[2] ?? '0') / 1000,
-        offset: Number(asrMatch[1] ?? '0') / 1000,
-        lang,
-      })
-    }
-
-    asrMatch = RE_XML_TRANSCRIPT_ASR.exec(body)
-  }
-
-  return asrSegments
-}
-
-function parseJsonTranscript(body: string, lang: string): TranscriptResponse[] {
-  try {
-    const parsed = JSON.parse(body) as {
-      events?: Array<{
-        tStartMs?: number
-        dDurationMs?: number
-        segs?: Array<{ utf8?: string }>
-      }>
-    }
-
-    if (!Array.isArray(parsed.events)) {
-      return []
-    }
-
-    const segments: TranscriptResponse[] = []
-    for (const event of parsed.events) {
-      const text = (event.segs ?? [])
-        .map((segment) => segment.utf8 ?? '')
-        .join('')
-        .replace(/\n+/g, ' ')
-        .trim()
-
-      if (!text) {
-        continue
-      }
-
-      segments.push({
-        text: decodeHtmlEntities(text),
-        duration: Number(event.dDurationMs ?? 0) / 1000,
-        offset: Number(event.tStartMs ?? 0) / 1000,
-        lang,
-      })
-    }
-
-    return segments
-  } catch {
-    return []
-  }
-}
-
-function decodeTimestampToSeconds(value: string) {
-  const normalized = value.trim().replace(',', '.')
-  const parts = normalized.split(':').map((part) => Number.parseFloat(part))
-  if (parts.some((part) => !Number.isFinite(part))) return null
-  if (parts.length === 3) {
-    return parts[0]! * 3600 + parts[1]! * 60 + parts[2]!
-  }
-  if (parts.length === 2) {
-    return parts[0]! * 60 + parts[1]!
-  }
-  if (parts.length === 1) {
-    return parts[0]!
-  }
-  return null
-}
-
-function parseTimedTextTranscript(
-  body: string,
-  lang: string,
-  separatorPattern: RegExp
-): TranscriptResponse[] {
-  const lines = body.replace(/\r\n?/g, '\n').split('\n')
-  const segments: TranscriptResponse[] = []
-
-  let index = 0
-  while (index < lines.length) {
-    const rawLine = lines[index]?.trim() ?? ''
-    if (!rawLine || /^\d+$/.test(rawLine)) {
-      index += 1
-      continue
-    }
-
-    const timingMatch = rawLine.match(separatorPattern)
-    if (!timingMatch) {
-      index += 1
-      continue
-    }
-
-    const startSeconds = decodeTimestampToSeconds(timingMatch[1] ?? '')
-    const endSeconds = decodeTimestampToSeconds(timingMatch[2] ?? '')
-    index += 1
-
-    const textLines: string[] = []
-    while (index < lines.length) {
-      const textLine = lines[index] ?? ''
-      if (!textLine.trim()) break
-      if (/^\d+$/.test(textLine.trim()) && textLines.length === 0) break
-      textLines.push(textLine)
-      index += 1
-    }
-
-    const text = decodeHtmlEntities(
-      textLines
-        .join(' ')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-    )
-
-    if (text && startSeconds !== null && endSeconds !== null && endSeconds >= startSeconds) {
-      segments.push({
-        text,
-        duration: endSeconds - startSeconds,
-        offset: startSeconds,
-        lang,
-      })
-    }
-
-    while (index < lines.length && !lines[index]?.trim()) {
-      index += 1
-    }
-  }
-
-  return segments
-}
-
-function parseVttTranscript(body: string, lang: string): TranscriptResponse[] {
-  return parseTimedTextTranscript(body, lang, /([\d:.,]+)\s+-->\s+([\d:.,]+)/)
-}
-
-function parseSrtTranscript(body: string, lang: string): TranscriptResponse[] {
-  return parseTimedTextTranscript(body, lang, /([\d:.,]+)\s+-->\s+([\d:.,]+)/)
-}
-
-function parseTranscriptBody(body: string, lang: string): TranscriptResponse[] {
-  const trimmed = body.trim()
-  if (!trimmed) return []
-  if (trimmed.startsWith('{')) {
-    return parseJsonTranscript(body, lang)
-  }
-  if (trimmed.startsWith('WEBVTT') || trimmed.includes('-->')) {
-    const vttSegments = parseVttTranscript(body, lang)
-    if (vttSegments.length > 0) {
-      return vttSegments
-    }
-    return parseSrtTranscript(body, lang)
-  }
-  return parseXmlTranscript(body, lang)
-}
-
-function extractInitialPlayerResponse(html: string) {
-  const marker = 'var ytInitialPlayerResponse = '
-  const markerIndex = html.indexOf(marker)
-  if (markerIndex === -1) return null
-
-  let index = markerIndex + marker.length
-  while (index < html.length && html[index] !== '{') {
-    index += 1
-  }
-  if (index >= html.length) return null
-
-  let depth = 0
-  let inString = false
-  let escaped = false
-  let endIndex = -1
-
-  for (let i = index; i < html.length; i += 1) {
-    const char = html[i]
-    if (inString) {
-      if (escaped) {
-        escaped = false
-        continue
-      }
-      if (char === '\\') {
-        escaped = true
-        continue
-      }
-      if (char === '"') {
-        inString = false
-      }
-      continue
-    }
-
-    if (char === '"') {
-      inString = true
-      continue
-    }
-
-    if (char === '{') depth += 1
-    if (char === '}') {
-      depth -= 1
-      if (depth === 0) {
-        endIndex = i + 1
-        break
-      }
-    }
-  }
-
-  if (endIndex === -1) return null
-  try {
-    return JSON.parse(html.slice(index, endIndex)) as {
-      captions?: {
-        playerCaptionsTracklistRenderer?: {
-          captionTracks?: Array<{
-            baseUrl?: string
-            languageCode?: string
-            kind?: string
-          }>
-        }
-      }
-      streamingData?: {
-        formats?: Array<{
-          url?: string
-          mimeType?: string
-          contentLength?: string
-        }>
-        adaptiveFormats?: Array<{
-          url?: string
-          mimeType?: string
-          contentLength?: string
-        }>
-      }
-    }
-  } catch {
-    return null
-  }
-}
-
-function buildMediaCandidatesFromPlayerResponse(playerResponse: {
-  streamingData?: {
-    formats?: Array<{ url?: string; mimeType?: string; contentLength?: string }>
-    adaptiveFormats?: Array<{ url?: string; mimeType?: string; contentLength?: string }>
-  }
-}): MediaCandidate[] {
-  const allFormats = [
-    ...(playerResponse.streamingData?.formats ?? []),
-    ...(playerResponse.streamingData?.adaptiveFormats ?? []),
-  ]
-
-  const mediaCandidates = allFormats
-    .map((format): MediaCandidate | null => {
-      const url = typeof format.url === 'string' ? format.url : ''
-      const mimeType = typeof format.mimeType === 'string' ? format.mimeType : ''
-      if (!url || !mimeType) return null
-
-      const mimeLower = mimeType.toLowerCase()
-      const includesAudioCodec =
-        mimeLower.startsWith('audio/') ||
-        mimeLower.includes('codecs=') && (mimeLower.includes('mp4a') || mimeLower.includes('opus') || mimeLower.includes('vorbis'))
-      if (!includesAudioCodec) return null
-
-      const parsedContentLength = Number.parseInt(format.contentLength ?? '', 10)
-      return {
-        url,
-        mimeType,
-        contentLength: Number.isFinite(parsedContentLength) && parsedContentLength > 0 ? parsedContentLength : null,
-      }
-    })
-    .filter((candidate): candidate is MediaCandidate => candidate !== null)
-
-  mediaCandidates.sort((a, b) => {
-    const aAudio = a.mimeType.toLowerCase().startsWith('audio/') ? 0 : 1
-    const bAudio = b.mimeType.toLowerCase().startsWith('audio/') ? 0 : 1
-    if (aAudio !== bAudio) return aAudio - bAudio
-
-    if (a.contentLength === null && b.contentLength === null) return 0
-    if (a.contentLength === null) return 1
-    if (b.contentLength === null) return -1
-    return a.contentLength - b.contentLength
-  })
-
-  return mediaCandidates
-}
-
-async function fetchWatchPageData(videoId: string): Promise<WatchPageData> {
-  const response = await fetch(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`, {
-    headers: {
-      'User-Agent': WATCH_PAGE_USER_AGENT,
-      'Accept-Language': WATCH_PAGE_ACCEPT_LANGUAGE,
-    },
-  })
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch YouTube watch page (${response.status}).`)
-  }
-
-  const html = await response.text()
-  const playerResponse = extractInitialPlayerResponse(html)
-  const rawTracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks
-
-  const captionTracks: CaptionTrack[] = Array.isArray(rawTracks)
-    ? rawTracks
-        .map((track): CaptionTrack => {
-          const kind: CaptionTrack['kind'] = track.kind === 'asr' ? 'asr' : 'manual'
-          return {
-            baseUrl: typeof track.baseUrl === 'string' ? track.baseUrl : '',
-            languageCode: typeof track.languageCode === 'string' ? track.languageCode : '',
-            kind,
-          }
-        })
-        .filter((track) => track.baseUrl.length > 0)
-    : []
-
-  const mediaCandidates = playerResponse ? buildMediaCandidatesFromPlayerResponse(playerResponse) : []
-
-  return {
-    captionTracks,
-    mediaCandidates,
-  }
-}
-
-function buildTrackCandidateUrls(baseUrl: string) {
-  const candidates = [baseUrl, `${baseUrl}&fmt=srv3`, `${baseUrl}&fmt=json3`, `${baseUrl}&fmt=vtt`]
-  return Array.from(new Set(candidates))
-}
-
-async function fetchTrackTranscript(track: CaptionTrack): Promise<TranscriptResponse[]> {
-  for (const url of buildTrackCandidateUrls(track.baseUrl)) {
-    try {
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': WATCH_PAGE_USER_AGENT,
-          'Accept-Language': track.languageCode || WATCH_PAGE_ACCEPT_LANGUAGE,
-        },
-      })
-
-      if (!response.ok) {
-        continue
-      }
-
-      const body = await response.text()
-      const parsedSegments = parseTranscriptBody(body, track.languageCode || 'en')
-      if (parsedSegments.length > 0) {
-        return parsedSegments
-      }
-    } catch {
-      continue
-    }
-  }
-
-  return []
-}
-
-function sortTracksByPriority(tracks: CaptionTrack[]) {
-  return [...tracks].sort((a, b) => {
-    const aScore = (a.kind === 'manual' ? 2 : 0) + (a.languageCode === 'en' ? 1 : 0)
-    const bScore = (b.kind === 'manual' ? 2 : 0) + (b.languageCode === 'en' ? 1 : 0)
-    return bScore - aScore
-  })
 }
 
 function getYtDlpLanguageSelector(availableLanguages: string[]) {
@@ -657,6 +274,389 @@ async function fetchTranscriptWithYtDlp(
   }
 }
 
+function inferAudioMimeTypeFromFileName(fileName: string) {
+  const lowered = fileName.toLowerCase()
+  if (lowered.endsWith('.m4a') || lowered.endsWith('.mp4')) {
+    return 'audio/mp4'
+  }
+  if (lowered.endsWith('.mp3')) {
+    return 'audio/mpeg'
+  }
+  if (lowered.endsWith('.ogg') || lowered.endsWith('.opus')) {
+    return 'audio/ogg'
+  }
+  return 'audio/webm'
+}
+
+function inferAudioExtensionFromMimeType(mimeType: string) {
+  const lowered = mimeType.toLowerCase()
+  if (lowered.includes('webm')) {
+    return 'webm'
+  }
+  if (lowered.includes('mpeg') || lowered.includes('mp3')) {
+    return 'mp3'
+  }
+  if (lowered.includes('ogg') || lowered.includes('opus')) {
+    return 'ogg'
+  }
+  return 'mp4'
+}
+
+function isOpenAiAudioTooLargeError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  const message = error.message.toLowerCase()
+  return (
+    message.includes('too large for this model') ||
+    message.includes('total number of tokens in instructions + audio is too large') ||
+    message.includes('maximum context length')
+  )
+}
+
+function isOpenAiAudioUnsupportedError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  return error.message.toLowerCase().includes('audio file might be corrupted or unsupported')
+}
+
+async function probeAudioDurationSeconds(absolutePath: string): Promise<number> {
+  try {
+    const { stdout } = await execFileAsync(
+      DEFAULT_FFPROBE_BIN,
+      ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', absolutePath],
+      {
+        timeout: DEFAULT_STT_TIMEOUT_MS,
+        maxBuffer: 256 * 1024,
+      }
+    )
+
+    const parsed = Number.parseFloat(stdout.trim())
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+  } catch {
+    return 0
+  }
+}
+
+async function transcribeAudioFileWithOpenAi(params: {
+  absolutePath: string
+  languageHint?: string
+}): Promise<{ text: string; durationSeconds: number }> {
+  const transcribeAbsolutePath = async (absolutePath: string) => {
+    const fileName = absolutePath.split('/').at(-1) || 'audio.webm'
+    const mimeType = inferAudioMimeTypeFromFileName(fileName)
+    const bytes = new Uint8Array(await readFile(absolutePath))
+
+    if (bytes.byteLength > DEFAULT_STT_MAX_BYTES) {
+      throw new Error(`Audio file exceeds STT byte limit (${DEFAULT_STT_MAX_BYTES} bytes).`)
+    }
+
+    const transcription = await transcribeMediaWithOpenAi({
+      bytes,
+      mimeType,
+      languageHint: params.languageHint,
+    })
+
+    return {
+      text: transcription.text,
+      durationSeconds:
+        transcription.durationSeconds > 0 ? transcription.durationSeconds : await probeAudioDurationSeconds(absolutePath),
+    }
+  }
+
+  try {
+    return await transcribeAbsolutePath(params.absolutePath)
+  } catch (error: unknown) {
+    if (!isOpenAiAudioUnsupportedError(error)) {
+      throw error
+    }
+
+    const normalizedAbsolutePath = join(tmpdir(), `youtube-audio-normalized-${Date.now()}.mp3`)
+
+    try {
+      await execFileAsync(
+        DEFAULT_FFMPEG_BIN,
+        [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-i',
+          params.absolutePath,
+          '-vn',
+          '-map',
+          '0:a:0?',
+          '-ac',
+          '1',
+          '-ar',
+          '16000',
+          '-c:a',
+          'libmp3lame',
+          '-b:a',
+          '64k',
+          normalizedAbsolutePath,
+        ],
+        {
+          timeout: DEFAULT_STT_TIMEOUT_MS,
+          maxBuffer: 512 * 1024,
+        }
+      )
+
+      return await transcribeAbsolutePath(normalizedAbsolutePath)
+    } finally {
+      await rm(normalizedAbsolutePath, { force: true }).catch(() => {})
+    }
+  }
+}
+
+async function transcribeAudioFileInChunks(params: {
+  absolutePath: string
+  languageHint?: string
+  onStatus?: YoutubeTranscriptStatusHandler
+}): Promise<{ text: string; durationSeconds: number }> {
+  const chunkDir = await mkdtemp(join(tmpdir(), 'yt-audio-chunks-'))
+  const chunkPattern = join(chunkDir, 'chunk-%03d.mp3')
+
+  try {
+    await execFileAsync(
+      DEFAULT_FFMPEG_BIN,
+      [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-i',
+        params.absolutePath,
+        '-vn',
+        '-map',
+        '0:a:0?',
+        '-ac',
+        '1',
+        '-ar',
+        '16000',
+        '-c:a',
+        'libmp3lame',
+        '-b:a',
+        '64k',
+        '-f',
+        'segment',
+        '-segment_time',
+        String(DEFAULT_STT_SEGMENT_SECONDS),
+        '-reset_timestamps',
+        '1',
+        chunkPattern,
+      ],
+      {
+        timeout: Math.max(DEFAULT_STT_TIMEOUT_MS, DEFAULT_STT_SEGMENT_SECONDS * 1000),
+        maxBuffer: 512 * 1024,
+      }
+    )
+
+    const chunkFiles = (await readdir(chunkDir))
+      .filter((fileName) => fileName.startsWith('chunk-'))
+      .sort()
+
+    if (chunkFiles.length === 0) {
+      throw new Error('ffmpeg did not produce any STT chunks.')
+    }
+
+    await params.onStatus?.({
+      step: 'audio-chunking',
+      message: `Video largo detectado. Transcribiendo audio por segmentos (${chunkFiles.length})...`,
+    })
+
+    const textParts: string[] = []
+    let totalDurationSeconds = 0
+
+    for (const [index, chunkFileName] of chunkFiles.entries()) {
+      await params.onStatus?.({
+        step: 'audio-chunk-progress',
+        message: `Transcribiendo segmento ${index + 1}/${chunkFiles.length} del audio...`,
+      })
+
+      const chunkAbsolutePath = join(chunkDir, chunkFileName)
+      const part = await transcribeAudioFileWithOpenAi({
+        absolutePath: chunkAbsolutePath,
+        languageHint: params.languageHint,
+      })
+
+      if (part.text.trim()) {
+        textParts.push(part.text.trim())
+      }
+      totalDurationSeconds += part.durationSeconds
+    }
+
+    const text = textParts.join('\n\n').trim()
+    if (!text) {
+      throw new Error('Chunked STT returned empty text.')
+    }
+
+    return {
+      text,
+      durationSeconds: totalDurationSeconds,
+    }
+  } finally {
+    await rm(chunkDir, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+async function transcribeFromYtDlpAudioDownload(params: {
+  videoId: string
+  languageHint?: string
+  onStatus?: YoutubeTranscriptStatusHandler
+}): Promise<YtDlpAudioSttResult> {
+  const enabled = process.env.YOUTUBE_YTDLP_ENABLED?.trim() !== '0'
+  if (!enabled) {
+    return {
+      segments: null,
+      usageEvent: null,
+      attempted: false,
+      reason: 'yt-dlp fallback is disabled via YOUTUBE_YTDLP_ENABLED=0.',
+    }
+  }
+
+  if (!isOpenAiSttAvailable()) {
+    return {
+      segments: null,
+      usageEvent: null,
+      attempted: false,
+      reason: 'OPENAI_API_KEY is not configured for audio fallback.',
+    }
+  }
+
+  const videoUrl = `https://www.youtube.com/watch?v=${params.videoId}`
+  const tempDir = await mkdtemp(join(tmpdir(), 'yt-dlp-audio-'))
+
+  try {
+    await params.onStatus?.({
+      step: 'audio-download',
+      message: 'Subtítulos bloqueados. Descargando audio del video como respaldo...',
+    })
+
+    await execFileAsync(
+      DEFAULT_YTDLP_BIN,
+      ['-f', 'bestaudio/best', '--output', join(tempDir, 'audio.%(ext)s'), '--no-warnings', '--no-progress', videoUrl],
+      {
+        timeout: Math.max(DEFAULT_YTDLP_TIMEOUT_MS, DEFAULT_STT_TIMEOUT_MS),
+        maxBuffer: 2 * 1024 * 1024,
+      }
+    )
+
+    const files = await readdir(tempDir)
+    const audioFileName = files.find((fileName) => fileName.startsWith('audio.'))
+    if (!audioFileName) {
+      return {
+        segments: null,
+        usageEvent: null,
+        attempted: true,
+        reason: 'yt-dlp did not produce an audio file for STT.',
+      }
+    }
+
+    const absolutePath = join(tempDir, audioFileName)
+    const bytes = new Uint8Array(await readFile(absolutePath))
+    if (bytes.byteLength === 0) {
+      return {
+        segments: null,
+        usageEvent: null,
+        attempted: true,
+        reason: 'yt-dlp downloaded an empty audio file for STT.',
+      }
+    }
+
+    let transcription: { text: string; durationSeconds: number }
+    if (bytes.byteLength > DEFAULT_STT_MAX_BYTES) {
+      transcription = await transcribeAudioFileInChunks({
+        absolutePath,
+        languageHint: params.languageHint,
+        onStatus: params.onStatus,
+      })
+    } else {
+      if (bytes.byteLength > DEFAULT_STT_DIRECT_MAX_BYTES) {
+        transcription = await transcribeAudioFileInChunks({
+          absolutePath,
+          languageHint: params.languageHint,
+          onStatus: params.onStatus,
+        })
+
+        return {
+          segments: [
+            {
+              text: transcription.text,
+              duration: transcription.durationSeconds,
+              offset: 0,
+              lang: params.languageHint,
+            },
+          ],
+          usageEvent: {
+            provider: 'openai',
+            model: DEFAULT_STT_MODEL,
+            useType: 'transcription',
+            costUsd: estimateTranscriptionCostUsd(DEFAULT_STT_MODEL, transcription.durationSeconds),
+            durationSeconds: transcription.durationSeconds,
+            pricingVersion: AI_PRICING_VERSION,
+          },
+          attempted: true,
+          reason: null,
+        }
+      }
+
+      await params.onStatus?.({
+        step: 'audio-transcription',
+        message: 'Transcribiendo audio del video con IA...',
+      })
+
+      try {
+        transcription = await transcribeAudioFileWithOpenAi({
+          absolutePath,
+          languageHint: params.languageHint,
+        })
+      } catch (error: unknown) {
+        if (!isOpenAiAudioTooLargeError(error)) {
+          throw error
+        }
+
+        transcription = await transcribeAudioFileInChunks({
+          absolutePath,
+          languageHint: params.languageHint,
+          onStatus: params.onStatus,
+        })
+      }
+    }
+
+    return {
+      segments: [
+        {
+          text: transcription.text,
+          duration: transcription.durationSeconds,
+          offset: 0,
+          lang: params.languageHint,
+        },
+      ],
+      usageEvent: {
+        provider: 'openai',
+        model: DEFAULT_STT_MODEL,
+        useType: 'transcription',
+        costUsd: estimateTranscriptionCostUsd(DEFAULT_STT_MODEL, transcription.durationSeconds),
+        durationSeconds: transcription.durationSeconds,
+        pricingVersion: AI_PRICING_VERSION,
+      },
+      attempted: true,
+      reason: null,
+    }
+  } catch (error: unknown) {
+    return {
+      segments: null,
+      usageEvent: null,
+      attempted: true,
+      reason: parseExecErrorMessage(error),
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
 function isCaptionAvailabilityError(error: unknown) {
   return (
     error instanceof YoutubeTranscriptDisabledError ||
@@ -717,13 +717,13 @@ async function transcribeMediaWithOpenAi(params: {
   }
 
   const openai = new OpenAI({ apiKey })
-  const extension = params.mimeType.includes('webm') ? 'webm' : 'mp4'
+  const extension = inferAudioExtensionFromMimeType(params.mimeType)
   const transcriptionFile = await toFile(params.bytes, `youtube-audio.${extension}`, { type: params.mimeType })
 
   const transcription = await openai.audio.transcriptions.create({
     file: transcriptionFile,
     model: DEFAULT_STT_MODEL as 'gpt-4o-mini-transcribe',
-    response_format: 'verbose_json',
+    response_format: 'json',
     ...(params.languageHint ? { language: params.languageHint } : {}),
   })
 
@@ -892,7 +892,24 @@ async function fetchYoutubeOfficialTranscript(videoId: string): Promise<Transcri
   }
 }
 
-export async function resolveYoutubeTranscriptWithFallback(videoId: string): Promise<YoutubeTranscriptResolution> {
+export async function resolveYoutubeTranscriptWithFallback(
+  videoId: string,
+  options: ResolveYoutubeTranscriptOptions = {}
+): Promise<YoutubeTranscriptResolution> {
+  try {
+    const customSegments = await fetchTranscriptCustom(videoId)
+    if (customSegments.length > 0) {
+      return {
+        segments: customSegments,
+        source: 'custom_extractor',
+        usageEvents: [],
+      }
+    }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'unknown custom extractor error'
+    console.warn(`[youtube-transcript-fallback] Custom extractor failed for ${videoId}: ${message}`)
+  }
+
   let primaryError: unknown = null
 
   try {
@@ -912,35 +929,13 @@ export async function resolveYoutubeTranscriptWithFallback(videoId: string): Pro
     }
   }
 
-  const watchPageData = await fetchWatchPageData(videoId)
-  const tracks = watchPageData.captionTracks
-  if (tracks.length === 0) {
-    const officialSegments = await fetchYoutubeOfficialTranscript(videoId)
-    if (officialSegments && officialSegments.length > 0) {
-      return {
-        segments: officialSegments,
-        source: 'youtube_official_api',
-        usageEvents: [],
-      }
-    }
-    if (primaryError) {
-      throw primaryError
-    }
-    throw new YoutubeTranscriptNotAvailableError(videoId)
-  }
-
-  for (const track of sortTracksByPriority(tracks)) {
-    const segments = await fetchTrackTranscript(track)
-    if (segments.length > 0) {
-      return {
-        segments,
-        source: 'watch_page_caption_track',
-        usageEvents: [],
-      }
-    }
-  }
-
-  const availableLanguages = Array.from(new Set(tracks.map((track) => track.languageCode).filter(Boolean)))
+  const watchPageData = await fetchYoutubeWatchPageData(videoId).catch(() => ({
+    html: '',
+    playerResponse: null,
+    captionTracks: [],
+    mediaCandidates: [],
+  }))
+  const availableLanguages = Array.from(new Set(watchPageData.captionTracks.map((track) => track.languageCode).filter(Boolean)))
   const ytDlpResult = await fetchTranscriptWithYtDlp(videoId, availableLanguages)
   if (ytDlpResult.segments && ytDlpResult.segments.length > 0) {
     return {
@@ -949,10 +944,33 @@ export async function resolveYoutubeTranscriptWithFallback(videoId: string): Pro
       usageEvents: [],
     }
   }
+  if (ytDlpResult.attempted && ytDlpResult.reason) {
+    console.warn(`[youtube-transcript-fallback] yt-dlp subtitles failed for ${videoId}: ${ytDlpResult.reason}`)
+  }
 
   const sttLanguageHint = availableLanguages.includes('en') ? 'en' : availableLanguages[0]
+  const ytDlpAudioSttResult = await transcribeFromYtDlpAudioDownload({
+    videoId,
+    languageHint: sttLanguageHint,
+    onStatus: options.onStatus,
+  })
+  if (ytDlpAudioSttResult.segments && ytDlpAudioSttResult.usageEvent) {
+    return {
+      segments: ytDlpAudioSttResult.segments,
+      source: 'openai_audio_transcription',
+      usageEvents: [ytDlpAudioSttResult.usageEvent],
+    }
+  }
+  if (ytDlpAudioSttResult.attempted && ytDlpAudioSttResult.reason) {
+    console.warn(`[youtube-transcript-fallback] yt-dlp audio STT failed for ${videoId}: ${ytDlpAudioSttResult.reason}`)
+  }
 
   try {
+    await options.onStatus?.({
+      step: 'audio-fallback',
+      message: 'Probando una segunda ruta de audio automática...',
+    })
+
     const sttResult = await transcribeFromMediaCandidates({
       mediaCandidates: watchPageData.mediaCandidates,
       languageHint: sttLanguageHint,
@@ -989,10 +1007,17 @@ export async function resolveYoutubeTranscriptWithFallback(videoId: string): Pro
     }
   }
 
+  if (availableLanguages.length === 0) {
+    if (primaryError) {
+      throw primaryError
+    }
+    throw new YoutubeTranscriptNotAvailableError(videoId)
+  }
+
   throw new YoutubeTranscriptTemporarilyUnavailableError(videoId, availableLanguages, {
     audioFallbackAttempted: false,
     audioFallbackReason: (() => {
-      const reasons = [ytDlpResult.reason]
+      const reasons = [ytDlpResult.reason, ytDlpAudioSttResult.reason]
       reasons.push(
         isOpenAiSttAvailable()
           ? 'No suitable media candidate was available for STT.'

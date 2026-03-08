@@ -1,6 +1,6 @@
 FROM node:20-alpine
 WORKDIR /app
 COPY package*.json ./
-RUN apk add --no-cache yt-dlp && npm install
+RUN apk add --no-cache yt-dlp ffmpeg && npm install
 EXPOSE 3030
 CMD ["sh", "-c", "mkdir -p .next && find .next -mindepth 1 -maxdepth 1 -exec rm -rf {} + && npm run dev"]

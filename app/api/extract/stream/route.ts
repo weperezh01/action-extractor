@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
-import { getUserFromRequest } from '@/lib/auth'
+import { getUserFromRequest, isAdminEmail } from '@/lib/auth'
 import {
   createExtraction,
   findExtractionOrderNumberForUser,
@@ -8,9 +8,9 @@ import {
   findVideoCacheByVideoId,
   getAppSetting,
   getPromptOverride,
-  logAiUsage,
   upsertVideoCache,
 } from '@/lib/db'
+import { logAiUsageSafely, type AiUsageLogInput } from '@/lib/ai-usage-log'
 import { classifyModelError, classifyTranscriptError, retryWithBackoff } from '@/lib/extract-resilience'
 import {
   buildExtractionUserPrompt,
@@ -189,8 +189,8 @@ async function parseExtractionWithRepair(params: {
   savedTime: string
   onRepair?: () => void
   userId?: string | null
-  extractionId?: string | null
   sourceType?: string | null
+  onUsage?: (usage: Omit<AiUsageLogInput, 'extractionId'>) => Promise<void> | void
 }) {
   const {
     modelText,
@@ -202,8 +202,8 @@ async function parseExtractionWithRepair(params: {
     savedTime,
     onRepair,
     userId,
-    extractionId,
     sourceType,
+    onUsage,
   } = params
 
   const parseWithTime = (text: string) =>
@@ -255,12 +255,11 @@ async function parseExtractionWithRepair(params: {
           continue
         }
 
-        void logAiUsage({
+        await onUsage?.({
           provider,
           model,
           useType: 'repair',
           userId,
-          extractionId,
           sourceType,
           inputTokens: repairResult.inputTokens,
           outputTokens: repairResult.outputTokens,
@@ -284,6 +283,7 @@ async function parseExtractionWithRepair(params: {
 
 export async function POST(req: NextRequest) {
   const user = await getUserFromRequest(req)
+  const isAdminUser = Boolean(user?.email && isAdminEmail(user.email))
   const isGuest = !user && req.headers.get('X-Guest-Mode') === '1'
 
   if (!user && !isGuest) {
@@ -389,7 +389,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Servicio de IA no configurado. Falta la API key del proveedor seleccionado.' }, { status: 503 })
     }
 
-    if (user) {
+    if (user && !isAdminUser) {
       const rateLimit = await consumeUserExtractionRateLimit(user.id)
       if (!rateLimit.allowed) {
         return createRateLimitResponse(rateLimit)
@@ -425,6 +425,8 @@ export async function POST(req: NextRequest) {
       }
 
       try {
+        const pendingAiUsageLogs: Array<Omit<AiUsageLogInput, 'extractionId'>> = []
+
         if (sourceType === 'youtube') {
           send('status', {
             step: 'cache',
@@ -545,8 +547,8 @@ export async function POST(req: NextRequest) {
         let transcriptSource:
           | 'cache_transcript'
           | 'cache_result'
+          | 'custom_extractor'
           | 'youtube_transcript'
-          | 'watch_page_caption_track'
           | 'yt_dlp_subtitles'
           | 'openai_audio_transcription'
           | 'youtube_official_api'
@@ -575,7 +577,10 @@ export async function POST(req: NextRequest) {
           } else {
             try {
               const transcriptResolution = await retryWithBackoff(
-                () => resolveYoutubeTranscriptWithFallback(videoId!),
+                () =>
+                  resolveYoutubeTranscriptWithFallback(videoId!, {
+                    onStatus: (update) => send('status', update),
+                  }),
                 {
                   maxAttempts: 3,
                   shouldRetry: (transcriptError) => classifyTranscriptError(transcriptError).retryable,
@@ -610,12 +615,11 @@ export async function POST(req: NextRequest) {
                 transcriptText = transcriptResolution.segments.map((segment) => segment.text).join(' ')
                 transcriptSource = transcriptResolution.source
                 for (const usageEvent of transcriptResolution.usageEvents) {
-                  void logAiUsage({
+                  pendingAiUsageLogs.push({
                     provider: usageEvent.provider,
                     model: usageEvent.model,
                     useType: usageEvent.useType,
                     userId: user?.id ?? null,
-                    extractionId: pendingExtractionId,
                     sourceType,
                     inputTokens: 0,
                     outputTokens: 0,
@@ -746,12 +750,11 @@ export async function POST(req: NextRequest) {
             }
           )
           modelText = aiResult.text
-          void logAiUsage({
+          pendingAiUsageLogs.push({
             provider: EXTRACTION_PROVIDER,
             model: EXTRACTION_MODEL,
             useType: 'extraction',
             userId: user?.id ?? null,
-            extractionId: pendingExtractionId,
             sourceType,
             inputTokens: aiResult.inputTokens,
             outputTokens: aiResult.outputTokens,
@@ -777,8 +780,10 @@ export async function POST(req: NextRequest) {
             mode,
             resolvedOutputLanguage,
             userId: user?.id ?? null,
-            extractionId: pendingExtractionId,
             sourceType,
+            onUsage: (usage) => {
+              pendingAiUsageLogs.push(usage)
+            },
             onRepair: () =>
               send('status', {
                 step: 'repair-json',
@@ -838,6 +843,14 @@ export async function POST(req: NextRequest) {
             sourceFileMimeType: bodySourceFileMimeType,
             transcriptSource,
           })
+
+          for (const usage of pendingAiUsageLogs) {
+            await logAiUsageSafely({
+              ...usage,
+              extractionId: saved.id,
+            })
+          }
+
           const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
 
           send('result', {
@@ -864,6 +877,13 @@ export async function POST(req: NextRequest) {
             hasSourceText: !!sourceTextToStore,
           })
         } else {
+          for (const usage of pendingAiUsageLogs) {
+            await logAiUsageSafely({
+              ...usage,
+              extractionId: null,
+            })
+          }
+
           send('result', {
             ...responsePayload,
             url: rawUrl || null,

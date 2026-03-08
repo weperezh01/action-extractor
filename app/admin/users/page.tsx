@@ -91,6 +91,58 @@ const USE_TYPE_LABELS: Record<string, string> = {
   transcription: 'Transcripción',
 }
 
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  youtube: 'YouTube',
+  web_url: 'Web',
+  pdf: 'PDF',
+  docx: 'DOCX',
+  text: 'Texto',
+  manual: 'Manual',
+}
+
+const TRANSCRIPT_SOURCE_LABELS: Record<string, string> = {
+  cache_exact: 'Cache exacta',
+  cache_transcript: 'Transcript en caché',
+  cache_result: 'Resumen previo',
+  openai_audio_transcription: 'Audio fallback',
+  custom_extractor: 'Extractor propio',
+  youtube_transcript: 'youtube-transcript',
+  yt_dlp_subtitles: 'yt-dlp subtitles',
+  youtube_official_api: 'YouTube API oficial',
+}
+
+type ExtractionResolutionKind = 'cache' | 'audio' | 'transcript' | 'other'
+
+function resolveTranscriptKind(transcriptSource: string | null): ExtractionResolutionKind {
+  if (!transcriptSource) return 'other'
+  if (['cache_exact', 'cache_transcript', 'cache_result'].includes(transcriptSource)) return 'cache'
+  if (transcriptSource === 'openai_audio_transcription') return 'audio'
+  if (['custom_extractor', 'youtube_transcript', 'yt_dlp_subtitles', 'youtube_official_api'].includes(transcriptSource)) {
+    return 'transcript'
+  }
+  return 'other'
+}
+
+function transcriptKindClasses(kind: ExtractionResolutionKind) {
+  if (kind === 'cache') {
+    return 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
+  }
+  if (kind === 'audio') {
+    return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
+  }
+  if (kind === 'transcript') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
+  }
+  return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-300'
+}
+
+function transcriptKindLabel(kind: ExtractionResolutionKind) {
+  if (kind === 'cache') return 'Caché'
+  if (kind === 'audio') return 'Audio'
+  if (kind === 'transcript') return 'Transcript'
+  return 'Legacy'
+}
+
 function formatMarginPct(value: number | null) {
   if (value === null || !Number.isFinite(value)) return 'N/A'
   return `${(value * 100).toFixed(1)}%`
@@ -136,6 +188,12 @@ interface AdminUserExtraction {
   extraction_mode: string
   objective: string
   created_at: string
+  source_type: string
+  transcript_source: string | null
+  total_ai_calls: number
+  total_ai_cost_usd: number
+  audio_transcription_calls: number
+  audio_transcription_cost_usd: number
 }
 
 interface AdminUserExtractionsResponse {
@@ -189,6 +247,7 @@ export default function AdminUsersPage() {
   const [togglingUserId, setTogglingUserId] = useState<string | null>(null)
 
   const hasLoadedUsersRef = useRef(false)
+  const extractionsSectionRef = useRef<HTMLElement | null>(null)
 
   const loadUsers = useCallback(async () => {
     setError(null)
@@ -331,6 +390,9 @@ export default function AdminUsersPage() {
       void loadUserExtractions(userId)
       void loadUserCostDetail(userId)
       void loadUserProfitability(userId)
+      requestAnimationFrame(() => {
+        extractionsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
     },
     [loadUserExtractions, loadUserCostDetail, loadUserProfitability]
   )
@@ -771,7 +833,10 @@ export default function AdminUsersPage() {
           </section>
         )}
 
-        <section className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+        <section
+          ref={extractionsSectionRef}
+          className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+        >
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <h2 className="text-base font-semibold">Extracciones por usuario</h2>
             {detailPayload?.user && (
@@ -831,7 +896,44 @@ export default function AdminUsersPage() {
                       <span className="text-[11px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 dark:bg-indigo-900/40 dark:text-indigo-300 dark:border-indigo-700">
                         {resolveModeLabel(item.extraction_mode)}
                       </span>
+                      <span className="text-[11px] px-2 py-0.5 rounded-full border border-sky-100 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950/40 dark:text-sky-300">
+                        {SOURCE_TYPE_LABELS[item.source_type] ?? item.source_type}
+                      </span>
+                      {item.source_type === 'youtube' && (
+                        <>
+                          <span className={`text-[11px] px-2 py-0.5 rounded-full border ${transcriptKindClasses(resolveTranscriptKind(item.transcript_source))}`}>
+                            {transcriptKindLabel(resolveTranscriptKind(item.transcript_source))}
+                          </span>
+                          <span className="text-[11px] px-2 py-0.5 rounded-full border border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                            {item.transcript_source
+                              ? (TRANSCRIPT_SOURCE_LABELS[item.transcript_source] ?? item.transcript_source)
+                              : 'Sin dato histórico'}
+                          </span>
+                          <span className="text-[11px] px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+                            Audio STT {formatCurrencyUsd(item.audio_transcription_cost_usd)}
+                          </span>
+                          {item.transcript_source === 'openai_audio_transcription' && item.audio_transcription_calls === 0 && (
+                            <span className="text-[11px] px-2 py-0.5 rounded-full border border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+                              Audio sin log de costo
+                            </span>
+                          )}
+                        </>
+                      )}
+                      <span className="text-[11px] px-2 py-0.5 rounded-full border border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
+                        IA total {formatCurrencyUsd(item.total_ai_cost_usd)}
+                      </span>
+                      {item.total_ai_calls === 0 && (
+                        <span className="text-[11px] px-2 py-0.5 rounded-full border border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+                          Sin log de costo
+                        </span>
+                      )}
                       <span className="text-xs text-slate-500 dark:text-slate-400">{formatDateTime(item.created_at)}</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400">
+                      <span>{item.total_ai_calls} llamadas IA</span>
+                      {item.source_type === 'youtube' && (
+                        <span>{item.audio_transcription_calls} llamadas STT</span>
+                      )}
                     </div>
                   </div>
                 </div>

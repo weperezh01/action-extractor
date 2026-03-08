@@ -235,11 +235,38 @@ interface TopVideoStat {
   video_title: string | null
   thumbnail_url: string | null
   total: number
+  total_ai_cost_usd: number
+  audio_transcription_cost_usd: number
+  audio_transcription_calls: number
+  missing_cost_log_total: number
+  missing_audio_cost_log_total: number
 }
 
 interface ModeStat {
   extraction_mode: string
   total: number
+}
+
+type TranscriptResolutionKind = 'cache' | 'audio' | 'transcript' | 'other'
+
+interface TranscriptSourceStat {
+  transcript_source: string
+  kind: TranscriptResolutionKind
+  total: number
+  share_of_youtube: number
+  share_of_live: number
+}
+
+interface YoutubeResolutionStats {
+  youtube_extractions_total: number
+  cache_total: number
+  live_total: number
+  audio_total: number
+  transcript_total: number
+  other_total: number
+  audio_transcription_calls: number
+  audio_transcription_cost_usd: number
+  transcript_sources: TranscriptSourceStat[]
 }
 
 interface AdminStatsPayload {
@@ -253,6 +280,7 @@ interface AdminStatsPayload {
   extractions_by_day: DailyStat[]
   top_videos: TopVideoStat[]
   extraction_modes: ModeStat[]
+  youtube_resolution: YoutubeResolutionStats
 }
 
 interface AdminEstimationPayload {
@@ -295,7 +323,90 @@ interface AdminAiCostStats {
   by_day: AiCostByDay[]
 }
 
+interface AiCostByUseType {
+  use_type: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+}
+
+interface AiCostBySourceType {
+  source_type: string
+  calls: number
+  cost_usd: number
+}
+
+interface AiCostRecentCall {
+  id: string
+  created_at: string
+  use_type: string
+  source_type: string | null
+  user_id: string | null
+  user_email: string | null
+  extraction_id: string | null
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+}
+
+interface AdminAiCostModelDetail {
+  period_days: number
+  provider: string
+  model: string
+  total_calls: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost_usd: number
+  by_use_type: AiCostByUseType[]
+  by_source_type: AiCostBySourceType[]
+  recent_calls: AiCostRecentCall[]
+}
+
 const PERIOD_OPTIONS = [7, 14, 30, 60, 90]
+
+const TRANSCRIPT_SOURCE_LABELS: Record<string, string> = {
+  cache_exact: 'Cache exacta',
+  cache_transcript: 'Transcript en caché',
+  cache_result: 'Resumen previo del video',
+  openai_audio_transcription: 'Audio STT (OpenAI)',
+  custom_extractor: 'Extractor propio',
+  youtube_transcript: 'Librería youtube-transcript',
+  yt_dlp_subtitles: 'yt-dlp subtitles',
+  youtube_official_api: 'YouTube API oficial',
+  unknown: 'Legacy / sin dato',
+}
+
+const TRANSCRIPT_KIND_LABELS: Record<TranscriptResolutionKind, string> = {
+  cache: 'Caché',
+  audio: 'Audio',
+  transcript: 'Transcript',
+  other: 'Otro',
+}
+
+const TRANSCRIPT_KIND_BADGE_CLASSES: Record<TranscriptResolutionKind, string> = {
+  cache: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+  audio: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+  transcript: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+  other: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300',
+}
+
+const USE_TYPE_LABELS: Record<string, string> = {
+  extraction: 'Extracción',
+  chat: 'Chat',
+  repair: 'Reparación JSON',
+  transcription: 'Transcripción',
+}
+
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  youtube: 'YouTube',
+  web_url: 'Web',
+  pdf: 'PDF',
+  docx: 'DOCX',
+  text: 'Texto',
+  manual: 'Manual',
+  unknown: 'Sin dato',
+}
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat('es-ES').format(value)
@@ -307,6 +418,13 @@ function formatCurrencyUsd(value: number) {
     currency: 'USD',
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
+  }).format(value)
+}
+
+function formatPercent(value: number) {
+  return new Intl.NumberFormat('es-ES', {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
   }).format(value)
 }
 
@@ -327,6 +445,187 @@ function formatTokens(n: number) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return String(n)
+}
+
+function formatCurrencyUsdPrecise(value: number) {
+  return new Intl.NumberFormat('es-ES', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  }).format(value)
+}
+
+function YoutubeResolutionSection({ stats }: { stats: YoutubeResolutionStats }) {
+  const maxCount = stats.transcript_sources.reduce((acc, item) => (item.total > acc ? item.total : acc), 0)
+  const cacheShare = stats.youtube_extractions_total > 0
+    ? (stats.cache_total / stats.youtube_extractions_total) * 100
+    : 0
+  const liveTranscriptShare = stats.live_total > 0
+    ? (stats.transcript_total / stats.live_total) * 100
+    : 0
+  const liveAudioShare = stats.live_total > 0
+    ? (stats.audio_total / stats.live_total) * 100
+    : 0
+  const averageAudioSttCost = stats.audio_transcription_calls > 0
+    ? stats.audio_transcription_cost_usd / stats.audio_transcription_calls
+    : 0
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <h2 className="text-lg font-bold">Resolución YouTube</h2>
+        <span className="text-xs bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300 px-2 py-0.5 rounded-full font-medium">
+          caché vs transcript vs audio
+        </span>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+        <p className="text-sm text-slate-600 dark:text-slate-300">
+          Estas métricas solo cuentan extracciones exitosas con <code className="rounded bg-slate-100 px-1 py-0.5 dark:bg-slate-800">sourceType = youtube</code>.
+          {' '}“Live” significa que no salió desde caché en ese request.
+        </p>
+      </div>
+
+      {stats.youtube_extractions_total === 0 ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
+          No hay extracciones de YouTube en este período.
+        </div>
+      ) : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <p className="text-xs text-slate-500 uppercase dark:text-slate-400">YouTube total</p>
+              <p className="text-3xl font-bold mt-1">{formatNumber(stats.youtube_extractions_total)}</p>
+              <p className="text-xs text-slate-400 mt-1">extracciones exitosas</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <p className="text-xs text-slate-500 uppercase dark:text-slate-400">Desde caché</p>
+              <p className="text-3xl font-bold mt-1">{formatNumber(stats.cache_total)}</p>
+              <p className="text-xs text-slate-400 mt-1">{formatPercent(cacheShare)}% del total YouTube</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <p className="text-xs text-slate-500 uppercase dark:text-slate-400">Live por transcript</p>
+              <p className="text-3xl font-bold mt-1 text-emerald-700 dark:text-emerald-300">
+                {formatNumber(stats.transcript_total)}
+              </p>
+              <p className="text-xs text-slate-400 mt-1">{formatPercent(liveTranscriptShare)}% de requests live</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <p className="text-xs text-slate-500 uppercase dark:text-slate-400">Live por audio</p>
+              <p className="text-3xl font-bold mt-1 text-amber-700 dark:text-amber-300">
+                {formatNumber(stats.audio_total)}
+              </p>
+              <p className="text-xs text-slate-400 mt-1">{formatPercent(liveAudioShare)}% de requests live</p>
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <h3 className="text-sm font-semibold mb-3">Desglose por transcriptSource</h3>
+              <div className="space-y-3">
+                {stats.transcript_sources.map((item) => {
+                  const widthPct = maxCount > 0 ? Math.max(2, (item.total / maxCount) * 100) : 0
+                  return (
+                    <div key={item.transcript_source} className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-sm font-medium text-slate-800 dark:text-slate-100">
+                              {TRANSCRIPT_SOURCE_LABELS[item.transcript_source] ?? item.transcript_source}
+                            </p>
+                            <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${TRANSCRIPT_KIND_BADGE_CLASSES[item.kind]}`}>
+                              {TRANSCRIPT_KIND_LABELS[item.kind]}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                            {item.transcript_source}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                            {formatNumber(item.total)}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                            {formatPercent(item.share_of_youtube)}% YouTube
+                          </p>
+                        </div>
+                      </div>
+                      <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-sky-500"
+                          style={{ width: `${widthPct}%` }}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                        <span>
+                          {item.kind === 'cache'
+                            ? 'No aplica a live'
+                            : `${formatPercent(item.share_of_live)}% de live`}
+                        </span>
+                        <span>{formatPercent(item.share_of_youtube)}% del total YouTube</span>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <h3 className="text-sm font-semibold mb-3">Lectura rápida</h3>
+              <div className="space-y-3 text-sm">
+                <div className="rounded-lg border border-slate-100 p-3 dark:border-slate-800">
+                  <p className="text-slate-500 dark:text-slate-400">Requests live</p>
+                  <p className="text-2xl font-bold mt-1">{formatNumber(stats.live_total)}</p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {formatPercent(stats.youtube_extractions_total > 0 ? (stats.live_total / stats.youtube_extractions_total) * 100 : 0)}% del total YouTube
+                  </p>
+                </div>
+                <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 dark:border-emerald-900/40 dark:bg-emerald-950/20">
+                  <p className="text-emerald-700 dark:text-emerald-300">Transcript real</p>
+                  <p className="text-2xl font-bold mt-1 text-emerald-800 dark:text-emerald-200">
+                    {formatNumber(stats.transcript_total)}
+                  </p>
+                  <p className="text-xs text-emerald-700/80 dark:text-emerald-300/80 mt-1">
+                    custom extractor + npm lib + yt-dlp + API oficial
+                  </p>
+                </div>
+                <div className="rounded-lg border border-amber-100 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-950/20">
+                  <p className="text-amber-700 dark:text-amber-300">Audio fallback</p>
+                  <p className="text-2xl font-bold mt-1 text-amber-800 dark:text-amber-200">
+                    {formatNumber(stats.audio_total)}
+                  </p>
+                  <p className="text-xs text-amber-700/80 dark:text-amber-300/80 mt-1">
+                    requests que terminaron en OpenAI STT
+                  </p>
+                </div>
+                <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-3 dark:border-indigo-900/40 dark:bg-indigo-950/20">
+                  <p className="text-indigo-700 dark:text-indigo-300">Gasto STT YouTube</p>
+                  <p className="text-2xl font-bold mt-1 text-indigo-800 dark:text-indigo-200">
+                    {formatCurrencyUsd(stats.audio_transcription_cost_usd)}
+                  </p>
+                  <p className="text-xs text-indigo-700/80 dark:text-indigo-300/80 mt-1">
+                    {formatNumber(stats.audio_transcription_calls)} llamadas STT · promedio {formatCurrencyUsd(averageAudioSttCost)}
+                  </p>
+                </div>
+                {stats.other_total > 0 && (
+                  <div className="rounded-lg border border-rose-100 bg-rose-50 p-3 dark:border-rose-900/40 dark:bg-rose-950/20">
+                    <p className="text-rose-700 dark:text-rose-300">Otros</p>
+                    <p className="text-2xl font-bold mt-1 text-rose-800 dark:text-rose-200">
+                      {formatNumber(stats.other_total)}
+                    </p>
+                    <p className="text-xs text-rose-700/80 dark:text-rose-300/80 mt-1">
+                      fuentes no clasificadas o heredadas
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 function CostSvgChart({ data, maxCost }: { data: AiCostByDay[]; maxCost: number }) {
@@ -389,10 +688,259 @@ function CostSvgChart({ data, maxCost }: { data: AiCostByDay[]; maxCost: number 
   )
 }
 
+function AiModelDetailModal({
+  selection,
+  detail,
+  loading,
+  error,
+  periodDays,
+  onClose,
+}: {
+  selection: AiCostByModel
+  detail: AdminAiCostModelDetail | null
+  loading: boolean
+  error: string | null
+  periodDays: number
+  onClose: () => void
+}) {
+  const providerColor = PROVIDER_COLORS[selection.provider] ?? '#6366f1'
+  const totalCalls = detail?.total_calls ?? selection.calls
+  const totalCost = detail?.total_cost_usd ?? selection.cost_usd
+  const avgCostPerCall = totalCalls > 0 ? totalCost / totalCalls : 0
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-sm p-4">
+      <div className="w-full max-w-5xl max-h-[90vh] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5 dark:border-slate-800">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">
+                {MODEL_LABELS[selection.model] ?? selection.model}
+              </h3>
+              <span
+                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold"
+                style={{ backgroundColor: `${providerColor}1A`, color: providerColor }}
+              >
+                <span
+                  className="inline-block h-1.5 w-1.5 rounded-full"
+                  style={{ backgroundColor: providerColor }}
+                />
+                {PROVIDER_LABELS[selection.provider] ?? selection.provider}
+              </span>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Últimos {detail?.period_days ?? periodDays} días
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Desglose del gasto real por tipo de uso, origen y llamadas recientes.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            Cerrar
+          </button>
+        </div>
+
+        <div className="max-h-[calc(90vh-84px)] overflow-y-auto p-6">
+          {loading && (
+            <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-500" />
+              Cargando detalle del modelo...
+            </div>
+          )}
+
+          {error && (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+              {error}
+            </div>
+          )}
+
+          {!loading && !error && detail && (
+            <div className="space-y-5">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                  <p className="text-xs uppercase text-slate-500 dark:text-slate-400">Gasto total</p>
+                  <p className="mt-1 text-2xl font-bold text-indigo-700 dark:text-indigo-300">
+                    {formatCurrencyUsd(detail.total_cost_usd)}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    promedio {formatCurrencyUsdPrecise(avgCostPerCall)} por llamada
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                  <p className="text-xs uppercase text-slate-500 dark:text-slate-400">Llamadas</p>
+                  <p className="mt-1 text-2xl font-bold">{formatNumber(detail.total_calls)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                  <p className="text-xs uppercase text-slate-500 dark:text-slate-400">Tokens entrada</p>
+                  <p className="mt-1 text-2xl font-bold">{formatTokens(detail.total_input_tokens)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                  <p className="text-xs uppercase text-slate-500 dark:text-slate-400">Tokens salida</p>
+                  <p className="mt-1 text-2xl font-bold">{formatTokens(detail.total_output_tokens)}</p>
+                </div>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-[1.25fr_0.95fr]">
+                <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/20">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-semibold">Por tipo de uso</h4>
+                    <span className="text-xs text-slate-400">{detail.by_use_type.length} categorías</span>
+                  </div>
+                  <div className="space-y-2">
+                    {detail.by_use_type.map((item) => (
+                      <div
+                        key={item.use_type}
+                        className="flex items-center justify-between rounded-lg border border-slate-100 p-3 dark:border-slate-800"
+                      >
+                        <div>
+                          <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                            {USE_TYPE_LABELS[item.use_type] ?? item.use_type}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                            {formatNumber(item.calls)} llamadas · ↑ {formatTokens(item.input_tokens)} · ↓ {formatTokens(item.output_tokens)}
+                          </p>
+                        </div>
+                        <p className="font-mono text-sm font-semibold text-slate-900 dark:text-slate-100">
+                          {formatCurrencyUsd(item.cost_usd)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/20">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-semibold">Por origen</h4>
+                    <span className="text-xs text-slate-400">{detail.by_source_type.length} fuentes</span>
+                  </div>
+                  <div className="space-y-2">
+                    {detail.by_source_type.map((item) => {
+                      const pct = detail.total_cost_usd > 0 ? (item.cost_usd / detail.total_cost_usd) * 100 : 0
+                      return (
+                        <div
+                          key={item.source_type}
+                          className="rounded-lg border border-slate-100 p-3 dark:border-slate-800"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                                {SOURCE_TYPE_LABELS[item.source_type] ?? item.source_type}
+                              </p>
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                {formatNumber(item.calls)} llamadas
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="font-mono text-sm font-semibold text-slate-900 dark:text-slate-100">
+                                {formatCurrencyUsd(item.cost_usd)}
+                              </p>
+                              <p className="text-[11px] text-slate-400">{formatPercent(pct)}%</p>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950/20 overflow-hidden">
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+                  <div>
+                    <h4 className="text-sm font-semibold">Últimas llamadas</h4>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Hasta 25 registros más recientes de este modelo.
+                    </p>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-100 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50">
+                        <th className="px-4 py-2 text-left font-semibold uppercase text-slate-500">Fecha</th>
+                        <th className="px-4 py-2 text-left font-semibold uppercase text-slate-500">Uso</th>
+                        <th className="px-4 py-2 text-left font-semibold uppercase text-slate-500">Origen</th>
+                        <th className="px-4 py-2 text-left font-semibold uppercase text-slate-500">Usuario</th>
+                        <th className="px-4 py-2 text-left font-semibold uppercase text-slate-500">Extraction ID</th>
+                        <th className="px-4 py-2 text-right font-semibold uppercase text-slate-500">Tokens</th>
+                        <th className="px-4 py-2 text-right font-semibold uppercase text-slate-500">Costo</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detail.recent_calls.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">
+                            No hay llamadas recientes para este modelo en el período.
+                          </td>
+                        </tr>
+                      ) : (
+                        detail.recent_calls.map((call) => (
+                          <tr key={call.id} className="border-b border-slate-50 dark:border-slate-800/60">
+                            <td className="px-4 py-2.5 text-slate-600 dark:text-slate-300">
+                              {formatDateTime(call.created_at)}
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                                {USE_TYPE_LABELS[call.use_type] ?? call.use_type}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2.5 text-slate-600 dark:text-slate-300">
+                              {SOURCE_TYPE_LABELS[call.source_type ?? 'unknown'] ?? call.source_type ?? 'Sin dato'}
+                            </td>
+                            <td className="px-4 py-2.5">
+                              {call.user_id && call.user_email ? (
+                                <Link
+                                  href={`/admin/users/${encodeURIComponent(call.user_id)}`}
+                                  className="text-indigo-600 hover:underline dark:text-indigo-400"
+                                >
+                                  {call.user_email}
+                                </Link>
+                              ) : (
+                                <span className="text-slate-400">—</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-2.5">
+                              {call.extraction_id ? (
+                                <span className="block max-w-[170px] truncate font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                                  {call.extraction_id}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400">—</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-mono text-slate-600 dark:text-slate-300">
+                              ↑ {formatTokens(call.input_tokens)} / ↓ {formatTokens(call.output_tokens)}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-mono font-semibold text-slate-900 dark:text-slate-100">
+                              {formatCurrencyUsdPrecise(call.cost_usd)}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function AiCostSection({ periodDays }: { periodDays: number }) {
   const [costs, setCosts] = useState<AdminAiCostStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [selectedModel, setSelectedModel] = useState<AiCostByModel | null>(null)
+  const [selectedModelDetail, setSelectedModelDetail] = useState<AdminAiCostModelDetail | null>(null)
+  const [selectedModelLoading, setSelectedModelLoading] = useState(false)
+  const [selectedModelError, setSelectedModelError] = useState<string | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -413,6 +961,53 @@ function AiCostSection({ periodDays }: { periodDays: number }) {
       }
     })()
   }, [periodDays])
+
+  useEffect(() => {
+    if (!selectedModel) {
+      setSelectedModelDetail(null)
+      setSelectedModelLoading(false)
+      setSelectedModelError(null)
+      return
+    }
+
+    let cancelled = false
+    setSelectedModelLoading(true)
+    setSelectedModelError(null)
+
+    void (async () => {
+      try {
+        const params = new URLSearchParams({
+          days: String(periodDays),
+          provider: selectedModel.provider,
+          model: selectedModel.model,
+        })
+        const res = await fetch(`/api/admin/costs/model-detail?${params.toString()}`, { cache: 'no-store' })
+        const data = (await res.json().catch(() => null)) as (AdminAiCostModelDetail & { error?: unknown }) | null
+        if (cancelled) return
+        if (!res.ok || !data) {
+          setSelectedModelError(
+            typeof data?.error === 'string' ? data.error : 'Error al cargar el detalle del modelo.'
+          )
+          setSelectedModelDetail(null)
+          return
+        }
+        setSelectedModelDetail(data)
+      } catch {
+        if (!cancelled) {
+          setSelectedModelError('Error de conexión al cargar el detalle del modelo.')
+          setSelectedModelDetail(null)
+        }
+      } finally {
+        if (!cancelled) {
+          setSelectedModelLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [periodDays, selectedModel?.model, selectedModel?.provider])
 
   const maxModelCost = useMemo(
     () => (costs?.by_model ?? []).reduce((acc, m) => (m.cost_usd > acc ? m.cost_usd : acc), 0),
@@ -528,7 +1123,12 @@ function AiCostSection({ periodDays }: { periodDays: number }) {
                     const providerColor = PROVIDER_COLORS[m.provider] ?? '#6366f1'
                     const widthPct = maxModelCost > 0 ? Math.max(2, (m.cost_usd / maxModelCost) * 100) : 0
                     return (
-                      <div key={`${m.provider}-${m.model}`} className="space-y-1">
+                      <button
+                        key={`${m.provider}-${m.model}`}
+                        type="button"
+                        onClick={() => setSelectedModel(m)}
+                        className="w-full space-y-1 rounded-xl border border-transparent p-2 text-left transition hover:border-slate-200 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 dark:hover:border-slate-700 dark:hover:bg-slate-800/30"
+                      >
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-medium text-slate-700 dark:text-slate-200">
                             {MODEL_LABELS[m.model] ?? m.model}
@@ -557,8 +1157,11 @@ function AiCostSection({ periodDays }: { periodDays: number }) {
                           <span>{formatNumber(m.calls)} llamadas</span>
                           <span>↑ {formatTokens(m.input_tokens)}</span>
                           <span>↓ {formatTokens(m.output_tokens)}</span>
+                          <span className="ml-auto font-medium text-indigo-600 dark:text-indigo-400">
+                            Ver detalle
+                          </span>
                         </div>
-                      </div>
+                      </button>
                     )
                   })}
                 </div>
@@ -584,6 +1187,7 @@ function AiCostSection({ periodDays }: { periodDays: number }) {
                       <th className="px-4 py-2 text-right font-semibold text-slate-500 uppercase">Tok. salida</th>
                       <th className="px-4 py-2 text-right font-semibold text-slate-500 uppercase">Costo USD</th>
                       <th className="px-4 py-2 text-right font-semibold text-slate-500 uppercase">% del total</th>
+                      <th className="px-4 py-2 text-right font-semibold text-slate-500 uppercase">Detalle</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -636,6 +1240,15 @@ function AiCostSection({ periodDays }: { periodDays: number }) {
                               <span className="text-slate-600 dark:text-slate-400 w-10 text-right">{pct}%</span>
                             </div>
                           </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedModel(m)}
+                              className="rounded-md border border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                            >
+                              Ver
+                            </button>
+                          </td>
                         </tr>
                       )
                     })}
@@ -656,11 +1269,23 @@ function AiCostSection({ periodDays }: { periodDays: number }) {
                         {formatCurrencyUsd(costs.total_cost_usd)}
                       </td>
                       <td className="px-4 py-2.5 text-right text-slate-500">100%</td>
+                      <td className="px-4 py-2.5" />
                     </tr>
                   </tfoot>
                 </table>
               </div>
             </div>
+          )}
+
+          {selectedModel && (
+            <AiModelDetailModal
+              selection={selectedModel}
+              detail={selectedModelDetail}
+              loading={selectedModelLoading}
+              error={selectedModelError}
+              periodDays={periodDays}
+              onClose={() => setSelectedModel(null)}
+            />
           )}
         </>
       )}
@@ -820,6 +1445,8 @@ export default function AdminPage() {
 
         {payload && (
           <>
+            <YoutubeResolutionSection stats={payload.stats.youtube_resolution} />
+
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
                 <p className="text-xs text-slate-500 uppercase dark:text-slate-400">Usuarios totales</p>
@@ -924,8 +1551,34 @@ export default function AdminPage() {
                             {item.video_title || item.video_id}
                           </p>
                           <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{item.video_id}</p>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <span className="text-[11px] px-2 py-0.5 rounded-full border border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
+                              IA total {formatCurrencyUsd(item.total_ai_cost_usd)}
+                            </span>
+                            <span className="text-[11px] px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+                              STT {formatCurrencyUsd(item.audio_transcription_cost_usd)}
+                            </span>
+                            {item.audio_transcription_calls > 0 && (
+                              <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                {formatNumber(item.audio_transcription_calls)} STT
+                              </span>
+                            )}
+                            {item.missing_cost_log_total > 0 && (
+                              <span className="text-[11px] px-2 py-0.5 rounded-full border border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+                                {formatNumber(item.missing_cost_log_total)} sin log de costo
+                              </span>
+                            )}
+                            {item.missing_audio_cost_log_total > 0 && (
+                              <span className="text-[11px] px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+                                {formatNumber(item.missing_audio_cost_log_total)} audio sin costo registrado
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">{formatNumber(item.total)}</p>
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">{formatNumber(item.total)}</p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400">extracciones</p>
+                        </div>
                       </div>
                     ))
                   )}

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getUserFromRequest } from '@/lib/auth'
+import { getUserFromRequest, isAdminEmail } from '@/lib/auth'
 import { getUserExtractionRateLimitSnapshot } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
@@ -12,6 +12,18 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
 
+    if (isAdminEmail(user.email)) {
+      return NextResponse.json({
+        limit: 0,
+        used: 0,
+        remaining: 0,
+        resetAt: null,
+        retryAfterSeconds: 0,
+        extra_credits: 0,
+        isUnlimited: true,
+      })
+    }
+
     const snapshot = await getUserExtractionRateLimitSnapshot(user.id)
 
     return NextResponse.json({
@@ -21,6 +33,7 @@ export async function GET(req: NextRequest) {
       resetAt: snapshot.resetAt,
       retryAfterSeconds: snapshot.retryAfterSeconds,
       extra_credits: snapshot.extra_credits,
+      isUnlimited: false,
     })
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Error interno del servidor.'

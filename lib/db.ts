@@ -482,11 +482,55 @@ export interface AdminTopVideoStat {
   video_title: string | null
   thumbnail_url: string | null
   total: number
+  total_ai_cost_usd: number
+  audio_transcription_cost_usd: number
+  audio_transcription_calls: number
+  missing_cost_log_total: number
+  missing_audio_cost_log_total: number
 }
 
 export interface AdminModeBreakdownStat {
   extraction_mode: string
   total: number
+}
+
+export type AdminTranscriptResolutionKind = 'cache' | 'audio' | 'transcript' | 'other'
+
+export interface AdminTranscriptSourceStat {
+  transcript_source: string
+  kind: AdminTranscriptResolutionKind
+  total: number
+  share_of_youtube: number
+  share_of_live: number
+}
+
+export interface AdminYoutubeResolutionStats {
+  youtube_extractions_total: number
+  cache_total: number
+  live_total: number
+  audio_total: number
+  transcript_total: number
+  other_total: number
+  audio_transcription_calls: number
+  audio_transcription_cost_usd: number
+  transcript_sources: AdminTranscriptSourceStat[]
+}
+
+export interface AdminUserExtractionCostDetail {
+  id: string
+  url: string | null
+  video_id: string | null
+  video_title: string | null
+  thumbnail_url: string | null
+  extraction_mode: string
+  objective: string
+  created_at: string
+  source_type: string
+  transcript_source: string | null
+  total_ai_calls: number
+  total_ai_cost_usd: number
+  audio_transcription_calls: number
+  audio_transcription_cost_usd: number
 }
 
 export interface AdminUsageStats {
@@ -500,6 +544,7 @@ export interface AdminUsageStats {
   extractions_by_day: AdminDailyExtractionStat[]
   top_videos: AdminTopVideoStat[]
   extraction_modes: AdminModeBreakdownStat[]
+  youtube_resolution: AdminYoutubeResolutionStats
 }
 
 export type AdminUserVerificationFilter = 'all' | 'verified' | 'unverified'
@@ -932,11 +977,41 @@ interface DbAdminTopVideoRow {
   video_title: string | null
   thumbnail_url: string | null
   total: number | string
+  total_ai_cost_usd: number | string
+  audio_transcription_cost_usd: number | string
+  audio_transcription_calls: number | string
+  missing_cost_log_total: number | string
+  missing_audio_cost_log_total: number | string
 }
 
 interface DbAdminModeBreakdownRow {
   extraction_mode: string | null
   total: number | string
+}
+
+interface DbAdminYoutubeResolutionSummaryRow {
+  youtube_total: number | string
+  cache_total: number | string
+  audio_total: number | string
+  transcript_total: number | string
+  other_total: number | string
+}
+
+interface DbAdminYoutubeTranscriptionCostRow {
+  audio_transcription_calls: number | string
+  audio_transcription_cost_usd: number | string
+}
+
+interface DbAdminTranscriptSourceBreakdownRow {
+  transcript_source: string | null
+  total: number | string
+}
+
+interface DbAdminUserExtractionCostRow extends DbExtractionRow {
+  total_ai_calls: number | string
+  total_ai_cost_usd: number | string
+  audio_transcription_calls: number | string
+  audio_transcription_cost_usd: number | string
 }
 
 interface DbAdminUserListRow {
@@ -3107,6 +3182,109 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
     [userId, limit]
   )
   return rows.map(mapExtractionRow)
+}
+
+export async function listAdminExtractionsByUser(
+  userId: string,
+  limit = 30
+): Promise<AdminUserExtractionCostDetail[]> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbAdminUserExtractionCostRow>(
+    `
+      SELECT
+        ranked.id,
+        ranked.user_id,
+        ranked.url,
+        ranked.video_id,
+        ranked.video_title,
+        ranked.thumbnail_url,
+        ranked.extraction_mode,
+        ranked.objective,
+        ranked.phases_json,
+        ranked.pro_tip,
+        ranked.metadata_json,
+        ranked.share_visibility,
+        ranked.created_at,
+        ranked.source_type,
+        ranked.transcript_source,
+        ranked.source_label,
+        ranked.folder_id,
+        ranked.order_number,
+        ranked.is_starred,
+        ranked.source_text,
+        ranked.source_file_url,
+        ranked.source_file_name,
+        ranked.source_file_size_bytes,
+        ranked.source_file_mime_type,
+        ranked.has_source_text,
+        COALESCE(ai.total_ai_calls, 0)::int AS total_ai_calls,
+        COALESCE(ai.total_ai_cost_usd, 0) AS total_ai_cost_usd,
+        COALESCE(ai.audio_transcription_calls, 0)::int AS audio_transcription_calls,
+        COALESCE(ai.audio_transcription_cost_usd, 0) AS audio_transcription_cost_usd
+      FROM (
+        SELECT
+          id,
+          user_id,
+          url,
+          video_id,
+          video_title,
+          thumbnail_url,
+          extraction_mode,
+          objective,
+          phases_json,
+          pro_tip,
+          metadata_json,
+          share_visibility,
+          created_at,
+          source_type,
+          transcript_source,
+          source_label,
+          folder_id,
+          is_starred,
+          source_text,
+          source_file_url,
+          source_file_name,
+          source_file_size_bytes,
+          source_file_mime_type,
+          (source_text IS NOT NULL AND source_text <> '') AS has_source_text,
+          ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC)::int AS order_number
+        FROM extractions
+        WHERE user_id = $1
+      ) AS ranked
+      LEFT JOIN (
+        SELECT
+          extraction_id,
+          COUNT(*)::int AS total_ai_calls,
+          COALESCE(SUM(cost_usd), 0) AS total_ai_cost_usd,
+          COUNT(*) FILTER (WHERE use_type = 'transcription')::int AS audio_transcription_calls,
+          COALESCE(SUM(cost_usd) FILTER (WHERE use_type = 'transcription'), 0) AS audio_transcription_cost_usd
+        FROM ai_usage_log
+        WHERE user_id = $1
+          AND extraction_id IS NOT NULL
+        GROUP BY extraction_id
+      ) ai ON ai.extraction_id = ranked.id
+      ORDER BY ranked.created_at DESC, ranked.id DESC
+      LIMIT $2
+    `,
+    [userId, limit]
+  )
+
+  return rows.map((row) => ({
+    id: row.id,
+    url: row.url ?? null,
+    video_id: row.video_id ?? null,
+    video_title: row.video_title ?? null,
+    thumbnail_url: row.thumbnail_url ?? null,
+    extraction_mode: row.extraction_mode,
+    objective: row.objective,
+    created_at: toIso(row.created_at),
+    source_type: row.source_type ?? 'youtube',
+    transcript_source: row.transcript_source ?? null,
+    total_ai_calls: parseDbInteger(row.total_ai_calls),
+    total_ai_cost_usd: Number(row.total_ai_cost_usd ?? 0),
+    audio_transcription_calls: parseDbInteger(row.audio_transcription_calls),
+    audio_transcription_cost_usd: Number(row.audio_transcription_cost_usd ?? 0),
+  }))
 }
 
 export async function setExtractionStarredForUser(input: {
@@ -7213,7 +7391,14 @@ export async function getAdminUsageStats(periodDays = 30): Promise<AdminUsageSta
       ),
     ])
 
-  const [dailyResult, topVideosResult, modeBreakdownResult] = await Promise.all([
+  const [
+    dailyResult,
+    topVideosResult,
+    modeBreakdownResult,
+    youtubeResolutionSummaryResult,
+    youtubeTranscriptionCostResult,
+    transcriptSourceBreakdownResult,
+  ] = await Promise.all([
     pool.query<DbAdminDailyExtractionRow>(
       `
         SELECT
@@ -7229,15 +7414,34 @@ export async function getAdminUsageStats(periodDays = 30): Promise<AdminUsageSta
     pool.query<DbAdminTopVideoRow>(
       `
         SELECT
-          video_id,
-          MAX(video_title) AS video_title,
-          MAX(thumbnail_url) AS thumbnail_url,
-          COUNT(*)::int AS total
-        FROM extractions
-        WHERE video_id IS NOT NULL
-          AND created_at >= NOW() - ($1::int * INTERVAL '1 day')
-        GROUP BY video_id
-        ORDER BY total DESC
+          e.video_id,
+          MAX(e.video_title) AS video_title,
+          MAX(e.thumbnail_url) AS thumbnail_url,
+          COUNT(*)::int AS total,
+          COALESCE(SUM(ai.total_ai_cost_usd), 0) AS total_ai_cost_usd,
+          COALESCE(SUM(ai.audio_transcription_cost_usd), 0) AS audio_transcription_cost_usd,
+          COALESCE(SUM(ai.audio_transcription_calls), 0)::int AS audio_transcription_calls,
+          COUNT(*) FILTER (WHERE COALESCE(ai.total_ai_calls, 0) = 0)::int AS missing_cost_log_total,
+          COUNT(*) FILTER (
+            WHERE e.transcript_source = 'openai_audio_transcription'
+              AND COALESCE(ai.audio_transcription_calls, 0) = 0
+          )::int AS missing_audio_cost_log_total
+        FROM extractions e
+        LEFT JOIN (
+          SELECT
+            extraction_id,
+            COUNT(*)::int AS total_ai_calls,
+            COALESCE(SUM(cost_usd), 0) AS total_ai_cost_usd,
+            COALESCE(SUM(cost_usd) FILTER (WHERE use_type = 'transcription'), 0) AS audio_transcription_cost_usd,
+            COUNT(*) FILTER (WHERE use_type = 'transcription')::int AS audio_transcription_calls
+          FROM ai_usage_log
+          WHERE extraction_id IS NOT NULL
+          GROUP BY extraction_id
+        ) ai ON ai.extraction_id = e.id
+        WHERE e.video_id IS NOT NULL
+          AND e.created_at >= NOW() - ($1::int * INTERVAL '1 day')
+        GROUP BY e.video_id
+        ORDER BY total DESC, total_ai_cost_usd DESC
         LIMIT 10
       `,
       [safePeriodDays]
@@ -7254,7 +7458,98 @@ export async function getAdminUsageStats(periodDays = 30): Promise<AdminUsageSta
       `,
       [safePeriodDays]
     ),
+    pool.query<DbAdminYoutubeResolutionSummaryRow>(
+      `
+        SELECT
+          COUNT(*)::int AS youtube_total,
+          COUNT(*) FILTER (
+            WHERE transcript_source IN ('cache_exact', 'cache_transcript', 'cache_result')
+          )::int AS cache_total,
+          COUNT(*) FILTER (
+            WHERE transcript_source = 'openai_audio_transcription'
+          )::int AS audio_total,
+          COUNT(*) FILTER (
+            WHERE transcript_source IN (
+              'custom_extractor',
+              'youtube_transcript',
+              'yt_dlp_subtitles',
+              'youtube_official_api'
+            )
+          )::int AS transcript_total,
+          COUNT(*) FILTER (
+            WHERE transcript_source IS NULL
+              OR transcript_source NOT IN (
+                'cache_exact',
+                'cache_transcript',
+                'cache_result',
+                'openai_audio_transcription',
+                'custom_extractor',
+                'youtube_transcript',
+                'yt_dlp_subtitles',
+                'youtube_official_api'
+              )
+          )::int AS other_total
+        FROM extractions
+        WHERE source_type = 'youtube'
+          AND created_at >= NOW() - ($1::int * INTERVAL '1 day')
+      `,
+      [safePeriodDays]
+    ),
+    pool.query<DbAdminYoutubeTranscriptionCostRow>(
+      `
+        SELECT
+          COUNT(*)::int AS audio_transcription_calls,
+          COALESCE(SUM(cost_usd), 0) AS audio_transcription_cost_usd
+        FROM ai_usage_log
+        WHERE source_type = 'youtube'
+          AND use_type = 'transcription'
+          AND created_at >= NOW() - ($1::int * INTERVAL '1 day')
+      `,
+      [safePeriodDays]
+    ),
+    pool.query<DbAdminTranscriptSourceBreakdownRow>(
+      `
+        SELECT
+          COALESCE(transcript_source, 'unknown') AS transcript_source,
+          COUNT(*)::int AS total
+        FROM extractions
+        WHERE source_type = 'youtube'
+          AND created_at >= NOW() - ($1::int * INTERVAL '1 day')
+        GROUP BY COALESCE(transcript_source, 'unknown')
+        ORDER BY total DESC, transcript_source ASC
+      `,
+      [safePeriodDays]
+    ),
   ])
+
+  const youtubeResolutionSummary = youtubeResolutionSummaryResult.rows[0]
+  const youtubeExtractionsTotal = parseDbInteger(youtubeResolutionSummary?.youtube_total)
+  const cacheTotal = parseDbInteger(youtubeResolutionSummary?.cache_total)
+  const audioTotal = parseDbInteger(youtubeResolutionSummary?.audio_total)
+  const transcriptTotal = parseDbInteger(youtubeResolutionSummary?.transcript_total)
+  const otherTotal = parseDbInteger(youtubeResolutionSummary?.other_total)
+  const liveTotal = Math.max(0, youtubeExtractionsTotal - cacheTotal)
+  const youtubeTranscriptionCost = youtubeTranscriptionCostResult.rows[0]
+  const audioTranscriptionCalls = parseDbInteger(youtubeTranscriptionCost?.audio_transcription_calls)
+  const audioTranscriptionCostUsd = Number(youtubeTranscriptionCost?.audio_transcription_cost_usd ?? 0)
+
+  const resolveTranscriptResolutionKind = (
+    transcriptSource: string | null | undefined
+  ): AdminTranscriptResolutionKind => {
+    if (!transcriptSource) return 'other'
+    if (['cache_exact', 'cache_transcript', 'cache_result'].includes(transcriptSource)) return 'cache'
+    if (transcriptSource === 'openai_audio_transcription') return 'audio'
+    if (
+      ['custom_extractor', 'youtube_transcript', 'yt_dlp_subtitles', 'youtube_official_api'].includes(
+        transcriptSource
+      )
+    ) {
+      return 'transcript'
+    }
+    return 'other'
+  }
+
+  const roundShare = (value: number) => Math.round(value * 10) / 10
 
   return {
     period_days: safePeriodDays,
@@ -7273,11 +7568,39 @@ export async function getAdminUsageStats(periodDays = 30): Promise<AdminUsageSta
       video_title: row.video_title,
       thumbnail_url: row.thumbnail_url,
       total: parseDbInteger(row.total),
+      total_ai_cost_usd: Number(row.total_ai_cost_usd ?? 0),
+      audio_transcription_cost_usd: Number(row.audio_transcription_cost_usd ?? 0),
+      audio_transcription_calls: parseDbInteger(row.audio_transcription_calls),
+      missing_cost_log_total: parseDbInteger(row.missing_cost_log_total),
+      missing_audio_cost_log_total: parseDbInteger(row.missing_audio_cost_log_total),
     })),
     extraction_modes: modeBreakdownResult.rows.map((row) => ({
       extraction_mode: row.extraction_mode || 'action_plan',
       total: parseDbInteger(row.total),
     })),
+    youtube_resolution: {
+      youtube_extractions_total: youtubeExtractionsTotal,
+      cache_total: cacheTotal,
+      live_total: liveTotal,
+      audio_total: audioTotal,
+      transcript_total: transcriptTotal,
+      other_total: otherTotal,
+      audio_transcription_calls: audioTranscriptionCalls,
+      audio_transcription_cost_usd: audioTranscriptionCostUsd,
+      transcript_sources: transcriptSourceBreakdownResult.rows.map((row) => {
+        const transcriptSource = row.transcript_source || 'unknown'
+        const total = parseDbInteger(row.total)
+        const kind = resolveTranscriptResolutionKind(transcriptSource)
+        const isLiveKind = kind === 'audio' || kind === 'transcript' || kind === 'other'
+        return {
+          transcript_source: transcriptSource,
+          kind,
+          total,
+          share_of_youtube: youtubeExtractionsTotal > 0 ? roundShare((total / youtubeExtractionsTotal) * 100) : 0,
+          share_of_live: isLiveKind && liveTotal > 0 ? roundShare((total / liveTotal) * 100) : 0,
+        }
+      }),
+    },
   }
 }
 
@@ -7815,6 +8138,46 @@ export interface AdminAiCostStats {
   by_day: AdminAiCostByDay[]
 }
 
+export interface AdminAiCostByUseType {
+  use_type: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+}
+
+export interface AdminAiCostBySourceType {
+  source_type: string
+  calls: number
+  cost_usd: number
+}
+
+export interface AdminAiCostRecentCall {
+  id: string
+  created_at: string
+  use_type: string
+  source_type: string | null
+  user_id: string | null
+  user_email: string | null
+  extraction_id: string | null
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+}
+
+export interface AdminAiCostModelDetail {
+  period_days: number
+  provider: string
+  model: string
+  total_calls: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost_usd: number
+  by_use_type: AdminAiCostByUseType[]
+  by_source_type: AdminAiCostBySourceType[]
+  recent_calls: AdminAiCostRecentCall[]
+}
+
 interface DbAiCostByModelRow {
   provider: string
   model: string
@@ -7828,6 +8191,40 @@ interface DbAiCostByDayRow {
   day: Date | string
   cost_usd: string | number
   calls: number | string
+}
+
+interface DbAiCostTotalsRow {
+  total_calls: number | string
+  total_input: number | string
+  total_output: number | string
+  total_cost: string | number
+}
+
+interface DbAiCostByUseTypeRow {
+  use_type: string
+  calls: number | string
+  input_tokens: number | string
+  output_tokens: number | string
+  cost_usd: string | number
+}
+
+interface DbAiCostBySourceTypeRow {
+  source_type: string | null
+  calls: number | string
+  cost_usd: string | number
+}
+
+interface DbAiCostRecentCallRow {
+  id: string
+  created_at: Date | string
+  use_type: string
+  source_type: string | null
+  user_id: string | null
+  user_email: string | null
+  extraction_id: string | null
+  input_tokens: number | string
+  output_tokens: number | string
+  cost_usd: string | number
 }
 
 export async function logAiUsage(input: {
@@ -8165,6 +8562,125 @@ export async function getAdminAiCostStats(periodDays = 30): Promise<AdminAiCostS
       date: toIso(row.day).slice(0, 10),
       cost_usd: Number(row.cost_usd),
       calls: parseDbInteger(row.calls),
+    })),
+  }
+}
+
+export async function getAdminAiCostModelDetail(
+  provider: string,
+  model: string,
+  periodDays = 30
+): Promise<AdminAiCostModelDetail> {
+  await ensureDbReady()
+
+  const safeProvider = provider.trim()
+  const safeModel = model.trim()
+  const safeDays = Number.isFinite(periodDays) ? Math.min(90, Math.max(1, Math.trunc(periodDays))) : 30
+
+  const [totalsResult, byUseTypeResult, bySourceTypeResult, recentCallsResult] = await Promise.all([
+    pool.query<DbAiCostTotalsRow>(
+      `
+        SELECT
+          COUNT(*)::int AS total_calls,
+          COALESCE(SUM(input_tokens), 0)::bigint AS total_input,
+          COALESCE(SUM(output_tokens), 0)::bigint AS total_output,
+          COALESCE(SUM(cost_usd), 0) AS total_cost
+        FROM ai_usage_log
+        WHERE provider = $1
+          AND model = $2
+          AND created_at >= NOW() - ($3::int * INTERVAL '1 day')
+      `,
+      [safeProvider, safeModel, safeDays]
+    ),
+    pool.query<DbAiCostByUseTypeRow>(
+      `
+        SELECT
+          use_type,
+          COUNT(*)::int AS calls,
+          COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+          COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+          COALESCE(SUM(cost_usd), 0) AS cost_usd
+        FROM ai_usage_log
+        WHERE provider = $1
+          AND model = $2
+          AND created_at >= NOW() - ($3::int * INTERVAL '1 day')
+        GROUP BY use_type
+        ORDER BY SUM(cost_usd) DESC, use_type ASC
+      `,
+      [safeProvider, safeModel, safeDays]
+    ),
+    pool.query<DbAiCostBySourceTypeRow>(
+      `
+        SELECT
+          COALESCE(source_type, 'unknown') AS source_type,
+          COUNT(*)::int AS calls,
+          COALESCE(SUM(cost_usd), 0) AS cost_usd
+        FROM ai_usage_log
+        WHERE provider = $1
+          AND model = $2
+          AND created_at >= NOW() - ($3::int * INTERVAL '1 day')
+        GROUP BY COALESCE(source_type, 'unknown')
+        ORDER BY SUM(cost_usd) DESC, COALESCE(source_type, 'unknown') ASC
+      `,
+      [safeProvider, safeModel, safeDays]
+    ),
+    pool.query<DbAiCostRecentCallRow>(
+      `
+        SELECT
+          l.id,
+          l.created_at,
+          l.use_type,
+          l.source_type,
+          l.user_id,
+          u.email AS user_email,
+          l.extraction_id,
+          l.input_tokens,
+          l.output_tokens,
+          l.cost_usd
+        FROM ai_usage_log l
+        LEFT JOIN users u ON u.id = l.user_id
+        WHERE l.provider = $1
+          AND l.model = $2
+          AND l.created_at >= NOW() - ($3::int * INTERVAL '1 day')
+        ORDER BY l.created_at DESC, l.id DESC
+        LIMIT 25
+      `,
+      [safeProvider, safeModel, safeDays]
+    ),
+  ])
+
+  const totals = totalsResult.rows[0]
+  return {
+    period_days: safeDays,
+    provider: safeProvider,
+    model: safeModel,
+    total_calls: parseDbInteger(totals?.total_calls),
+    total_input_tokens: Number(totals?.total_input ?? 0),
+    total_output_tokens: Number(totals?.total_output ?? 0),
+    total_cost_usd: Number(totals?.total_cost ?? 0),
+    by_use_type: byUseTypeResult.rows.map((row) => ({
+      use_type: row.use_type,
+      calls: parseDbInteger(row.calls),
+      input_tokens: Number(row.input_tokens),
+      output_tokens: Number(row.output_tokens),
+      cost_usd: Number(row.cost_usd),
+    })),
+    by_source_type: bySourceTypeResult.rows.map((row) => ({
+      source_type: row.source_type ?? 'unknown',
+      calls: parseDbInteger(row.calls),
+      cost_usd: Number(row.cost_usd),
+    })),
+    recent_calls: recentCallsResult.rows.map((row) => ({
+      id: row.id,
+      created_at: toIso(row.created_at),
+      use_type: row.use_type,
+      source_type: row.source_type ?? null,
+      user_id: row.user_id ?? null,
+      user_email: row.user_email ?? null,
+      extraction_id: row.extraction_id ?? null,
+      input_tokens: Number(row.input_tokens),
+      output_tokens: Number(row.output_tokens),
+      cost_usd: Number(row.cost_usd),
     })),
   }
 }

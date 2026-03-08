@@ -5,7 +5,6 @@ import type { FolderColor, FolderItem } from '@/app/home/components/FolderDock'
 import { isSystemExtractionFolderId } from '@/lib/extraction-folders'
 
 const STORAGE_KEY = 'ae_folders'
-const FOLDER_REQUEST_TIMEOUT_MS = 10000
 const FOLDER_COLORS = new Set<FolderColor>([
   'amber',
   'indigo',
@@ -108,13 +107,9 @@ export function useFolders() {
   }, [])
 
   const loadFolders = useCallback(async () => {
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), FOLDER_REQUEST_TIMEOUT_MS)
-
     try {
       const res = await fetch('/api/folders', {
         cache: 'no-store',
-        signal: controller.signal,
       })
 
       if (res.status === 401) {
@@ -124,7 +119,6 @@ export function useFolders() {
 
       const data = (await res.json().catch(() => null)) as { folders?: unknown[] } | null
       if (!res.ok) {
-        setFolders([])
         return
       }
 
@@ -147,9 +141,8 @@ export function useFolders() {
       }
       setFolders(Array.from(mergedById.values()))
     } catch {
-      setFolders([])
-    } finally {
-      clearTimeout(timeoutId)
+      // Keep current folders on transient failures. The first server render for
+      // this route can be slow enough to outlive an aggressive client timeout.
     }
   }, [migrateLocalFoldersToDb])
 
