@@ -242,6 +242,24 @@ export async function POST(req: NextRequest) {
     const conversationId = normalizeExtractionId(
       (body as { conversationId?: unknown })?.conversationId
     )
+
+    // Item-level context: when user clicks the bot on a specific playbook item
+    const rawFocusedItem = (body as { focusedItemContext?: unknown })?.focusedItemContext
+    const focusedItemContext =
+      rawFocusedItem && typeof rawFocusedItem === 'object'
+        ? {
+            path: typeof (rawFocusedItem as { path?: unknown }).path === 'string'
+              ? (rawFocusedItem as { path: string }).path.trim().slice(0, 50)
+              : '',
+            text: typeof (rawFocusedItem as { text?: unknown }).text === 'string'
+              ? (rawFocusedItem as { text: string }).text.trim().slice(0, 2000)
+              : '',
+            phaseTitle: typeof (rawFocusedItem as { phaseTitle?: unknown }).phaseTitle === 'string'
+              ? (rawFocusedItem as { phaseTitle: string }).phaseTitle.trim().slice(0, 200)
+              : '',
+          }
+        : null
+
     const extractionRows = await listExtractionsByUser(user.id, MAX_CONTEXT_EXTRACTIONS)
 
     if (extractionRows.length === 0) {

@@ -46,7 +46,6 @@ import {
   ThumbsUp,
   Trash2,
   Upload,
-  Users,
   Workflow,
   X,
   Zap,
@@ -208,6 +207,7 @@ interface ResultPanelProps {
   onAddMember?: (input: { email: string; role: 'editor' | 'viewer' }) => Promise<boolean>
   onRemoveMember?: (memberUserId: string) => Promise<boolean>
   onOpenPlaybookReference?: (playbookIdentifier: string) => void
+  onFocusItemForChat?: (context: { path: string; text: string; phaseTitle: string }) => void
   onStarResult?: (starred: boolean) => void
   allTags?: import('@/app/home/lib/types').ExtractionTag[]
   onAddTag?: (name: string, color: string) => Promise<void>
@@ -792,6 +792,7 @@ export function ResultPanel({
   onAddMember,
   onRemoveMember,
   onOpenPlaybookReference,
+  onFocusItemForChat,
   onStarResult,
   allTags = [],
   onAddTag,
@@ -1661,6 +1662,94 @@ export function ResultPanel({
     autoFetchedCommunityRef.current.add(mobileSheetTaskId)
     void fetchTaskCommunity(mobileSheetTaskId)
   }, [mobileSheetTaskId, mobileSheetTab])
+
+  const openTaskInteractionSurface = (
+    taskId: string,
+    target: 'gestion' | 'actividad' | 'evidencias' | 'comunidad'
+  ) => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      const isSameMobileSurface = mobileSheetTaskId === taskId && mobileSheetTab === target
+      if (target !== 'evidencias' && isSameMobileSurface) {
+        setMobileSheetTaskId(null)
+        return
+      }
+
+      setMobileSheetTaskId(taskId)
+      setMobileSheetTab(target)
+      return
+    }
+
+    const isSameTaskSelected = selectedTaskId === taskId
+    const isGestionAlreadyOpen =
+      target === 'gestion' &&
+      isSameTaskSelected &&
+      taskOpenSectionByTaskId[taskId] === 'gestion'
+    const isActividadAlreadyOpen =
+      target === 'actividad' &&
+      isSameTaskSelected &&
+      taskOpenSectionByTaskId[taskId] === 'actividad'
+    const isCommunityAlreadyOpen =
+      target === 'comunidad' &&
+      isSameTaskSelected &&
+      (taskCommunityOpenByTaskId[taskId] ?? false)
+
+    if (isGestionAlreadyOpen || isActividadAlreadyOpen) {
+      setTaskOpenSectionByTaskId((prev) => ({
+        ...prev,
+        [taskId]: null,
+      }))
+      return
+    }
+
+    if (isCommunityAlreadyOpen) {
+      setTaskCommunityOpenByTaskId((prev) => ({
+        ...prev,
+        [taskId]: false,
+      }))
+      return
+    }
+
+    setSelectedTaskId(taskId)
+    setActiveTaskId(taskId)
+    setTaskOpenSectionByTaskId((prev) => ({
+      ...prev,
+      [taskId]: target === 'gestion' || target === 'actividad' ? target : null,
+    }))
+    setTaskCommunityOpenByTaskId((prev) => ({
+      ...prev,
+      [taskId]: target === 'comunidad',
+    }))
+    setTaskEvidenceOpenByTaskId((prev) => ({
+      ...prev,
+      [taskId]: target === 'evidencias',
+    }))
+  }
+
+  const toggleTaskEvidenceSurface = (taskId: string) => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      if (mobileSheetTaskId === taskId && mobileSheetTab === 'evidencias') {
+        setMobileSheetTaskId(null)
+        return
+      }
+
+      setMobileSheetTaskId(taskId)
+      setMobileSheetTab('evidencias')
+      return
+    }
+
+    const isEvidenceAlreadyOpen =
+      selectedTaskId === taskId && (taskEvidenceOpenByTaskId[taskId] ?? false)
+
+    if (isEvidenceAlreadyOpen) {
+      setTaskEvidenceOpenByTaskId((prev) => ({
+        ...prev,
+        [taskId]: false,
+      }))
+      return
+    }
+
+    openTaskInteractionSurface(taskId, 'evidencias')
+  }
 
   useEffect(() => {
     const extractionId = result.id?.trim()
@@ -5518,9 +5607,61 @@ export function ResultPanel({
             />
           )}
 
+          {!isStructureEditing && taskView === 'list' && interactiveTasks.length > 0 && (
+            <div className="rounded-2xl border border-indigo-200 bg-gradient-to-r from-indigo-50 via-white to-sky-50 px-4 py-3 shadow-sm dark:border-indigo-800 dark:from-indigo-950/30 dark:via-slate-900 dark:to-sky-950/20">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-3">
+                  <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm">
+                    <LayoutList size={18} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-indigo-700 dark:text-indigo-300">
+                      Lista guiada
+                    </p>
+                    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                      Marca avances y usa los botones rápidos de cada subítem para abrir
+                      {' '}<span className="font-semibold text-slate-800 dark:text-slate-100">{tx('playbook.management')}</span>,
+                      {' '}<span className="font-semibold text-slate-800 dark:text-slate-100">{tx('playbook.activity')}</span>,
+                      {' '}<span className="font-semibold text-slate-800 dark:text-slate-100">{tx('playbook.evidence')}</span>
+                      {' '}o <span className="font-semibold text-slate-800 dark:text-slate-100">{tx('playbook.community')}</span>.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center rounded-full border border-indigo-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-slate-900 dark:text-indigo-300">
+                    {interactiveTasks.filter((task) => task.checked).length}/{interactiveTasks.length} completados
+                  </span>
+                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                    {interactiveTasks.filter((task) => task.status === 'blocked').length} bloqueados
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {!isStructureEditing && taskView === 'list' &&
             result.phases.map((phase: Phase) => {
               const isPhaseExpanded = activePhase === phase.id
+              const phaseNodes = flattenPhaseNodes(phase.id, phase.items)
+              const phaseTaskEntries = phaseNodes.map((node, idx) => ({
+                node,
+                task:
+                  tasksByNodeId.get(node.nodeId) ??
+                  tasksByPhaseItem.get(`${phase.id}:${idx}`) ??
+                  null,
+              }))
+              const completedPhaseTaskCount = phaseTaskEntries.filter((entry) => entry.task?.checked).length
+              const evidencedPhaseTaskCount = phaseTaskEntries.filter((entry) =>
+                entry.task ? (taskAttachmentsByTaskId[entry.task.id] ?? []).length > 0 : false
+              ).length
+              const activePhaseTaskCount = phaseTaskEntries.filter((entry) =>
+                entry.task
+                  ? entry.task.events.length > 0 || (taskCommentsByTaskId[entry.task.id] ?? []).length > 0
+                  : false
+              ).length
+              const phaseProgressPct = phaseTaskEntries.length > 0
+                ? Math.round((completedPhaseTaskCount / phaseTaskEntries.length) * 100)
+                : 0
 
               return (
                 <div
@@ -5586,8 +5727,52 @@ export function ResultPanel({
                               {tx('playbook.subitems')}
                             </p>
                           </div>
+                          <div className="mb-4 rounded-2xl border border-slate-200/80 bg-white/85 p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900/80">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                                  Resumen de la fase
+                                </p>
+                                <p className="mt-1 text-sm font-semibold text-slate-800 dark:text-slate-100">
+                                  {completedPhaseTaskCount} de {phaseTaskEntries.length} subítems completados
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
+                                  {phaseProgressPct}% avance
+                                </span>
+                                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+                                  {evidencedPhaseTaskCount} con evidencia
+                                </span>
+                                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+                                  {activePhaseTaskCount} con actividad
+                                </span>
+                              </div>
+                            </div>
+                          <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-sky-500 transition-all"
+                              style={{
+                                width: `${phaseProgressPct > 0 ? Math.max(6, phaseProgressPct) : 0}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                          <div className="mb-4 flex items-start gap-3 rounded-2xl border border-indigo-200/80 bg-gradient-to-r from-indigo-50 via-white to-sky-50 px-3.5 py-3 shadow-sm dark:border-indigo-800/70 dark:from-indigo-950/20 dark:via-slate-900 dark:to-sky-950/10">
+                            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm">
+                              <ImageIcon size={16} />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-indigo-700 dark:text-indigo-300">
+                                {tx('playbook.subitemInteractionHintTitle')}
+                              </p>
+                              <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                                {tx('playbook.subitemInteractionHint')}
+                              </p>
+                            </div>
+                          </div>
                           <ul className="space-y-3 md:ml-2 md:space-y-4 md:border-l-2 md:border-dashed md:border-slate-300 md:pl-4 md:dark:border-slate-700">
-                            {flattenPhaseNodes(phase.id, phase.items).map((node, idx) => {
+                            {phaseTaskEntries.map(({ node, task }, idx) => {
                               const itemText = node.text
                               const normalizedItemText =
                                 typeof itemText === 'string' ? itemText : itemText == null ? '' : String(itemText)
@@ -5595,10 +5780,6 @@ export function ResultPanel({
                                 ? renderTextWithPlaybookReferences(normalizedItemText)
                                 : tx('playbook.subitemWithoutText')
                               const subItemNumber = node.fullPath
-                              const task =
-                                tasksByNodeId.get(node.nodeId) ??
-                                tasksByPhaseItem.get(`${phase.id}:${idx}`) ??
-                                null
                               const isTaskMutating = task ? taskMutationLoadingId === task.id : false
                               const taskAttachments = task ? (taskAttachmentsByTaskId[task.id] ?? []) : []
                               const taskAttachmentError = task
@@ -5695,10 +5876,8 @@ export function ResultPanel({
                                   <div className="order-1 p-3">
                                     {/* Content column — full width */}
                                     <div className="min-w-0">
-                                      {/* Top bar: checkbox + index + stats | activity/evidence + status + three-dots */}
-                                      <div className="flex items-center justify-between gap-2 mb-1">
-                                        {/* ── Left: checkbox · number · community stats ── */}
-                                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                                      <div className="mb-2 flex items-start justify-between gap-3">
+                                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
                                           <button
                                             type="button"
                                             role="checkbox"
@@ -5724,53 +5903,83 @@ export function ResultPanel({
                                           <span className="inline-flex h-6 w-fit min-w-[2.3rem] items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 px-1.5 font-mono text-[11px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
                                             {subItemNumber}
                                           </span>
-                                          {/* Community micro-stats */}
-                                          <div className="flex items-center gap-2">
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.like')}>
-                                              <ThumbsUp size={10} />
-                                              {taskLikeSummary?.likesCount ?? 0}
+                                          {node.depth > 1 && (
+                                            <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                                              Nivel {node.depth}
                                             </span>
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('common.shared')}>
-                                              <Share2 size={10} />
-                                              {taskLikeSummary?.sharesCount ?? 0}
+                                          )}
+                                          {task?.checked && task?.status !== 'completed' && (
+                                            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
+                                              <CheckCircle2 size={10} />
+                                              {tx('playbook.markedAsCompleted')}
                                             </span>
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.followers')}>
-                                              <Bell size={10} />
-                                              {taskLikeSummary?.followersCount ?? 0}
-                                            </span>
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.views')}>
-                                              <Eye size={10} />
-                                              {taskLikeSummary?.viewsCount ?? 0}
-                                            </span>
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.comments')}>
-                                              <MessageSquare size={10} />
-                                              {taskComments.length}
-                                            </span>
-                                          </div>
+                                          )}
                                         </div>
-                                        {/* ── Right: activity · evidence · status · three-dots ── */}
-                                        <div className="flex items-center gap-1.5 flex-shrink-0">
-                                          {task && task.events.length > 0 && (
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Actividad">
-                                              <Zap size={10} />
-                                              {task.events.length}
-                                            </span>
-                                          )}
-                                          {task && taskAttachments.length > 0 && (
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.evidence')}>
-                                              <ImageIcon size={10} />
-                                              {taskAttachments.length}
-                                            </span>
-                                          )}
-                                          {task && (taskCommentsByTaskId[task.id]?.length ?? 0) > 0 && (
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.participants')}>
-                                              <Users size={10} />
-                                              {taskCommentsByTaskId[task.id]?.length ?? 0}
-                                            </span>
-                                          )}
+                                        <div className="flex flex-wrap items-center justify-end gap-1.5 flex-shrink-0">
                                           {task && (
                                             <>
-                                              {/* Mobile: icono compacto con color de estado */}
+                                              <div className="hidden md:flex flex-wrap items-center gap-1.5">
+                                                <div className="flex flex-wrap items-center gap-1">
+                                                <span
+                                                  className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-300"
+                                                  title={`${taskAttachments.length} ${tx('playbook.evidence')}`}
+                                                  aria-label={`${taskAttachments.length} ${tx('playbook.evidence')}`}
+                                                >
+                                                  <ImageIcon size={10} className="text-amber-600 dark:text-amber-300" />
+                                                  {taskAttachments.length}
+                                                </span>
+                                                <span
+                                                  className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 dark:border-sky-800 dark:bg-sky-900/25 dark:text-sky-300"
+                                                  title={`${task.events.length} ${tx('playbook.activity')}`}
+                                                  aria-label={`${task.events.length} ${tx('playbook.activity')}`}
+                                                >
+                                                  <PenLine size={10} className="text-sky-600 dark:text-sky-300" />
+                                                  {task.events.length}
+                                                </span>
+                                                </div>
+                                                <div className="flex flex-wrap items-center gap-1 rounded-xl border border-violet-200/80 bg-violet-50/70 px-1.5 py-1 dark:border-violet-800/70 dark:bg-violet-900/20">
+                                                  <span
+                                                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-slate-200 bg-white/80 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-200"
+                                                    title={`${taskComments.length} ${tx('playbook.comments')}`}
+                                                    aria-label={`${taskComments.length} ${tx('playbook.comments')}`}
+                                                  >
+                                                    <MessageSquare size={10} className="text-slate-500 dark:text-slate-300" />
+                                                    {taskComments.length}
+                                                  </span>
+                                                  <span
+                                                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/25 dark:text-indigo-300"
+                                                    title={`${taskLikeSummary?.likesCount ?? 0} ${tx('playbook.like')}`}
+                                                    aria-label={`${taskLikeSummary?.likesCount ?? 0} ${tx('playbook.like')}`}
+                                                  >
+                                                    <ThumbsUp size={10} className="text-indigo-600 dark:text-indigo-300" />
+                                                    {taskLikeSummary?.likesCount ?? 0}
+                                                  </span>
+                                                  <span
+                                                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300"
+                                                    title={`${taskLikeSummary?.sharesCount ?? 0} ${tx('playbook.shares')}`}
+                                                    aria-label={`${taskLikeSummary?.sharesCount ?? 0} ${tx('playbook.shares')}`}
+                                                  >
+                                                    <Share2 size={10} className="text-emerald-600 dark:text-emerald-300" />
+                                                    {taskLikeSummary?.sharesCount ?? 0}
+                                                  </span>
+                                                  <span
+                                                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-violet-200 bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:border-violet-700 dark:bg-violet-900/35 dark:text-violet-300"
+                                                    title={`${taskLikeSummary?.followersCount ?? 0} ${tx('playbook.followers')}`}
+                                                    aria-label={`${taskLikeSummary?.followersCount ?? 0} ${tx('playbook.followers')}`}
+                                                  >
+                                                    <Bell size={10} className="text-violet-600 dark:text-violet-300" />
+                                                    {taskLikeSummary?.followersCount ?? 0}
+                                                  </span>
+                                                  <span
+                                                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                                                    title={`${taskLikeSummary?.viewsCount ?? 0} ${tx('playbook.views')}`}
+                                                    aria-label={`${taskLikeSummary?.viewsCount ?? 0} ${tx('playbook.views')}`}
+                                                  >
+                                                    <Eye size={10} className="text-slate-500 dark:text-slate-300" />
+                                                    {taskLikeSummary?.viewsCount ?? 0}
+                                                  </span>
+                                                </div>
+                                              </div>
                                               <span
                                                 className={`md:hidden inline-flex items-center justify-center rounded-full border p-[3px] ${getTaskStatusChipClassName(task.status)}`}
                                                 title={getTaskStatusLabel(task.status, tx)}
@@ -5780,11 +5989,28 @@ export function ResultPanel({
                                                 {task.status === 'blocked' && <AlertTriangle size={10} />}
                                                 {task.status === 'pending' && <Clock size={10} />}
                                               </span>
-                                              {/* Desktop: chip con texto */}
                                               <span className={`hidden md:inline-flex rounded-md border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(task.status)}`}>
                                                 {getTaskStatusLabel(task.status, tx)}
                                               </span>
                                             </>
+                                          )}
+                                          {onFocusItemForChat && (
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation()
+                                                onFocusItemForChat({
+                                                  path: node.fullPath,
+                                                  text: typeof node.text === 'string' ? node.text : '',
+                                                  phaseTitle: phase.title,
+                                                })
+                                              }}
+                                              className="flex h-6 w-6 items-center justify-center rounded-full transition-all hover:scale-110 hover:shadow-md"
+                                              aria-label="Preguntar al asistente sobre este ítem"
+                                              title="Preguntar al asistente IA"
+                                            >
+                                              <img src="/notes-aide-bot.png" alt="" className="h-5 w-5 rounded-full object-cover" />
+                                            </button>
                                           )}
                                           {task && (
                                             <div className="relative hidden md:block" data-task-menu-root="true">
@@ -5801,10 +6027,7 @@ export function ResultPanel({
                                                     type="button"
                                                     onClick={() => {
                                                       setTaskMenuOpenId(null)
-                                                      setTaskOpenSectionByTaskId((prev) => ({
-                                                        ...prev,
-                                                        [task.id]: prev[task.id] === 'actividad' ? null : 'actividad',
-                                                      }))
+                                                      openTaskInteractionSurface(task.id, 'actividad')
                                                     }}
                                                     className="flex w-full items-center gap-2 px-3 py-2 text-[11px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
                                                   >
@@ -5820,10 +6043,7 @@ export function ResultPanel({
                                                     type="button"
                                                     onClick={() => {
                                                       setTaskMenuOpenId(null)
-                                                      setTaskOpenSectionByTaskId((prev) => ({
-                                                        ...prev,
-                                                        [task.id]: prev[task.id] === 'gestion' ? null : 'gestion',
-                                                      }))
+                                                      openTaskInteractionSurface(task.id, 'gestion')
                                                     }}
                                                     className="flex w-full items-center gap-2 px-3 py-2 text-[11px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
                                                   >
@@ -5834,12 +6054,7 @@ export function ResultPanel({
                                                     type="button"
                                                     onClick={() => {
                                                       setTaskMenuOpenId(null)
-                                                      setSelectedTaskId(task.id)
-                                                      setActiveTaskId(task.id)
-                                                      setTaskEvidenceOpenByTaskId((prev) => ({
-                                                        ...prev,
-                                                        [task.id]: true,
-                                                      }))
+                                                      toggleTaskEvidenceSurface(task.id)
                                                     }}
                                                     className="flex w-full items-center gap-2 px-3 py-2 text-[11px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
                                                   >
@@ -5853,40 +6068,142 @@ export function ResultPanel({
                                         </div>
                                       </div>
 
-                                      {/* Text — click to select this task (opens community on desktop, sheet on mobile) */}
                                       <button
                                         type="button"
                                         onClick={() => {
                                           if (!task) return
-                                          if (typeof window !== 'undefined' && window.innerWidth < 768) {
-                                            setMobileSheetTaskId(task.id)
-                                            setMobileSheetTab('comunidad')
-                                          } else {
-                                            const nextSelectedTaskId = isTaskSelected ? null : task.id
-                                            setSelectedTaskId(nextSelectedTaskId)
-                                            setActiveTaskId(nextSelectedTaskId)
-                                            if (nextSelectedTaskId) {
-                                              setTaskCommunityOpenByTaskId((prev) => ({
-                                                ...prev,
-                                                [nextSelectedTaskId]: false,
-                                              }))
-                                              setTaskEvidenceOpenByTaskId((prev) => ({
-                                                ...prev,
-                                                [nextSelectedTaskId]: false,
-                                              }))
-                                            }
-                                          }
+                                          toggleTaskEvidenceSurface(task.id)
                                         }}
-                                        className={`w-full text-left rounded-lg px-1 py-0.5 transition-colors ${
+                                        className={`group/item w-full rounded-xl border px-3 py-2.5 text-left transition-all ${
                                           isTaskSelected
-                                            ? 'bg-violet-50 dark:bg-violet-900/20'
-                                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                                            ? 'border-violet-200 bg-violet-50/80 shadow-sm dark:border-violet-800/70 dark:bg-violet-900/20'
+                                            : 'border-slate-200/80 bg-slate-50/70 hover:border-indigo-200 hover:bg-indigo-50/70 hover:shadow-sm dark:border-slate-700 dark:bg-slate-800/30 dark:hover:border-indigo-800 dark:hover:bg-indigo-950/20'
                                         }`}
                                       >
-                                        <span className="text-slate-600 leading-relaxed text-sm dark:text-slate-300">
+                                        <span className="block text-slate-700 leading-relaxed text-sm font-medium dark:text-slate-200">
                                           {itemDisplayText}
                                         </span>
+                                        <span className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                                          <ImageIcon size={11} />
+                                          {isTaskSelected && isTaskEvidenceExpanded
+                                            ? tx('playbook.closeEvidence')
+                                            : tx('playbook.openEvidenceAndDetails')}
+                                          <ChevronRight
+                                            size={12}
+                                            className={`transition-transform ${
+                                              isTaskSelected && isTaskEvidenceExpanded
+                                                ? 'rotate-90'
+                                                : 'group-hover/item:translate-x-0.5'
+                                            }`}
+                                          />
+                                        </span>
                                       </button>
+
+                                      {task && (
+                                        <>
+                                          <div className="mt-2 flex flex-wrap items-center gap-1.5 md:hidden">
+                                            <div className="flex flex-wrap items-center gap-1">
+                                              <span
+                                                className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-300"
+                                                title={`${taskAttachments.length} ${tx('playbook.evidence')}`}
+                                                aria-label={`${taskAttachments.length} ${tx('playbook.evidence')}`}
+                                              >
+                                                <ImageIcon size={10} className="text-amber-600 dark:text-amber-300" />
+                                                {taskAttachments.length}
+                                              </span>
+                                              <span
+                                                className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 dark:border-sky-800 dark:bg-sky-900/25 dark:text-sky-300"
+                                                title={`${task.events.length} ${tx('playbook.activity')}`}
+                                                aria-label={`${task.events.length} ${tx('playbook.activity')}`}
+                                              >
+                                                <PenLine size={10} className="text-sky-600 dark:text-sky-300" />
+                                                {task.events.length}
+                                              </span>
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-1 rounded-xl border border-violet-200/80 bg-violet-50/70 px-1.5 py-1 dark:border-violet-800/70 dark:bg-violet-900/20">
+                                              <span
+                                                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white/80 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-200"
+                                                title={`${taskComments.length} ${tx('playbook.comments')}`}
+                                                aria-label={`${taskComments.length} ${tx('playbook.comments')}`}
+                                              >
+                                                <MessageSquare size={10} className="text-slate-500 dark:text-slate-300" />
+                                                {taskComments.length}
+                                              </span>
+                                              <span
+                                                className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/25 dark:text-indigo-300"
+                                                title={`${taskLikeSummary?.likesCount ?? 0} ${tx('playbook.like')}`}
+                                                aria-label={`${taskLikeSummary?.likesCount ?? 0} ${tx('playbook.like')}`}
+                                              >
+                                                <ThumbsUp size={10} className="text-indigo-600 dark:text-indigo-300" />
+                                                {taskLikeSummary?.likesCount ?? 0}
+                                              </span>
+                                              <span
+                                                className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300"
+                                                title={`${taskLikeSummary?.sharesCount ?? 0} ${tx('playbook.shares')}`}
+                                                aria-label={`${taskLikeSummary?.sharesCount ?? 0} ${tx('playbook.shares')}`}
+                                              >
+                                                <Share2 size={10} className="text-emerald-600 dark:text-emerald-300" />
+                                                {taskLikeSummary?.sharesCount ?? 0}
+                                              </span>
+                                              <span
+                                                className="inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:border-violet-700 dark:bg-violet-900/35 dark:text-violet-300"
+                                                title={`${taskLikeSummary?.followersCount ?? 0} ${tx('playbook.followers')}`}
+                                                aria-label={`${taskLikeSummary?.followersCount ?? 0} ${tx('playbook.followers')}`}
+                                              >
+                                                <Bell size={10} className="text-violet-600 dark:text-violet-300" />
+                                                {taskLikeSummary?.followersCount ?? 0}
+                                              </span>
+                                              <span
+                                                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                                                title={`${taskLikeSummary?.viewsCount ?? 0} ${tx('playbook.views')}`}
+                                                aria-label={`${taskLikeSummary?.viewsCount ?? 0} ${tx('playbook.views')}`}
+                                              >
+                                                <Eye size={10} className="text-slate-500 dark:text-slate-300" />
+                                                {taskLikeSummary?.viewsCount ?? 0}
+                                              </span>
+                                            </div>
+                                          </div>
+
+                                          <div className="mt-3 flex flex-wrap gap-2">
+                                            <button
+                                              type="button"
+                                              onClick={() => openTaskInteractionSurface(task.id, 'gestion')}
+                                              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                                                isTaskGestionExpanded
+                                                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300'
+                                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800'
+                                              }`}
+                                            >
+                                              <Zap size={11} />
+                                              {tx('playbook.management')}
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => openTaskInteractionSurface(task.id, 'actividad')}
+                                              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                                                isTaskActivityExpanded
+                                                  ? 'border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-900/25 dark:text-sky-300'
+                                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800'
+                                              }`}
+                                            >
+                                              <PenLine size={11} />
+                                              {tx('playbook.activity')}
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => openTaskInteractionSurface(task.id, 'comunidad')}
+                                              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                                                isTaskCommunityExpanded
+                                                  ? 'border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-900/25 dark:text-violet-300'
+                                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800'
+                                              }`}
+                                            >
+                                              <MessageSquare size={11} />
+                                              {tx('playbook.community')}
+                                            </button>
+                                          </div>
+                                        </>
+                                      )}
 
                                       {isTaskMutating && (
                                         <Loader2 size={14} className="mt-1 animate-spin text-indigo-500 dark:text-indigo-300" />
@@ -5928,6 +6245,30 @@ export function ResultPanel({
                                               >
                                                 <X size={12} />
                                               </button>
+                                            </div>
+                                            <div className="mb-4">
+                                              <p className="mb-2 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                                                {tx('playbook.logInActivity')}
+                                              </p>
+                                              <input
+                                                type="text"
+                                                value={eventDraftContent}
+                                                onChange={(event) => setEventDraftContent(event.target.value)}
+                                                onKeyDown={(event) => {
+                                                  if (event.key === 'Enter' && !event.shiftKey && eventDraftContent.trim()) {
+                                                    void handleAddTaskEvent(task, 'note')
+                                                  }
+                                                }}
+                                                placeholder={tx('playbook.writeObservationActionBlocker')}
+                                                disabled={!canEditTaskContent || isTaskMutating}
+                                                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                                              />
+                                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'note')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"><Pencil size={11} />{getTaskEventTypeLabel('note', tx)}</button>
+                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'pending_action')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30"><Clock size={11} />{getTaskEventTypeLabel('pending_action', tx)}</button>
+                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'blocker')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300 dark:hover:bg-rose-900/30"><AlertTriangle size={11} />{getTaskEventTypeLabel('blocker', tx)}</button>
+                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'resolved')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"><CheckCircle2 size={11} />{getTaskEventTypeLabel('resolved', tx)}</button>
+                                              </div>
                                             </div>
                                             {task.events.length === 0 ? (
                                               <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -6067,60 +6408,21 @@ export function ResultPanel({
                                                 </div>
                                               </div>
                                             </div>
-                                            <div className="mt-4">
-                                              <p className="mb-2 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                                                {tx('playbook.logInActivity')}
-                                              </p>
-                                              <input
-                                                type="text"
-                                                value={eventDraftContent}
-                                                onChange={(event) => setEventDraftContent(event.target.value)}
-                                                onKeyDown={(event) => {
-                                                  if (event.key === 'Enter' && !event.shiftKey && eventDraftContent.trim()) {
-                                                    void handleAddTaskEvent(task, 'note')
-                                                  }
-                                                }}
-                                                placeholder={tx('playbook.writeObservationActionBlocker')}
-                                                disabled={!canEditTaskContent || isTaskMutating}
-                                                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
-                                              />
-                                              <div className="mt-2 flex flex-wrap gap-1.5">
-                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'note')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"><Pencil size={11} />{getTaskEventTypeLabel('note', tx)}</button>
-                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'pending_action')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30"><Clock size={11} />{getTaskEventTypeLabel('pending_action', tx)}</button>
-                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'blocker')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300 dark:hover:bg-rose-900/30"><AlertTriangle size={11} />{getTaskEventTypeLabel('blocker', tx)}</button>
-                                                <button type="button" onClick={() => void handleAddTaskEvent(task, 'resolved')} disabled={!canEditTaskContent || isTaskMutating || !eventDraftContent.trim()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"><CheckCircle2 size={11} />{getTaskEventTypeLabel('resolved', tx)}</button>
-                                              </div>
-                                            </div>
                                           </>
                                         )}
                                       </div>
                                     </div>
                                   </div>
 
-                                  {/* Comunidad — solo visible cuando el ítem está seleccionado (desktop only) */}
-                                  {isTaskSelected && task && (
+                                  {/* Comunidad — controlada por el botón rápido Community (desktop only) */}
+                                  {isTaskSelected && task && isTaskCommunityExpanded && (
                                     <div className="order-5 hidden md:block border-t border-slate-100 dark:border-slate-800">
-                                      {/* Header siempre visible: toggle comunidad */}
                                       <div className="flex flex-wrap items-center justify-between gap-2 px-3 pt-2 pb-1">
                                         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              setTaskCommunityOpenByTaskId((prev) => ({
-                                                ...prev,
-                                                [task.id]: !(prev[task.id] ?? true),
-                                              }))
-                                            }}
-                                            className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-700 dark:text-slate-300 dark:hover:text-slate-100 transition-colors"
-                                          >
+                                          <p className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
                                             <MessageSquare size={12} />
                                             {tx('playbook.community')}
-                                            {isTaskCommunityExpanded ? (
-                                              <ChevronUp size={10} className="opacity-60" />
-                                            ) : (
-                                              <ChevronDown size={10} className="opacity-60" />
-                                            )}
-                                          </button>
+                                          </p>
                                           <button
                                             type="button"
                                             onClick={() => {
@@ -6209,74 +6511,61 @@ export function ResultPanel({
                                           </p>
                                         )}
                                       </div>
+                                      <div className="px-3 pb-3">
+                                        {taskCommunityError && (
+                                          <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
+                                            {taskCommunityError}
+                                          </p>
+                                        )}
 
-                                      {/* Contenido colapsable */}
-                                      <div
-                                        aria-hidden={!isTaskCommunityExpanded}
-                                        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
-                                          isTaskCommunityExpanded
-                                            ? 'grid-rows-[1fr] opacity-100'
-                                            : 'grid-rows-[0fr] opacity-0'
-                                        }`}
-                                      >
-                                        <div className="overflow-hidden">
-                                          <div className="px-3 pb-3">
-                                            {taskCommunityError && (
-                                              <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
-                                                {taskCommunityError}
-                                              </p>
-                                            )}
-
-                                            <div className="mt-2 flex gap-2">
-                                              <input
-                                                type="text"
-                                                value={taskCommentDraft}
-                                                onChange={(event) =>
-                                                  handleTaskCommentDraftChange(task.id, event.target.value)
-                                                }
-                                                placeholder={tx('playbook.writeCommentForSubitem')}
-                                                disabled={isTaskCommunityMutating}
-                                                className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
-                                              />
-                                              <button
-                                                type="button"
-                                                onClick={() => void handleAddTaskComment(task)}
-                                                disabled={isTaskCommunityMutating || taskCommentDraft.trim().length === 0}
-                                                className="inline-flex h-9 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
-                                              >
-                                                {tx('playbook.comment')}
-                                              </button>
-                                            </div>
-
-                                            {isTaskCommunityLoading ? (
-                                              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                                                {tx('common.loading')}
-                                              </p>
-                                            ) : taskComments.length === 0 ? (
-                                              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                                                {tx('playbook.noCommentsYetForSubitem')}
-                                              </p>
-                                            ) : (
-                                              renderTaskCommentThread({
-                                                task,
-                                                comments: taskComments,
-                                                isCommunityMutating: isTaskCommunityMutating,
-                                                replyParentCommentId: taskReplyParentCommentId,
-                                                replyDraft: taskReplyDraft,
-                                                compact: false,
-                                              })
-                                            )}
-                                          </div>
+                                        <div className="mt-2 flex gap-2">
+                                          <input
+                                            type="text"
+                                            value={taskCommentDraft}
+                                            onChange={(event) =>
+                                              handleTaskCommentDraftChange(task.id, event.target.value)
+                                            }
+                                            placeholder={tx('playbook.writeCommentForSubitem')}
+                                            disabled={isTaskCommunityMutating}
+                                            className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => void handleAddTaskComment(task)}
+                                            disabled={isTaskCommunityMutating || taskCommentDraft.trim().length === 0}
+                                            className="inline-flex h-9 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
+                                          >
+                                            {tx('playbook.comment')}
+                                          </button>
                                         </div>
+
+                                        {isTaskCommunityLoading ? (
+                                          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                            {tx('common.loading')}
+                                          </p>
+                                        ) : taskComments.length === 0 ? (
+                                          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                            {tx('playbook.noCommentsYetForSubitem')}
+                                          </p>
+                                        ) : (
+                                          renderTaskCommentThread({
+                                            task,
+                                            comments: taskComments,
+                                            isCommunityMutating: isTaskCommunityMutating,
+                                            replyParentCommentId: taskReplyParentCommentId,
+                                            replyDraft: taskReplyDraft,
+                                            compact: false,
+                                          })
+                                        )}
                                       </div>
                                     </div>
                                   )}
 
                                   {/* Evidencias inline collapsible (desktop only) */}
                                   <div
-                                    aria-hidden={!isTaskSelected || !task}
+                                    aria-hidden={!isTaskSelected || !task || !isTaskEvidenceExpanded}
                                     className={`order-4 hidden md:grid transition-[grid-template-rows,opacity] duration-700 ease-out ${
-                                      isTaskSelected && task
+                                      isTaskSelected && task && isTaskEvidenceExpanded
                                         ? 'grid-rows-[1fr] opacity-100'
                                         : 'grid-rows-[0fr] opacity-0'
                                     }`}
@@ -6284,7 +6573,7 @@ export function ResultPanel({
                                     <div className="overflow-hidden">
                                       <div
                                         className={`border-t border-slate-200 bg-slate-100/60 p-3 transition-transform duration-700 ease-out dark:border-slate-700 dark:bg-slate-900/80 ${
-                                          isTaskSelected && task
+                                          isTaskSelected && task && isTaskEvidenceExpanded
                                             ? 'translate-y-0'
                                             : '-translate-y-2 pointer-events-none'
                                         }`}
@@ -6338,31 +6627,76 @@ export function ResultPanel({
                                                 </p>
                                               )}
 
-                                              {/* Toggle agregar evidencia */}
-                                              <div className="mt-3 flex justify-end">
-                                              <button
-                                                type="button"
-                                                onClick={() =>
-                                                  setTaskAddEvidenceExpandedByTaskId((prev) => ({
-                                                    ...prev,
-                                                    [task.id]: !isTaskAddEvidenceExpanded,
-                                                  }))
-                                                }
-                                                disabled={!canEditTaskContent}
-                                                className="flex items-center gap-1.5 rounded-lg border border-dashed border-indigo-200 bg-indigo-50/60 px-3 py-2 transition-colors hover:border-indigo-300 hover:bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-900/10 dark:hover:border-indigo-700 dark:hover:bg-indigo-900/20"
-                                              >
-                                                <Plus size={12} className="text-indigo-600 dark:text-indigo-400" />
-                                                <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">
-                                                  {tx('playbook.addEvidence')}
-                                                </span>
-                                                {isTaskAddEvidenceExpanded ? (
-                                                  <ChevronUp size={13} className="text-indigo-400" />
-                                                ) : (
-                                                  <ChevronDown size={13} className="text-indigo-400" />
-                                                )}
-                                              </button>
+                                              {/* ── Agregar evidencia: tarjetas visuales ── */}
+                                              <input
+                                                ref={(node) => {
+                                                  taskFileInputRefs.current[task.id] = node
+                                                }}
+                                                type="file"
+                                                accept=".pdf,application/pdf,image/*,audio/*"
+                                                className="hidden"
+                                                disabled={!canEditTaskContent || isTaskAttachmentMutating}
+                                                onChange={(event) => {
+                                                  const file = event.target.files?.[0] ?? null
+                                                  void handleTaskFileSelected(task, file)
+                                                }}
+                                              />
+
+                                              <div className="mt-3 grid grid-cols-3 gap-2">
+                                                {/* Card: Subir archivo */}
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleOpenTaskFilePicker(task.id)}
+                                                  disabled={!canEditTaskContent || isTaskAttachmentMutating}
+                                                  className="group/card flex flex-col items-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 bg-gradient-to-b from-slate-50 to-white px-2 py-3 transition-all hover:border-indigo-300 hover:from-indigo-50 hover:to-white hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:from-slate-800/60 dark:to-slate-900 dark:hover:border-indigo-600 dark:hover:from-indigo-950/30"
+                                                >
+                                                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-100 text-indigo-600 transition-colors group-hover/card:bg-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-400">
+                                                    <Upload size={15} />
+                                                  </div>
+                                                  <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">Subir archivo</span>
+                                                  <span className="text-[9px] text-slate-400 dark:text-slate-500">PDF, imagen, audio</span>
+                                                </button>
+
+                                                {/* Card: Nota */}
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    setTaskAddEvidenceExpandedByTaskId((prev) => ({
+                                                      ...prev,
+                                                      [task.id]: !prev[task.id],
+                                                    }))
+                                                  }
+                                                  disabled={!canEditTaskContent}
+                                                  className="group/card flex flex-col items-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 bg-gradient-to-b from-slate-50 to-white px-2 py-3 transition-all hover:border-amber-300 hover:from-amber-50 hover:to-white hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:from-slate-800/60 dark:to-slate-900 dark:hover:border-amber-600 dark:hover:from-amber-950/30"
+                                                >
+                                                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-600 transition-colors group-hover/card:bg-amber-200 dark:bg-amber-900/40 dark:text-amber-400">
+                                                    <Pencil size={15} />
+                                                  </div>
+                                                  <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">Escribir nota</span>
+                                                  <span className="text-[9px] text-slate-400 dark:text-slate-500">Texto libre</span>
+                                                </button>
+
+                                                {/* Card: YouTube */}
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    setYoutubeAttachmentDraftByTaskId((prev) => ({
+                                                      ...prev,
+                                                      [task.id]: prev[task.id] === '__yt_open__' ? '' : '__yt_open__',
+                                                    }))
+                                                  }
+                                                  disabled={!canEditTaskContent}
+                                                  className="group/card flex flex-col items-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 bg-gradient-to-b from-slate-50 to-white px-2 py-3 transition-all hover:border-rose-300 hover:from-rose-50 hover:to-white hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:from-slate-800/60 dark:to-slate-900 dark:hover:border-rose-600 dark:hover:from-rose-950/30"
+                                                >
+                                                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 text-rose-600 transition-colors group-hover/card:bg-rose-200 dark:bg-rose-900/40 dark:text-rose-400">
+                                                    <Play size={15} />
+                                                  </div>
+                                                  <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">YouTube</span>
+                                                  <span className="text-[9px] text-slate-400 dark:text-slate-500">Enlace de video</span>
+                                                </button>
                                               </div>
 
+                                              {/* Panel expandible: Nota de texto */}
                                               <div
                                                 className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
                                                   isTaskAddEvidenceExpanded
@@ -6370,133 +6704,123 @@ export function ResultPanel({
                                                     : 'grid-rows-[0fr] opacity-0'
                                                 }`}
                                               >
-                                              <div className="overflow-hidden">
-                                              <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900/60">
-
-                                              {/* Nota de texto */}
-                                              <div className="space-y-1.5">
-                                                <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                                                  <Pencil size={10} />
-                                                  Nota de texto
-                                                </p>
-                                                <textarea
-                                                  value={noteDraftByTaskId[task.id] ?? ''}
-                                                  onChange={(event) =>
-                                                    setNoteDraftByTaskId((previous) => ({
-                                                      ...previous,
-                                                      [task.id]: event.target.value,
-                                                    }))
-                                                  }
-                                                  placeholder={tx('playbook.task.notePlaceholder')}
-                                                  disabled={!canEditTaskContent || isTaskAttachmentMutating}
-                                                  style={{ minHeight: '4.5rem' }}
-                                                  onInput={(event) => {
-                                                    const el = event.currentTarget
-                                                    el.style.height = 'auto'
-                                                    el.style.height = `${el.scrollHeight}px`
-                                                  }}
-                                                  className="w-full resize-none overflow-hidden rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:bg-slate-800 dark:focus:ring-indigo-900/40"
-                                                />
-                                                <div className="flex justify-end">
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => void handleAddTaskNote(task)}
-                                                    disabled={
-                                                      !canEditTaskContent ||
-                                                      isTaskAttachmentMutating ||
-                                                      !(noteDraftByTaskId[task.id] ?? '').trim()
-                                                    }
-                                                    className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
-                                                  >
-                                                    <Save size={11} />
-                                                    {tx('playbook.task.saveNote')}
-                                                  </button>
+                                                <div className="overflow-hidden">
+                                                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-800/50 dark:bg-amber-950/20">
+                                                    <textarea
+                                                      value={noteDraftByTaskId[task.id] ?? ''}
+                                                      onChange={(event) =>
+                                                        setNoteDraftByTaskId((previous) => ({
+                                                          ...previous,
+                                                          [task.id]: event.target.value,
+                                                        }))
+                                                      }
+                                                      placeholder={tx('playbook.task.notePlaceholder')}
+                                                      disabled={!canEditTaskContent || isTaskAttachmentMutating}
+                                                      rows={3}
+                                                      className="w-full resize-none rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs text-slate-700 placeholder:text-slate-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-800 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-amber-600 dark:focus:ring-amber-900/40"
+                                                    />
+                                                    <div className="mt-2 flex items-center justify-between">
+                                                      <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                          setTaskAddEvidenceExpandedByTaskId((prev) => ({
+                                                            ...prev,
+                                                            [task.id]: false,
+                                                          }))
+                                                        }
+                                                        className="text-[11px] font-medium text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                                                      >
+                                                        Cancelar
+                                                      </button>
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => void handleAddTaskNote(task)}
+                                                        disabled={
+                                                          !canEditTaskContent ||
+                                                          isTaskAttachmentMutating ||
+                                                          !(noteDraftByTaskId[task.id] ?? '').trim()
+                                                        }
+                                                        className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-40"
+                                                      >
+                                                        <Save size={11} />
+                                                        Guardar nota
+                                                      </button>
+                                                    </div>
+                                                  </div>
                                                 </div>
                                               </div>
 
-                                              <div className="my-3 border-t border-dashed border-slate-200 dark:border-slate-700" />
-
-                                              {/* Archivo */}
-                                              <div className="space-y-1.5">
-                                                <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                                                  <Upload size={10} />
-                                                  Archivo
-                                                </p>
-                                                <input
-                                                  ref={(node) => {
-                                                    taskFileInputRefs.current[task.id] = node
-                                                  }}
-                                                  type="file"
-                                                  accept=".pdf,application/pdf,image/*,audio/*"
-                                                  className="hidden"
-                                                  disabled={!canEditTaskContent || isTaskAttachmentMutating}
-                                                  onChange={(event) => {
-                                                    const file = event.target.files?.[0] ?? null
-                                                    void handleTaskFileSelected(task, file)
-                                                  }}
-                                                />
-                                                <div className="flex justify-end">
-                                                <button
-                                                  type="button"
-                                                  onClick={() => handleOpenTaskFilePicker(task.id)}
-                                                  disabled={!canEditTaskContent || isTaskAttachmentMutating}
-                                                  className="flex items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2.5 text-[11px] font-semibold text-slate-500 transition-colors hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800/40 dark:text-slate-400 dark:hover:border-indigo-600 dark:hover:bg-indigo-900/20 dark:hover:text-indigo-300"
-                                                >
-                                                  <Upload size={13} />
-                                                  PDF · imagen · audio
-                                                </button>
+                                              {/* Panel expandible: YouTube */}
+                                              <div
+                                                className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
+                                                  taskYoutubeDraft === '__yt_open__'
+                                                    ? 'grid-rows-[1fr] opacity-100'
+                                                    : 'grid-rows-[0fr] opacity-0'
+                                                }`}
+                                              >
+                                                <div className="overflow-hidden">
+                                                  <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50/50 p-3 dark:border-rose-800/50 dark:bg-rose-950/20">
+                                                    <div className="flex gap-2">
+                                                      <input
+                                                        type="text"
+                                                        value={taskYoutubeDraft === '__yt_open__' ? '' : taskYoutubeDraft}
+                                                        onChange={(event) =>
+                                                          handleTaskYoutubeDraftChange(task.id, event.target.value)
+                                                        }
+                                                        placeholder="https://youtube.com/watch?v=..."
+                                                        disabled={!canEditTaskContent || isTaskAttachmentMutating}
+                                                        className="h-9 min-w-0 flex-1 rounded-lg border border-rose-200 bg-white px-3 text-xs text-slate-700 placeholder:text-slate-400 focus:border-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-800 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-rose-600"
+                                                      />
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => void handleAddTaskYoutubeLink(task)}
+                                                        disabled={
+                                                          !canEditTaskContent ||
+                                                          isTaskAttachmentMutating ||
+                                                          !taskYoutubeDraft.trim() || taskYoutubeDraft === '__yt_open__'
+                                                        }
+                                                        className="inline-flex h-9 flex-shrink-0 items-center gap-1.5 rounded-lg bg-rose-500 px-4 text-[11px] font-semibold text-white shadow-sm transition-all hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
+                                                      >
+                                                        <Plus size={12} />
+                                                        Agregar
+                                                      </button>
+                                                    </div>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() =>
+                                                        setYoutubeAttachmentDraftByTaskId((prev) => ({
+                                                          ...prev,
+                                                          [task.id]: '',
+                                                        }))
+                                                      }
+                                                      className="mt-2 text-[11px] font-medium text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                                                    >
+                                                      Cancelar
+                                                    </button>
+                                                  </div>
                                                 </div>
                                               </div>
 
-                                              <div className="my-3 border-t border-dashed border-slate-200 dark:border-slate-700" />
-
-                                              {/* YouTube */}
-                                              <div className="space-y-1.5">
-                                                <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                                                  <Link2 size={10} />
-                                                  YouTube
-                                                </p>
-                                                <div className="flex gap-2">
-                                                  <input
-                                                    type="text"
-                                                    value={taskYoutubeDraft}
-                                                    onChange={(event) =>
-                                                      handleTaskYoutubeDraftChange(task.id, event.target.value)
-                                                    }
-                                                    placeholder="Pega la URL del video..."
-                                                    disabled={!canEditTaskContent || isTaskAttachmentMutating}
-                                                    className="h-8 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:bg-slate-800"
-                                                  />
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => void handleAddTaskYoutubeLink(task)}
-                                                    disabled={
-                                                      !canEditTaskContent ||
-                                                      isTaskAttachmentMutating ||
-                                                      taskYoutubeDraft.trim().length === 0
-                                                    }
-                                                    className="inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-lg bg-rose-600 px-3 text-[11px] font-semibold text-white shadow-sm transition-all hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-40"
-                                                  >
-                                                    <Plus size={11} />
-                                                    {tx('common.add')}
-                                                  </button>
-                                                </div>
-                                              </div>
-
-                                              </div>{/* inner card */}
-                                              </div>{/* overflow-hidden */}
-                                              </div>{/* grid colapsable */}
-
+                                              {/* ── Lista de evidencias ── */}
                                               {isTaskAttachmentLoading ? (
-                                                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                                                  {tx('common.loading')}
-                                                </p>
+                                                <div className="mt-4 flex items-center justify-center gap-2 py-4">
+                                                  <Loader2 size={16} className="animate-spin text-indigo-400" />
+                                                  <span className="text-xs text-slate-500 dark:text-slate-400">Cargando evidencias...</span>
+                                                </div>
                                               ) : taskAttachments.length === 0 ? (
-                                                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                                                  {tx('playbook.subitemHasNoEvidenceYet')}
-                                                </p>
+                                                <div className="mt-4 flex flex-col items-center gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50/50 py-6 dark:border-slate-700 dark:bg-slate-800/30">
+                                                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800">
+                                                    <ImageIcon size={18} className="text-slate-300 dark:text-slate-600" />
+                                                  </div>
+                                                  <p className="text-xs font-medium text-slate-400 dark:text-slate-500">
+                                                    {tx('playbook.subitemHasNoEvidenceYet')}
+                                                  </p>
+                                                  <p className="text-[10px] text-slate-400/70 dark:text-slate-500/70">
+                                                    Sube archivos, escribe notas o agrega videos
+                                                  </p>
+                                                </div>
                                               ) : (
-                                                <ul className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                                <ul className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
                                                   {taskAttachments.map((attachment) => {
                                                     const attachmentLabel = getAttachmentTypeLabel(
                                                       attachment.attachmentType,
@@ -6935,8 +7259,13 @@ export function ResultPanel({
                       )}
                     </div>
 
-                    {/* Registrar en actividad */}
-                    <div>
+                  </div>
+                )}
+
+                {/* ── TAB: ACTIVIDAD ── */}
+                {mobileSheetTab === 'actividad' && (
+                  <div>
+                    <div className="mb-4">
                       <p className="mb-2 text-sm font-semibold text-slate-600 dark:text-slate-300">
                         {tx('playbook.logInActivity')}
                       </p>
@@ -6960,12 +7289,6 @@ export function ResultPanel({
                         <button type="button" onClick={() => void handleAddTaskEvent(sheetTask, 'resolved')} disabled={!canEditTaskContent || sheetIsTaskMutating || !eventDraftContent.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300"><CheckCircle2 size={12} />{getTaskEventTypeLabel('resolved', tx)}</button>
                       </div>
                     </div>
-                  </div>
-                )}
-
-                {/* ── TAB: ACTIVIDAD ── */}
-                {mobileSheetTab === 'actividad' && (
-                  <div>
                     {sheetTask.events.length === 0 ? (
                       <p className="text-sm text-slate-500 dark:text-slate-400">
                         {tx('playbook.noEventsYet')}

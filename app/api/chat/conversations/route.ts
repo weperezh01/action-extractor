@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { createChatConversationForUser, listChatConversationsForUser } from '@/lib/db'
+import {
+  createChatConversationForUser,
+  findChatConversationByContextForUser,
+  listChatConversationsForUser,
+} from '@/lib/db'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -50,11 +54,38 @@ export async function POST(req: NextRequest) {
     typeof (body as { title?: unknown }).title === 'string'
       ? (body as { title: string }).title.trim()
       : 'Nueva conversación'
+  const contextType =
+    typeof (body as { contextType?: unknown }).contextType === 'string'
+      ? (body as { contextType: string }).contextType.trim()
+      : ''
+  const contextId =
+    typeof (body as { contextId?: unknown }).contextId === 'string'
+      ? (body as { contextId: string }).contextId.trim()
+      : ''
 
-  const conv = await createChatConversationForUser({ userId: user.id, title })
+  if (contextType && contextId) {
+    const existing = await findChatConversationByContextForUser({
+      userId: user.id,
+      contextType,
+      contextId,
+    })
+    if (existing) {
+      return NextResponse.json({
+        conversation: mapConversation(existing),
+        created: false,
+      })
+    }
+  }
+
+  const conv = await createChatConversationForUser({
+    userId: user.id,
+    title,
+    contextType: contextType || undefined,
+    contextId: contextId || undefined,
+  })
   if (!conv) {
     return NextResponse.json({ error: 'No se pudo crear la conversación.' }, { status: 500 })
   }
 
-  return NextResponse.json({ conversation: mapConversation(conv) }, { status: 201 })
+  return NextResponse.json({ conversation: mapConversation(conv), created: true }, { status: 201 })
 }

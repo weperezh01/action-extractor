@@ -4454,6 +4454,30 @@ export async function listChatConversationsForUser(userId: string, limit = 30) {
   return rows.map(mapChatConversationRow)
 }
 
+export async function findChatConversationByContextForUser(input: {
+  userId: string
+  contextType: string
+  contextId: string
+}) {
+  await ensureDbReady()
+  const contextType = input.contextType.trim()
+  const contextId = input.contextId.trim()
+  if (!contextType || !contextId) return null
+
+  const { rows } = await pool.query<DbChatConversationRow>(
+    `
+      SELECT id, user_id, title, context_type, context_id, created_at, updated_at
+      FROM chat_conversations
+      WHERE user_id = $1 AND context_type = $2 AND context_id = $3
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `,
+    [input.userId, contextType, contextId]
+  )
+
+  return rows[0] ? mapChatConversationRow(rows[0]) : null
+}
+
 export async function createChatConversationForUser(input: {
   userId: string
   title?: string

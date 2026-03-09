@@ -268,6 +268,7 @@
     "noPredecessorsHint": "No predecessors. Add tasks as dependencies.",
     "noTasks": "No tasks",
     "normalLegend": "Normal",
+    "shares": "Shares",
     "onlyCriticalPath": "Only critical path",
     "openPlaybook": "Open playbook #{id}",
     "overdue": "Overdue",
@@ -329,9 +330,14 @@
       "pending": "Pending"
     },
     "statusLabel": "Status",
+    "closeEvidence": "Close evidence",
+    "subitemInteractionHint": "Click any subitem to open its evidence, activity, and community.",
+    "subitemInteractionHintTitle": "Interactive Subitems",
+    "evidencePanelOpen": "Evidence open",
     "subitemHasNoEvidenceYet": "No evidence yet",
     "subitemWithoutText": "(no text)",
     "subitems": "Subitems",
+    "openEvidenceAndDetails": "Open evidence and details",
     "syncingInteractiveChecklist": "Syncing...",
     "tags": {
       "removeAria": "Remove tag {tag}"

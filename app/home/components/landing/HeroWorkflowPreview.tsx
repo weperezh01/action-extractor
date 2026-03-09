@@ -2102,7 +2102,7 @@ export function HeroWorkflowPreview({ lang, mode = 'both' }: HeroWorkflowPreview
           onTouchStart={handleSummaryTouchStart}
           onTouchMove={handleSummaryTouchMove}
           onTouchEnd={finishSummaryTouchGesture}
-          onTouchCancel={resetSummarySwipeGesture}
+          onTouchCancel={() => resetSummarySwipeGesture()}
         >
           {summarySlideMotions.map(({ slide, index, isCentered, style, bodyStyle, visualStyle, focusProgress }) => {
             const Icon = getSummaryCardIcon(slide.key)

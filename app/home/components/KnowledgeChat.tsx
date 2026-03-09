@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import { Bot, ChevronLeft, MessageCircle, MessageSquarePlus, RotateCcw, Send, Trash2, X } from 'lucide-react'
+import { ChevronLeft, MessageSquarePlus, RotateCcw, Send, Trash2, X } from 'lucide-react'
 
 interface ChatReference {
   id: string
@@ -41,12 +41,14 @@ interface ConversationsApiResponse {
 interface CreateConversationApiResponse {
   conversation?: unknown
   error?: unknown
+  created?: unknown
 }
 
 interface ConversationItem {
   id: string
   title: string
   contextType: string
+  contextId: string | null
   updatedAt: string
 }
 
@@ -57,8 +59,16 @@ interface ChatMessage {
   references?: ChatReference[]
 }
 
+export interface FocusedItemContext {
+  path: string
+  text: string
+  phaseTitle: string
+}
+
 interface KnowledgeChatProps {
   activeExtractionId: string | null
+  focusedItemContext?: FocusedItemContext | null
+  onClearFocusedItem?: () => void
 }
 
 function createMessageId() {
@@ -160,6 +170,10 @@ function normalizeConversations(payload: unknown): ConversationItem[] {
         contextType: typeof (entry as { contextType?: unknown }).contextType === 'string'
           ? (entry as { contextType: string }).contextType
           : 'global',
+        contextId:
+          typeof (entry as { contextId?: unknown }).contextId === 'string'
+            ? (entry as { contextId: string }).contextId.trim() || null
+            : null,
         updatedAt: typeof (entry as { updatedAt?: unknown }).updatedAt === 'string'
           ? (entry as { updatedAt: string }).updatedAt
           : '',
@@ -185,7 +199,39 @@ function formatRelativeDate(isoDate: string) {
   return date.toLocaleDateString('es-MX', { month: 'short', day: 'numeric' })
 }
 
-export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
+function normalizeFocusedItemContextSegment(value: string | null | undefined, maxLength: number) {
+  return (value ?? '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+    .slice(0, maxLength)
+}
+
+function buildFocusedItemConversationContext(
+  activeExtractionId: string | null,
+  focusedItemContext: FocusedItemContext
+) {
+  const titleBase = focusedItemContext.path
+    ? `${focusedItemContext.path} - ${focusedItemContext.text}`
+    : focusedItemContext.text
+  const title = titleBase.slice(0, 80).trim() || 'Consulta de item'
+  const contextId = JSON.stringify({
+    extractionId: normalizeFocusedItemContextSegment(activeExtractionId, 120),
+    phaseTitle: normalizeFocusedItemContextSegment(focusedItemContext.phaseTitle, 160),
+    path: normalizeFocusedItemContextSegment(focusedItemContext.path, 80),
+    text: normalizeFocusedItemContextSegment(focusedItemContext.text, 400),
+  })
+
+  return {
+    title,
+    contextType: 'playbook_item',
+    contextId,
+  }
+}
+
+export function KnowledgeChat({ activeExtractionId, focusedItemContext, onClearFocusedItem }: KnowledgeChatProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [showConversations, setShowConversations] = useState(false)
   const [scope, setScope] = useState<'active' | 'all'>(activeExtractionId ? 'active' : 'all')
@@ -206,10 +252,16 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null)
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
+  const activeConversationIdRef = useRef<string | null>(null)
+  const creatingConversationRef = useRef(false)
 
   // Chat token quota state
   const [chatTokens, setChatTokens] = useState<ChatTokenSnapshot | null>(null)
   const [tokensExhausted, setTokensExhausted] = useState(false)
+
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId
+  }, [activeConversationId])
 
   const fetchChatTokens = useCallback(async () => {
     try {
@@ -286,6 +338,7 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
 
     void loadConversations().then((list) => {
       if (!list || list.length === 0) return
+      if (activeConversationIdRef.current) return
       const first = list[0]
       setActiveConversationId(first.id)
       setActiveConversationTitle(first.title)
@@ -328,8 +381,13 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
     setError(null)
   }, [])
 
-  const createNewConversation = useCallback(async () => {
-    if (creatingConversation) return
+  const createNewConversation = useCallback(async (input?: {
+    title?: string
+    contextType?: string
+    contextId?: string
+  }) => {
+    if (creatingConversationRef.current) return null
+    creatingConversationRef.current = true
     setCreatingConversation(true)
     setError(null)
 
@@ -337,32 +395,81 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
       const response = await fetch('/api/chat/conversations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: 'Nueva conversación' }),
+        body: JSON.stringify({
+          title: input?.title || 'Nueva conversación',
+          contextType: input?.contextType,
+          contextId: input?.contextId,
+        }),
       })
       const payload = (await response.json().catch(() => ({}))) as CreateConversationApiResponse
       if (!response.ok) {
         setError(resolveErrorMessage(payload, 'No se pudo crear la conversación.'))
-        return
+        return null
       }
       const convRaw = payload.conversation
-      if (!convRaw || typeof convRaw !== 'object') return
+      if (!convRaw || typeof convRaw !== 'object') return null
       const newConv: ConversationItem = {
         id: typeof (convRaw as { id?: unknown }).id === 'string' ? (convRaw as { id: string }).id : '',
         title: typeof (convRaw as { title?: unknown }).title === 'string' ? (convRaw as { title: string }).title : 'Nueva conversación',
-        contextType: 'global',
+        contextType:
+          typeof (convRaw as { contextType?: unknown }).contextType === 'string'
+            ? (convRaw as { contextType: string }).contextType
+            : 'global',
+        contextId:
+          typeof (convRaw as { contextId?: unknown }).contextId === 'string'
+            ? (convRaw as { contextId: string }).contextId.trim() || null
+            : null,
         updatedAt: typeof (convRaw as { updatedAt?: unknown }).updatedAt === 'string' ? (convRaw as { updatedAt: string }).updatedAt : new Date().toISOString(),
       }
-      if (!newConv.id) return
-      setConversations((prev) => [newConv, ...prev])
-      switchConversation(newConv)
+      if (!newConv.id) return null
+      const created = payload.created !== false
+      setConversations((prev) => [newConv, ...prev.filter((conversation) => conversation.id !== newConv.id)])
+      return { conversation: newConv, created }
     } catch {
       setError('No se pudo crear la conversación.')
+      return null
     } finally {
+      creatingConversationRef.current = false
       setCreatingConversation(false)
     }
-  }, [creatingConversation, switchConversation])
+  }, [])
 
-  const deleteConversation = useCallback(
+  // Auto-open the same conversation for a specific item if it already exists.
+  useEffect(() => {
+    if (!focusedItemContext) return
+
+    setIsOpen(true)
+    if (activeExtractionId) setScope('active')
+    setShowConversations(false)
+
+    const conversationContext = buildFocusedItemConversationContext(
+      activeExtractionId,
+      focusedItemContext
+    )
+
+    void createNewConversation(conversationContext).then((result) => {
+      if (!result) return
+
+      if (!result.created) {
+        switchConversation(result.conversation)
+        return
+      }
+
+      switchConversation(result.conversation)
+      setMessages([{
+        id: createMessageId(),
+        role: 'assistant',
+        content: `Estoy listo para ayudarte con el ítem **${focusedItemContext.path}**:
+
+_"${focusedItemContext.text}"_
+
+¿Qué necesitas saber sobre este punto?`,
+      }])
+      setHistoryLoaded(true)
+    })
+  }, [focusedItemContext, activeExtractionId, createNewConversation, switchConversation])
+
+    const deleteConversation = useCallback(
     async (conv: ConversationItem) => {
       if (deletingConversationId) return
       setDeletingConversationId(conv.id)
@@ -420,6 +527,7 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
           question,
           activeExtractionId: scope === 'active' ? activeExtractionId : null,
           conversationId: activeConversationId || undefined,
+          focusedItemContext: focusedItemContext || undefined,
         }),
       })
 
@@ -503,12 +611,14 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
         <button
           type="button"
           onClick={() => setIsOpen(true)}
-          className="fixed bottom-24 right-4 z-40 inline-flex items-center gap-2 rounded-full border border-indigo-300/80 bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_20px_42px_-18px_rgba(79,70,229,0.85)] transition-all hover:-translate-y-0.5 hover:from-indigo-500 hover:to-violet-500 md:right-6"
+          className="fixed bottom-24 right-4 z-40 rounded-full shadow-[0_20px_42px_-18px_rgba(79,70,229,0.85)] transition-all hover:-translate-y-0.5 hover:shadow-[0_24px_48px_-14px_rgba(79,70,229,0.95)] lg:right-20"
           aria-label="Abrir asistente de contenidos"
         >
-          <MessageCircle size={16} />
-          <span className="hidden sm:inline">Asistente IA</span>
-          <span className="sm:hidden">Chat</span>
+          <img
+            src="/notes-aide-bot.png"
+            alt="Asistente IA"
+            className="h-14 w-14 rounded-full border-2 border-indigo-400/60 object-cover"
+          />
         </button>
       )}
 
@@ -524,7 +634,7 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
               ) : (
                 <>
                   <p className="inline-flex items-center gap-2 text-sm font-semibold text-slate-800 dark:text-slate-100">
-                    <Bot size={15} />
+                    <img src="/notes-aide-bot.png" alt="Asistente" className="h-6 w-6 rounded-full object-cover" />
                     <span className="truncate max-w-[160px]" title={activeConversationTitle}>
                       {activeConversationTitle}
                     </span>
@@ -538,7 +648,12 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
               {showConversations ? (
                 <button
                   type="button"
-                  onClick={() => void createNewConversation()}
+                  onClick={() => {
+                    void createNewConversation().then((result) => {
+                      if (!result) return
+                      switchConversation(result.conversation)
+                    })
+                  }}
                   disabled={creatingConversation}
                   className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 px-2 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
                   title="Nueva conversación"
@@ -577,6 +692,7 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
                     setShowConversations(false)
                   } else {
                     setIsOpen(false)
+                    onClearFocusedItem?.()
                   }
                 }}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
@@ -665,6 +781,30 @@ export function KnowledgeChat({ activeExtractionId }: KnowledgeChatProps) {
                   </button>
                 </div>
               </div>
+
+              {/* Focused item indicator */}
+              {focusedItemContext && (
+                <div className="flex items-center gap-2 border-b border-indigo-100 bg-indigo-50/60 px-4 py-2 dark:border-indigo-900/40 dark:bg-indigo-950/30">
+                  <img src="/notes-aide-bot.png" alt="" className="h-5 w-5 rounded-full object-cover flex-shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[11px] font-semibold text-indigo-700 dark:text-indigo-300">
+                      {focusedItemContext.path}
+                    </p>
+                    <p className="truncate text-[10px] text-indigo-500 dark:text-indigo-400">
+                      {focusedItemContext.text}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onClearFocusedItem?.()}
+                    className="flex-shrink-0 rounded p-0.5 text-indigo-400 hover:bg-indigo-100 hover:text-indigo-600 dark:hover:bg-indigo-900/40 dark:hover:text-indigo-300"
+                    aria-label="Dejar de enfocar este ítem"
+                    title="Quitar enfoque"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
 
               {/* Messages */}
               <div ref={scrollContainerRef} className="max-h-[44vh] space-y-3 overflow-y-auto px-4 py-3">

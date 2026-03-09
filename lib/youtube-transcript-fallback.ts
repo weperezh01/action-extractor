@@ -469,7 +469,8 @@ async function transcribeAudioFileInChunks(params: {
     const textParts: string[] = []
     let totalDurationSeconds = 0
 
-    for (const [index, chunkFileName] of chunkFiles.entries()) {
+    for (let index = 0; index < chunkFiles.length; index += 1) {
+      const chunkFileName = chunkFiles[index]
       await params.onStatus?.({
         step: 'audio-chunk-progress',
         message: `Transcribiendo segmento ${index + 1}/${chunkFiles.length} del audio...`,
@@ -732,9 +733,10 @@ async function transcribeMediaWithOpenAi(params: {
     throw new Error('OpenAI transcription returned empty text.')
   }
 
+  const transcriptionWithDuration = transcription as { duration?: unknown }
   const durationSeconds =
-    typeof (transcription as { duration?: unknown }).duration === 'number'
-      ? (transcription as { duration: number }).duration
+    typeof transcriptionWithDuration.duration === 'number'
+      ? transcriptionWithDuration.duration
       : 0
 
   return {

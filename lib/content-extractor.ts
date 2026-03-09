@@ -93,7 +93,7 @@ export async function extractPdfContent(
   const { PDFParse } = require('pdf-parse') as {
     PDFParse: new (opts: { buffer: Buffer }) => { getText(): Promise<{ text: string }> }
   }
-  const parser = new PDFParse({ data: buffer })
+  const parser = new PDFParse({ buffer })
   const data = await parser.getText()
   const text = (data.text ?? '').replace(/\s{3,}/g, '\n\n').trim()
   return { text, title: filename, charCount: text.length }

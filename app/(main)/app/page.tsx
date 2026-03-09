@@ -38,7 +38,7 @@ import { CommunityPanel } from '@/app/home/components/CommunityPanel'
 import { GoogleIcon } from '@/app/home/components/GoogleIcon'
 import { ExtractionFeedCard } from '@/app/home/components/ExtractionFeedCard'
 import { HistoryPanel } from '@/app/home/components/HistoryPanel'
-import { KnowledgeChat } from '@/app/home/components/KnowledgeChat'
+import { KnowledgeChat, type FocusedItemContext } from '@/app/home/components/KnowledgeChat'
 import { KeyboardShortcutsModal } from '@/app/home/components/KeyboardShortcutsModal'
 import { ExtractionStreamingPreview } from '@/app/home/components/ExtractionStreamingPreview'
 import { ResultPanel } from '@/app/home/components/ResultPanel'
@@ -128,7 +128,6 @@ function normalizePersistedPhases(payload: unknown, fallback: Phase[]): Phase[] 
 }
 
 const CURRENT_PLAYBOOK_PHASE_KEY = '__current__'
-const SHARED_REQUEST_TIMEOUT_MS = 10000
 const SHARED_RESOURCES_BACKGROUND_REFRESH_MS = 30000
 const SHARED_RESOURCES_DRAWER_REFRESH_MS = 10000
 const SHARED_FOLDER_CLIENT_ID_PREFIX = 'ae-shared-folder'
@@ -343,6 +342,7 @@ function ActionExtractor() {
   const [sharedWithMe, setSharedWithMe] = useState<SharedExtractionItem[]>([])
   const [sharedFolders, setSharedFolders] = useState<FolderItem[]>([])
   const [folderShareTargetId, setFolderShareTargetId] = useState<string | null>(null)
+  const [focusedItemForChat, setFocusedItemForChat] = useState<FocusedItemContext | null>(null)
   const [folderShareMembers, setFolderShareMembers] = useState<FolderShareMemberItem[]>([])
   const [folderShareMembersLoading, setFolderShareMembersLoading] = useState(false)
   const [folderShareMutationLoading, setFolderShareMutationLoading] = useState(false)
@@ -427,13 +427,10 @@ function ActionExtractor() {
 
   const loadSharedWithMe = useCallback(async () => {
     setSharedWithMeLoading(true)
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), SHARED_REQUEST_TIMEOUT_MS)
 
     try {
       const res = await fetch('/api/shared-with-me', {
         cache: 'no-store',
-        signal: controller.signal,
       })
       if (res.status === 401) {
         setSharedWithMe([])
@@ -443,7 +440,6 @@ function ActionExtractor() {
         | { items?: unknown }
         | null
       if (!res.ok) {
-        setSharedWithMe([])
         return
       }
       const items = Array.isArray(data?.items)
@@ -481,21 +477,17 @@ function ActionExtractor() {
         : []
       setSharedWithMe(items)
     } catch {
-      setSharedWithMe([])
+      // Keep the last successful payload on transient failures. These shared
+      // resources can respond slowly right after authentication.
     } finally {
-      clearTimeout(timeoutId)
       setSharedWithMeLoading(false)
     }
   }, [])
 
   const loadSharedFolders = useCallback(async () => {
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), SHARED_REQUEST_TIMEOUT_MS)
-
     try {
       const res = await fetch('/api/folders/shared-with-me', {
         cache: 'no-store',
-        signal: controller.signal,
       })
       if (res.status === 401) {
         setSharedFolders([])
@@ -504,7 +496,6 @@ function ActionExtractor() {
 
       const data = (await res.json().catch(() => null)) as { folders?: unknown[] } | null
       if (!res.ok) {
-        setSharedFolders([])
         return
       }
 
@@ -513,9 +504,8 @@ function ActionExtractor() {
         : []
       setSharedFolders(normalizedFolders)
     } catch {
-      setSharedFolders([])
-    } finally {
-      clearTimeout(timeoutId)
+      // Keep the last successful payload on transient failures. These shared
+      // resources can respond slowly right after authentication.
     }
   }, [])
 
@@ -3929,6 +3919,7 @@ function ActionExtractor() {
                       onExportToGoogleDocs={() => handleExportToGoogleDocs(result.id)}
                       onConnectGoogleDocs={handleConnectGoogleDocs}
                       onOpenPlaybookReference={openDeskPlaybookByIdentifier}
+                      onFocusItemForChat={setFocusedItemForChat}
                       onReExtractMode={(mode) => {
                         handleScrollToExtractor()
                         void handleExtract({
@@ -4019,6 +4010,7 @@ function ActionExtractor() {
                             onExportToGoogleDocs={() => handleExportToGoogleDocs(item.id)}
                             onConnectGoogleDocs={handleConnectGoogleDocs}
                             onOpenPlaybookReference={openDeskPlaybookByIdentifier}
+                      onFocusItemForChat={setFocusedItemForChat}
                             onReExtractMode={(mode) => {
                               handleScrollToExtractor()
                               void handleExtract({
@@ -4162,7 +4154,7 @@ function ActionExtractor() {
               </button>
             )}
 
-            <KnowledgeChat activeExtractionId={result?.id ?? null} />
+            <KnowledgeChat activeExtractionId={result?.id ?? null} focusedItemContext={focusedItemForChat} onClearFocusedItem={() => setFocusedItemForChat(null)} />
 
             {folderShareTargetId && (
               <div

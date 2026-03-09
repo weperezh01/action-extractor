@@ -268,6 +268,7 @@
     "noPredecessorsHint": "Sin predecesores. Agrega tareas como dependencias.",
     "noTasks": "Sin tareas",
     "normalLegend": "Normal",
+    "shares": "Compartidos",
     "onlyCriticalPath": "Solo ruta crítica",
     "openPlaybook": "Abrir playbook #{id}",
     "overdue": "Atrasado",
@@ -329,9 +330,14 @@
       "pending": "Pendiente"
     },
     "statusLabel": "Estado",
+    "closeEvidence": "Cerrar evidencias",
+    "subitemInteractionHint": "Haz clic en cualquier subítem para abrir sus evidencias, actividad y comunidad.",
+    "subitemInteractionHintTitle": "Subítems interactivos",
+    "evidencePanelOpen": "Evidencias abiertas",
     "subitemHasNoEvidenceYet": "Sin evidencias todavía",
     "subitemWithoutText": "(sin texto)",
     "subitems": "Subítems",
+    "openEvidenceAndDetails": "Abrir evidencias y detalle",
     "syncingInteractiveChecklist": "Sincronizando...",
     "tags": {
       "removeAria": "Quitar etiqueta {tag}"
