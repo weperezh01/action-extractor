@@ -46,6 +46,7 @@ import {
   ThumbsUp,
   Trash2,
   Upload,
+  Users,
   Workflow,
   X,
   Zap,
@@ -135,6 +136,24 @@ import {
   isShareVisibilityShareable,
   getShareVisibilityLabel,
 } from '@/app/home/lib/share-visibility'
+import {
+  buildOrderedTaskStatusValues,
+  isBuiltInTaskStatus,
+  MAX_TASK_STATUS_LENGTH,
+  getTaskStatusChipClassName as getSharedTaskStatusChipClassName,
+  normalizeTaskStatusInput,
+} from '@/lib/task-statuses'
+import {
+  serializeTaskNumericFormula,
+  type TaskNumericFormula,
+  type TaskNumericFormulaOperation,
+} from '@/lib/task-numeric-formulas'
+import {
+  buildTaskSpreadsheetExcelHtml,
+  buildTaskSpreadsheetRows,
+  taskSpreadsheetRowToCells,
+  type TaskSpreadsheetRow,
+} from '@/lib/task-spreadsheet'
 
 interface ResultPanelProps {
   result: ExtractResult
@@ -174,6 +193,7 @@ interface ResultPanelProps {
   googleDocsUserEmail: string | null
   googleDocsLoading: boolean
   googleDocsExportLoading: boolean
+  googleSheetsExportLoading?: boolean
 
   onDownloadPdf: () => void | Promise<void>
   onCopyShareLink: () => void | Promise<void>
@@ -194,6 +214,7 @@ interface ResultPanelProps {
 
   onExportToGoogleDocs: () => void | Promise<void>
   onConnectGoogleDocs: () => void | Promise<void>
+  onExportToGoogleSheets?: () => void | Promise<void>
 
   isBookClosed?: boolean
   bookFolderLabel?: string | null
@@ -231,30 +252,48 @@ interface PlaybookPageTurnSnapshot {
   modeLabel: string
 }
 
-const TASK_STATUS_OPTIONS: Array<{
+type TaskDetailTab = 'gestion' | 'actividad' | 'evidencias' | 'comunidad'
+
+interface TaskStatusOption {
   value: InteractiveTaskStatus
+  label: string
   chipClassName: string
+}
+
+const TASK_NUMERIC_FORMULA_OPERATIONS: TaskNumericFormulaOperation[] = [
+  'sum',
+  'subtract',
+  'multiply',
+  'divide',
+]
+
+interface TaskCollectionResponsePayload {
+  tasks?: unknown
+  taskStatusCatalog?: unknown
+  error?: unknown
+}
+
+const TASK_SPREADSHEET_COLUMN_KEYS: Array<{
+  key: keyof TaskSpreadsheetRow
+  labelKey: string
+  align?: 'left' | 'center' | 'right'
 }> = [
-  {
-    value: 'pending',
-    chipClassName:
-      'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300',
-  },
-  {
-    value: 'in_progress',
-    chipClassName:
-      'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-900/25 dark:text-sky-300',
-  },
-  {
-    value: 'blocked',
-    chipClassName:
-      'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300',
-  },
-  {
-    value: 'completed',
-    chipClassName:
-      'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300',
-  },
+  { key: 'phase', labelKey: 'playbook.sheet.phase' },
+  { key: 'position', labelKey: 'playbook.sheet.position' },
+  { key: 'item', labelKey: 'playbook.sheet.item' },
+  { key: 'status', labelKey: 'playbook.sheet.status' },
+  { key: 'checked', labelKey: 'playbook.sheet.completed', align: 'center' },
+  { key: 'numericValue', labelKey: 'playbook.sheet.numericValue', align: 'right' },
+  { key: 'manualNumericValue', labelKey: 'playbook.sheet.manualNumericValue', align: 'right' },
+  { key: 'formula', labelKey: 'playbook.sheet.formula' },
+  { key: 'scheduledStartAt', labelKey: 'playbook.sheet.scheduledStart' },
+  { key: 'scheduledEndAt', labelKey: 'playbook.sheet.scheduledEnd' },
+  { key: 'dueAt', labelKey: 'playbook.sheet.dueAt' },
+  { key: 'completedAt', labelKey: 'playbook.sheet.completedAt' },
+  { key: 'durationDays', labelKey: 'playbook.sheet.durationDays', align: 'right' },
+  { key: 'predecessors', labelKey: 'playbook.sheet.predecessors' },
+  { key: 'nodeType', labelKey: 'playbook.sheet.nodeType' },
+  { key: 'depth', labelKey: 'playbook.sheet.depth', align: 'right' },
 ]
 
 function getTaskStatusLabel(status: InteractiveTaskStatus, t: (key: string) => string) {
@@ -266,16 +305,166 @@ function getTaskStatusLabel(status: InteractiveTaskStatus, t: (key: string) => s
     case 'completed':
       return t('playbook.status.completed')
     case 'pending':
-    default:
       return t('playbook.status.pending')
+    default:
+      return normalizeTaskStatusInput(status) || t('playbook.status.pending')
+  }
+}
+
+function getTaskNumericFormulaOperationLabel(
+  operation: TaskNumericFormulaOperation,
+  t: (key: string) => string
+) {
+  switch (operation) {
+    case 'subtract':
+      return t('playbook.task.numericFormulaOperationSubtract')
+    case 'multiply':
+      return t('playbook.task.numericFormulaOperationMultiply')
+    case 'divide':
+      return t('playbook.task.numericFormulaOperationDivide')
+    case 'sum':
+    default:
+      return t('playbook.task.numericFormulaOperationSum')
   }
 }
 
 function getTaskStatusChipClassName(status: InteractiveTaskStatus) {
-  return (
-    TASK_STATUS_OPTIONS.find((option) => option.value === status)?.chipClassName ??
-    TASK_STATUS_OPTIONS[0].chipClassName
+  return getSharedTaskStatusChipClassName(status)
+}
+
+function getTaskStatusHeaderClassName(status: InteractiveTaskStatus) {
+  if (status === 'pending') return 'text-slate-500 dark:text-slate-400'
+  if (status === 'in_progress') return 'text-sky-600 dark:text-sky-400'
+  if (status === 'blocked') return 'text-rose-600 dark:text-rose-400'
+  if (status === 'completed') return 'text-emerald-600 dark:text-emerald-400'
+  return 'text-violet-600 dark:text-violet-300'
+}
+
+function renderTaskStatusIcon(status: InteractiveTaskStatus, size: number) {
+  if (status === 'completed') return <CheckCircle2 size={size} />
+  if (status === 'in_progress') return <Zap size={size} />
+  if (status === 'blocked') return <AlertTriangle size={size} />
+  if (status === 'pending') return <Clock size={size} />
+  return <Workflow size={size} />
+}
+
+function resolveTaskStatusValueFromDraft(
+  draft: string,
+  options: TaskStatusOption[]
+): InteractiveTaskStatus | null {
+  const normalizedDraft = normalizeTaskStatusInput(draft).slice(0, MAX_TASK_STATUS_LENGTH)
+  if (!normalizedDraft) return null
+
+  const normalizedDraftKey = normalizedDraft.toLocaleLowerCase()
+  const existing =
+    options.find((option) => option.value.toLocaleLowerCase() === normalizedDraftKey) ??
+    options.find((option) => option.label.toLocaleLowerCase() === normalizedDraftKey)
+
+  return existing?.value ?? normalizedDraft
+}
+
+function parseTaskStatusCatalogPayload(raw: unknown) {
+  if (!Array.isArray(raw)) return []
+
+  const catalog: string[] = []
+  const seen = new Set<string>()
+
+  for (const value of raw) {
+    const normalized = normalizeTaskStatusInput(value).slice(0, MAX_TASK_STATUS_LENGTH)
+    if (!normalized || isBuiltInTaskStatus(normalized)) continue
+
+    const identity = normalized.toLocaleLowerCase()
+    if (seen.has(identity)) continue
+
+    seen.add(identity)
+    catalog.push(normalized)
+  }
+
+  return catalog
+}
+
+function formatTaskNumericValueDraft(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return ''
+  return String(value)
+}
+
+function parseTaskNumericValueDraft(raw: string): { ok: true; value: number | null } | { ok: false } {
+  const normalized = raw.trim().replace(/,/g, '.')
+  if (!normalized) {
+    return { ok: true, value: null }
+  }
+
+  const parsed = Number.parseFloat(normalized)
+  if (!Number.isFinite(parsed)) {
+    return { ok: false }
+  }
+
+  return { ok: true, value: parsed }
+}
+
+function createDefaultTaskNumericFormulaDraft(): TaskNumericFormula {
+  return {
+    operation: 'sum',
+    sourceTaskIds: [],
+  }
+}
+
+function sanitizeSpreadsheetFileName(value: string) {
+  const normalized = value
+    .trim()
+    .replace(/[^A-Za-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+
+  return normalized || 'action-extractor-sheet'
+}
+
+function downloadTextBlob(content: string, mimeType: string, fileName: string) {
+  if (typeof window === 'undefined') return
+
+  const blob = new Blob([content], { type: mimeType })
+  const objectUrl = window.URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = fileName
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.URL.revokeObjectURL(objectUrl)
+}
+
+function getTaskStatusIdentityKey(status: string) {
+  return normalizeTaskStatusInput(status).toLocaleLowerCase()
+}
+
+function replaceTaskStatusInCatalog(catalog: string[], status: string, nextStatus: string) {
+  const statusKey = getTaskStatusIdentityKey(status)
+  return parseTaskStatusCatalogPayload(
+    catalog.map((catalogStatus) =>
+      getTaskStatusIdentityKey(catalogStatus) === statusKey ? nextStatus : catalogStatus
+    )
   )
+}
+
+function removeTaskStatusFromCatalog(catalog: string[], status: string) {
+  const statusKey = getTaskStatusIdentityKey(status)
+  return catalog.filter((catalogStatus) => getTaskStatusIdentityKey(catalogStatus) !== statusKey)
+}
+
+function moveTaskStatusInCatalog(catalog: string[], status: string, direction: 'up' | 'down') {
+  const nextCatalog = [...catalog]
+  const statusKey = getTaskStatusIdentityKey(status)
+  const currentIndex = nextCatalog.findIndex(
+    (catalogStatus) => getTaskStatusIdentityKey(catalogStatus) === statusKey
+  )
+  if (currentIndex === -1) return nextCatalog
+
+  const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1
+  if (targetIndex < 0 || targetIndex >= nextCatalog.length) return nextCatalog
+
+  const [movedStatus] = nextCatalog.splice(currentIndex, 1)
+  nextCatalog.splice(targetIndex, 0, movedStatus)
+  return nextCatalog
 }
 
 function getTaskEventTypeLabel(eventType: InteractiveTaskEventType, t: (key: string) => string) {
@@ -673,6 +862,38 @@ function buildTaskCommentTree(comments: InteractiveTaskComment[]) {
   return roots
 }
 
+type EvidenceComposerMode = 'file' | 'note' | 'youtube'
+type EvidenceAttachmentFilter = 'all' | InteractiveTaskAttachment['attachmentType']
+
+const EVIDENCE_ATTACHMENT_FILTER_ORDER: InteractiveTaskAttachment['attachmentType'][] = [
+  'note',
+  'pdf',
+  'image',
+  'audio',
+  'youtube_link',
+]
+
+function resolveEvidenceUploadType(mimeType: string, fileName?: string) {
+  const normalized = mimeType.trim().toLowerCase()
+  if (normalized === 'application/pdf') return 'pdf'
+  if (normalized.startsWith('image/')) return 'image'
+  if (normalized.startsWith('audio/')) return 'audio'
+
+  const normalizedName = (fileName ?? '').trim().toLowerCase()
+  const extension =
+    normalizedName.lastIndexOf('.') >= 0 ? normalizedName.slice(normalizedName.lastIndexOf('.') + 1) : ''
+  if (!extension) return null
+
+  if (extension === 'pdf') return 'pdf'
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif', 'heic', 'heif'].includes(extension)) {
+    return 'image'
+  }
+  if (['mp3', 'wav', 'm4a', 'aac', 'ogg', 'oga', 'flac', 'opus'].includes(extension)) {
+    return 'audio'
+  }
+  return null
+}
+
 function formatAttachmentSize(sizeBytes: number | null) {
   if (typeof sizeBytes !== 'number' || !Number.isFinite(sizeBytes) || sizeBytes <= 0) return null
   const kb = 1024
@@ -690,6 +911,36 @@ function getAttachmentTypeLabel(
   if (type === 'youtube_link') return t('playbook.attachmentType.youtube')
   if (type === 'note') return t('playbook.attachmentType.note')
   return t('playbook.attachmentType.pdf')
+}
+
+function buildAttachmentFilterOptions(
+  attachments: InteractiveTaskAttachment[],
+  t: (key: string) => string
+) {
+  const counts = new Map<InteractiveTaskAttachment['attachmentType'], number>()
+  for (const attachment of attachments) {
+    counts.set(attachment.attachmentType, (counts.get(attachment.attachmentType) ?? 0) + 1)
+  }
+
+  const options: Array<{ key: EvidenceAttachmentFilter; label: string; count: number }> = [
+    {
+      key: 'all',
+      label: t('playbook.evidenceFilterAll'),
+      count: attachments.length,
+    },
+  ]
+
+  for (const type of EVIDENCE_ATTACHMENT_FILTER_ORDER) {
+    const count = counts.get(type) ?? 0
+    if (count <= 0) continue
+    options.push({
+      key: type,
+      label: getAttachmentTypeLabel(type, t),
+      count,
+    })
+  }
+
+  return options
 }
 
 /**
@@ -760,6 +1011,7 @@ export function ResultPanel({
   googleDocsUserEmail,
   googleDocsLoading,
   googleDocsExportLoading,
+  googleSheetsExportLoading = false,
 
   onDownloadPdf,
   onCopyShareLink,
@@ -780,6 +1032,7 @@ export function ResultPanel({
 
   onExportToGoogleDocs,
   onConnectGoogleDocs,
+  onExportToGoogleSheets = async () => {},
   isBookClosed = false,
   bookFolderLabel,
   onClose,
@@ -1052,7 +1305,8 @@ export function ResultPanel({
   const reextractProcessingRef = useRef(false)
   const rightControlsRef = useRef<HTMLDivElement | null>(null)
   const [interactiveTasks, setInteractiveTasks] = useState<InteractiveTask[]>([])
-  const [taskView, setTaskView] = useState<'list' | 'kanban' | 'calendar' | 'gantt' | 'cpm' | 'mindmap' | 'hierarchy' | 'flowchart' | 'presentation'>('list')
+  const [taskStatusCatalog, setTaskStatusCatalog] = useState<string[]>([])
+  const [taskView, setTaskView] = useState<'list' | 'kanban' | 'calendar' | 'gantt' | 'cpm' | 'mindmap' | 'hierarchy' | 'flowchart' | 'presentation' | 'sheets'>('list')
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
     const n = new Date()
     return new Date(Date.UTC(n.getFullYear(), n.getMonth(), 1))
@@ -1080,6 +1334,21 @@ export function ResultPanel({
   const [tasksError, setTasksError] = useState<string | null>(null)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
   const [taskMenuOpenId, setTaskMenuOpenId] = useState<string | null>(null)
+  const [taskNumericValueDraftByTaskId, setTaskNumericValueDraftByTaskId] = useState<
+    Record<string, string>
+  >({})
+  const [taskNumericValueErrorByTaskId, setTaskNumericValueErrorByTaskId] = useState<
+    Record<string, string | null>
+  >({})
+  const [taskNumericFormulaDraftByTaskId, setTaskNumericFormulaDraftByTaskId] = useState<
+    Record<string, TaskNumericFormula>
+  >({})
+  const [taskNumericFormulaErrorByTaskId, setTaskNumericFormulaErrorByTaskId] = useState<
+    Record<string, string | null>
+  >({})
+  const [taskStatusCatalogMutationKey, setTaskStatusCatalogMutationKey] = useState<string | null>(null)
+  const [editingTaskStatusValue, setEditingTaskStatusValue] = useState<string | null>(null)
+  const [editingTaskStatusDraft, setEditingTaskStatusDraft] = useState('')
   const [taskCommentMenuOpenId, setTaskCommentMenuOpenId] = useState<string | null>(null)
   const [taskMutationLoadingId, setTaskMutationLoadingId] = useState<string | null>(null)
   const [eventDraftContent, setEventDraftContent] = useState('')
@@ -1113,6 +1382,14 @@ export function ResultPanel({
   const [taskAttachmentErrorByTaskId, setTaskAttachmentErrorByTaskId] = useState<
     Record<string, string | null>
   >({})
+  const [taskAttachmentFilterByTaskId, setTaskAttachmentFilterByTaskId] = useState<
+    Record<string, EvidenceAttachmentFilter>
+  >({})
+  const [taskEvidenceComposerModeByTaskId, setTaskEvidenceComposerModeByTaskId] = useState<
+    Record<string, EvidenceComposerMode>
+  >({})
+  const [pendingTaskFileByTaskId, setPendingTaskFileByTaskId] = useState<Record<string, File | null>>({})
+  const [taskFileDropTargetId, setTaskFileDropTargetId] = useState<string | null>(null)
   const [youtubeAttachmentDraftByTaskId, setYoutubeAttachmentDraftByTaskId] = useState<
     Record<string, string>
   >({})
@@ -1139,6 +1416,9 @@ export function ResultPanel({
   const [taskOpenSectionByTaskId, setTaskOpenSectionByTaskId] = useState<
     Record<string, 'gestion' | 'actividad' | null>
   >({})
+  const [taskCustomStatusDraftByTaskId, setTaskCustomStatusDraftByTaskId] = useState<
+    Record<string, string>
+  >({})
   // One selected task at a time — community renders only for the selected task
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   // Per-task community visibility (true = shown, false = hidden by user toggle)
@@ -1153,9 +1433,6 @@ export function ResultPanel({
   >({})
   // Tracks tasks whose community data has already been auto-fetched (per mount)
   const autoFetchedCommunityRef = useRef<Set<string>>(new Set())
-  const [taskEstadoExpandedByTaskId, setTaskEstadoExpandedByTaskId] = useState<
-    Record<string, boolean>
-  >({})
   const [taskAddEvidenceExpandedByTaskId, setTaskAddEvidenceExpandedByTaskId] = useState<
     Record<string, boolean>
   >({})
@@ -1360,6 +1637,14 @@ export function ResultPanel({
   }, [isMetaEditing, metaCloudinaryAvailable])
 
   useEffect(() => {
+    setTaskStatusCatalog([])
+    setTaskStatusCatalogMutationKey(null)
+    setEditingTaskStatusValue(null)
+    setEditingTaskStatusDraft('')
+    setTaskNumericValueDraftByTaskId({})
+    setTaskNumericValueErrorByTaskId({})
+    setTaskNumericFormulaDraftByTaskId({})
+    setTaskNumericFormulaErrorByTaskId({})
     setTaskAttachmentsByTaskId({})
     setTaskAttachmentErrorByTaskId({})
     setYoutubeAttachmentDraftByTaskId({})
@@ -1375,11 +1660,11 @@ export function ResultPanel({
     setTaskReplyParentByTaskId({})
     setTaskCommentMenuOpenId(null)
     setTaskOpenSectionByTaskId({})
+    setTaskCustomStatusDraftByTaskId({})
     setSelectedTaskId(null)
     setTaskCommunityOpenByTaskId({})
     setTaskEvidenceOpenByTaskId({})
     autoFetchedCommunityRef.current = new Set()
-    setTaskEstadoExpandedByTaskId({})
     setTaskAddEvidenceExpandedByTaskId({})
     taskFileInputRefs.current = {}
   }, [result.id])
@@ -1394,6 +1679,7 @@ export function ResultPanel({
     const extractionId = result.id?.trim()
     if (!extractionId) {
       setInteractiveTasks([])
+      setTaskStatusCatalog([])
       setTasksLoading(false)
       setTasksError(null)
       setActiveTaskId(null)
@@ -1421,9 +1707,7 @@ export function ResultPanel({
               signal: controller.signal,
             })
 
-        const payload = (await response.json().catch(() => null)) as
-          | { tasks?: unknown; error?: unknown }
-          | null
+        const payload = (await response.json().catch(() => null)) as TaskCollectionResponsePayload | null
 
         if (!response.ok) {
           const message =
@@ -1434,9 +1718,11 @@ export function ResultPanel({
         }
 
         const tasks = Array.isArray(payload?.tasks) ? (payload.tasks as InteractiveTask[]) : []
+        const nextTaskStatusCatalog = parseTaskStatusCatalogPayload(payload?.taskStatusCatalog)
         if (controller.signal.aborted) return
 
         setInteractiveTasks(tasks)
+        setTaskStatusCatalog(nextTaskStatusCatalog)
         setActiveTaskId((previous) => (tasks.some((task) => task.id === previous) ? previous : null))
       } catch (error: unknown) {
         if (controller.signal.aborted) return
@@ -1480,6 +1766,88 @@ export function ResultPanel({
     }
     return map
   }, [interactiveTasks])
+
+  const tasksById = useMemo(() => {
+    const map = new Map<string, InteractiveTask>()
+    for (const task of interactiveTasks) {
+      map.set(task.id, task)
+    }
+    return map
+  }, [interactiveTasks])
+
+  const taskStatusOptions = useMemo<TaskStatusOption[]>(() => {
+    return buildOrderedTaskStatusValues({
+      catalog: taskStatusCatalog,
+      usedStatuses: interactiveTasks.map((task) => task.status),
+    }).map((status) => ({
+      value: status,
+      label: getTaskStatusLabel(status, tx),
+      chipClassName: getTaskStatusChipClassName(status),
+    }))
+  }, [interactiveTasks, taskStatusCatalog, tx])
+
+  const customTaskStatusOptions = useMemo(
+    () => taskStatusOptions.filter((option) => !isBuiltInTaskStatus(option.value)),
+    [taskStatusOptions]
+  )
+
+  const customTaskStatusCatalogValues = useMemo(
+    () => customTaskStatusOptions.map((option) => String(option.value)),
+    [customTaskStatusOptions]
+  )
+
+  const taskCountsByStatus = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const task of interactiveTasks) {
+      const key = normalizeTaskStatusInput(task.status).toLocaleLowerCase()
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return counts
+  }, [interactiveTasks])
+
+  const isTaskStatusCatalogMutating = taskStatusCatalogMutationKey !== null
+
+  const spreadsheetRows = useMemo(
+    () =>
+      buildTaskSpreadsheetRows(
+        interactiveTasks.map((task) => ({
+          id: task.id,
+          phaseTitle: task.phaseTitle,
+          itemText: task.itemText,
+          positionPath: task.positionPath,
+          phaseId: task.phaseId,
+          itemIndex: task.itemIndex,
+          status: task.status,
+          checked: task.checked,
+          numericValue: task.numericValue,
+          manualNumericValue: task.manualNumericValue,
+          numericFormula: task.numericFormula,
+          dueAt: task.dueAt,
+          completedAt: task.completedAt,
+          scheduledStartAt: task.scheduledStartAt,
+          scheduledEndAt: task.scheduledEndAt,
+          durationDays: task.durationDays,
+          predecessorIds: task.predecessorIds,
+          flowNodeType: task.flowNodeType,
+          depth: task.depth,
+        }))
+      ),
+    [interactiveTasks]
+  )
+
+  const spreadsheetHeaders = useMemo(
+    () => TASK_SPREADSHEET_COLUMN_KEYS.map((column) => tx(column.labelKey)),
+    [tx]
+  )
+
+  const spreadsheetColumns = useMemo(
+    () =>
+      TASK_SPREADSHEET_COLUMN_KEYS.map((column, index) => ({
+        ...column,
+        label: spreadsheetHeaders[index] ?? column.labelKey,
+      })),
+    [spreadsheetHeaders]
+  )
 
   const calendarData = useMemo(() => {
     const year = calendarMonth.getUTCFullYear()
@@ -1663,94 +2031,6 @@ export function ResultPanel({
     void fetchTaskCommunity(mobileSheetTaskId)
   }, [mobileSheetTaskId, mobileSheetTab])
 
-  const openTaskInteractionSurface = (
-    taskId: string,
-    target: 'gestion' | 'actividad' | 'evidencias' | 'comunidad'
-  ) => {
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
-      const isSameMobileSurface = mobileSheetTaskId === taskId && mobileSheetTab === target
-      if (target !== 'evidencias' && isSameMobileSurface) {
-        setMobileSheetTaskId(null)
-        return
-      }
-
-      setMobileSheetTaskId(taskId)
-      setMobileSheetTab(target)
-      return
-    }
-
-    const isSameTaskSelected = selectedTaskId === taskId
-    const isGestionAlreadyOpen =
-      target === 'gestion' &&
-      isSameTaskSelected &&
-      taskOpenSectionByTaskId[taskId] === 'gestion'
-    const isActividadAlreadyOpen =
-      target === 'actividad' &&
-      isSameTaskSelected &&
-      taskOpenSectionByTaskId[taskId] === 'actividad'
-    const isCommunityAlreadyOpen =
-      target === 'comunidad' &&
-      isSameTaskSelected &&
-      (taskCommunityOpenByTaskId[taskId] ?? false)
-
-    if (isGestionAlreadyOpen || isActividadAlreadyOpen) {
-      setTaskOpenSectionByTaskId((prev) => ({
-        ...prev,
-        [taskId]: null,
-      }))
-      return
-    }
-
-    if (isCommunityAlreadyOpen) {
-      setTaskCommunityOpenByTaskId((prev) => ({
-        ...prev,
-        [taskId]: false,
-      }))
-      return
-    }
-
-    setSelectedTaskId(taskId)
-    setActiveTaskId(taskId)
-    setTaskOpenSectionByTaskId((prev) => ({
-      ...prev,
-      [taskId]: target === 'gestion' || target === 'actividad' ? target : null,
-    }))
-    setTaskCommunityOpenByTaskId((prev) => ({
-      ...prev,
-      [taskId]: target === 'comunidad',
-    }))
-    setTaskEvidenceOpenByTaskId((prev) => ({
-      ...prev,
-      [taskId]: target === 'evidencias',
-    }))
-  }
-
-  const toggleTaskEvidenceSurface = (taskId: string) => {
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
-      if (mobileSheetTaskId === taskId && mobileSheetTab === 'evidencias') {
-        setMobileSheetTaskId(null)
-        return
-      }
-
-      setMobileSheetTaskId(taskId)
-      setMobileSheetTab('evidencias')
-      return
-    }
-
-    const isEvidenceAlreadyOpen =
-      selectedTaskId === taskId && (taskEvidenceOpenByTaskId[taskId] ?? false)
-
-    if (isEvidenceAlreadyOpen) {
-      setTaskEvidenceOpenByTaskId((prev) => ({
-        ...prev,
-        [taskId]: false,
-      }))
-      return
-    }
-
-    openTaskInteractionSurface(taskId, 'evidencias')
-  }
-
   useEffect(() => {
     const extractionId = result.id?.trim()
     const realtimeTaskId = mobileSheetTaskId ?? selectedTaskId
@@ -1834,12 +2114,13 @@ export function ResultPanel({
     const response = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ...(isGuestExtraction ? {} : { taskStatusCatalog: customTaskStatusCatalogValues }),
+        ...payload,
+      }),
     })
 
-    const data = (await response.json().catch(() => null)) as
-      | { tasks?: unknown; error?: unknown }
-      | null
+    const data = (await response.json().catch(() => null)) as TaskCollectionResponsePayload | null
 
     if (!response.ok) {
     const message =
@@ -1851,11 +2132,29 @@ export function ResultPanel({
     }
 
     const tasks = Array.isArray(data?.tasks) ? (data.tasks as InteractiveTask[]) : []
+    const nextTaskStatusCatalog = parseTaskStatusCatalogPayload(data?.taskStatusCatalog)
     setInteractiveTasks(tasks)
+    setTaskStatusCatalog(nextTaskStatusCatalog)
     setActiveTaskId((previous) => (tasks.some((task) => task.id === previous) ? previous : null))
     setTasksError(null)
     return true
   }
+
+  const handleDownloadSpreadsheetExcel = useCallback(() => {
+    const exportTitle =
+      sourceDisplayTitle.trim() || result.objective.trim() || tx('playbook.view.sheets')
+    const workbook = buildTaskSpreadsheetExcelHtml({
+      title: exportTitle,
+      headers: spreadsheetHeaders,
+      rows: spreadsheetRows.map((row) => taskSpreadsheetRowToCells(row)),
+    })
+
+    downloadTextBlob(
+      workbook,
+      'application/vnd.ms-excel;charset=utf-8',
+      `${sanitizeSpreadsheetFileName(exportTitle)}.xls`
+    )
+  }, [result.objective, sourceDisplayTitle, spreadsheetHeaders, spreadsheetRows, tx])
 
   const handleTaskToggle = async (task: InteractiveTask, checked: boolean) => {
     if (!canEditTaskContent) return
@@ -1872,10 +2171,10 @@ export function ResultPanel({
   }
 
   const handleTaskStatusChange = async (task: InteractiveTask, status: InteractiveTaskStatus) => {
-    if (!canEditTaskContent) return
+    if (!canEditTaskContent) return false
     setTaskMutationLoadingId(task.id)
     try {
-      await refreshTaskCollection({
+      return await refreshTaskCollection({
         action: 'update',
         taskId: task.id,
         status,
@@ -1884,6 +2183,900 @@ export function ResultPanel({
       setTaskMutationLoadingId(null)
     }
   }
+
+  const handleTaskNumericValueDraftChange = useCallback((taskId: string, value: string) => {
+    setTaskNumericValueDraftByTaskId((previous) => ({
+      ...previous,
+      [taskId]: value,
+    }))
+    setTaskNumericValueErrorByTaskId((previous) => ({
+      ...previous,
+      [taskId]: null,
+    }))
+  }, [])
+
+  const getTaskNumericFormulaDraft = useCallback((task: InteractiveTask) => {
+    const existingDraft = taskNumericFormulaDraftByTaskId[task.id]
+    if (existingDraft) {
+      return {
+        operation: existingDraft.operation,
+        sourceTaskIds: [...existingDraft.sourceTaskIds],
+      }
+    }
+    if (task.numericFormula) {
+      return {
+        operation: task.numericFormula.operation,
+        sourceTaskIds: [...task.numericFormula.sourceTaskIds],
+      }
+    }
+    return createDefaultTaskNumericFormulaDraft()
+  }, [taskNumericFormulaDraftByTaskId])
+
+  const handleSaveTaskNumericValue = useCallback(async (task: InteractiveTask) => {
+    if (!canEditTaskContent || task.numericFormula) return false
+
+    const draftValue =
+      taskNumericValueDraftByTaskId[task.id] ?? formatTaskNumericValueDraft(task.manualNumericValue)
+    const parsedDraft = parseTaskNumericValueDraft(draftValue)
+
+    if (!parsedDraft.ok) {
+      setTaskNumericValueErrorByTaskId((previous) => ({
+        ...previous,
+        [task.id]: tx('playbook.task.invalidNumericValue'),
+      }))
+      return false
+    }
+
+    if (parsedDraft.value === task.numericValue) {
+      setTaskNumericValueDraftByTaskId((previous) => ({
+        ...previous,
+        [task.id]: formatTaskNumericValueDraft(parsedDraft.value),
+      }))
+      setTaskNumericValueErrorByTaskId((previous) => ({
+        ...previous,
+        [task.id]: null,
+      }))
+      return true
+    }
+
+    setTaskMutationLoadingId(task.id)
+    try {
+      const updated = await refreshTaskCollection({
+        action: 'update',
+        taskId: task.id,
+        numericValue: parsedDraft.value,
+      })
+      if (!updated) return false
+
+      setTaskNumericValueDraftByTaskId((previous) => ({
+        ...previous,
+        [task.id]: formatTaskNumericValueDraft(parsedDraft.value),
+      }))
+      setTaskNumericValueErrorByTaskId((previous) => ({
+        ...previous,
+        [task.id]: null,
+      }))
+      return true
+    } finally {
+      setTaskMutationLoadingId(null)
+    }
+  }, [canEditTaskContent, refreshTaskCollection, taskNumericValueDraftByTaskId, tx])
+
+  const handleTaskNumericFormulaOperationChange = useCallback((
+    task: InteractiveTask,
+    operation: TaskNumericFormulaOperation
+  ) => {
+    const currentDraft = getTaskNumericFormulaDraft(task)
+    setTaskNumericFormulaDraftByTaskId((previous) => ({
+      ...previous,
+      [task.id]: {
+        ...currentDraft,
+        operation,
+      },
+    }))
+    setTaskNumericFormulaErrorByTaskId((previous) => ({
+      ...previous,
+      [task.id]: null,
+    }))
+  }, [getTaskNumericFormulaDraft])
+
+  const handleTaskNumericFormulaSourceToggle = useCallback((
+    task: InteractiveTask,
+    sourceTaskId: string
+  ) => {
+    const currentDraft = getTaskNumericFormulaDraft(task)
+    const sourceTaskIds = currentDraft.sourceTaskIds.includes(sourceTaskId)
+      ? currentDraft.sourceTaskIds.filter((candidateId) => candidateId !== sourceTaskId)
+      : [...currentDraft.sourceTaskIds, sourceTaskId]
+
+    setTaskNumericFormulaDraftByTaskId((previous) => ({
+      ...previous,
+      [task.id]: {
+        ...currentDraft,
+        sourceTaskIds,
+      },
+    }))
+    setTaskNumericFormulaErrorByTaskId((previous) => ({
+      ...previous,
+      [task.id]: null,
+    }))
+  }, [getTaskNumericFormulaDraft])
+
+  const handleSaveTaskNumericFormula = useCallback(async (task: InteractiveTask) => {
+    if (!canEditTaskContent) return false
+
+    const availableTaskIds = new Set(
+      interactiveTasks.filter((candidate) => candidate.id !== task.id).map((candidate) => candidate.id)
+    )
+    const currentDraft = getTaskNumericFormulaDraft(task)
+    const sourceTaskIds = currentDraft.sourceTaskIds.filter(
+      (sourceTaskId, index) =>
+        sourceTaskId !== task.id &&
+        availableTaskIds.has(sourceTaskId) &&
+        currentDraft.sourceTaskIds.indexOf(sourceTaskId) === index
+    )
+
+    if (sourceTaskIds.length === 0) {
+      setTaskNumericFormulaErrorByTaskId((previous) => ({
+        ...previous,
+        [task.id]: tx('playbook.task.numericFormulaInvalid'),
+      }))
+      return false
+    }
+
+    const nextFormula: TaskNumericFormula = {
+      operation: currentDraft.operation,
+      sourceTaskIds,
+    }
+
+    if (serializeTaskNumericFormula(nextFormula) === serializeTaskNumericFormula(task.numericFormula)) {
+      setTaskNumericFormulaDraftByTaskId((previous) => ({
+        ...previous,
+        [task.id]: nextFormula,
+      }))
+      setTaskNumericFormulaErrorByTaskId((previous) => ({
+        ...previous,
+        [task.id]: null,
+      }))
+      return true
+    }
+
+    setTaskMutationLoadingId(task.id)
+    try {
+      const updated = await refreshTaskCollection({
+        action: 'update',
+        taskId: task.id,
+        numericFormula: nextFormula,
+      })
+      if (!updated) return false
+
+      setTaskNumericFormulaDraftByTaskId((previous) => ({
+        ...previous,
+        [task.id]: nextFormula,
+      }))
+      setTaskNumericFormulaErrorByTaskId((previous) => ({
+        ...previous,
+        [task.id]: null,
+      }))
+      return true
+    } finally {
+      setTaskMutationLoadingId(null)
+    }
+  }, [canEditTaskContent, getTaskNumericFormulaDraft, interactiveTasks, refreshTaskCollection, tx])
+
+  const handleClearTaskNumericFormula = useCallback(async (task: InteractiveTask) => {
+    if (!canEditTaskContent) return false
+
+    if (!task.numericFormula) {
+      setTaskNumericFormulaDraftByTaskId((previous) => ({
+        ...previous,
+        [task.id]: createDefaultTaskNumericFormulaDraft(),
+      }))
+      setTaskNumericFormulaErrorByTaskId((previous) => ({
+        ...previous,
+        [task.id]: null,
+      }))
+      return true
+    }
+
+    setTaskMutationLoadingId(task.id)
+    try {
+      const updated = await refreshTaskCollection({
+        action: 'update',
+        taskId: task.id,
+        numericFormula: null,
+      })
+      if (!updated) return false
+
+      setTaskNumericFormulaDraftByTaskId((previous) => ({
+        ...previous,
+        [task.id]: createDefaultTaskNumericFormulaDraft(),
+      }))
+      setTaskNumericFormulaErrorByTaskId((previous) => ({
+        ...previous,
+        [task.id]: null,
+      }))
+      setTaskNumericValueDraftByTaskId((previous) => ({
+        ...previous,
+        [task.id]: formatTaskNumericValueDraft(task.manualNumericValue),
+      }))
+      return true
+    } finally {
+      setTaskMutationLoadingId(null)
+    }
+  }, [canEditTaskContent, refreshTaskCollection])
+
+  const handleTaskCustomStatusDraftChange = useCallback((taskId: string, value: string) => {
+    setTaskCustomStatusDraftByTaskId((previous) => ({
+      ...previous,
+      [taskId]: value.slice(0, MAX_TASK_STATUS_LENGTH),
+    }))
+  }, [])
+
+  const handleCreateTaskCustomStatus = useCallback(async (task: InteractiveTask) => {
+    if (!canEditTaskContent || isGuestExtraction) return false
+
+    const nextStatus = resolveTaskStatusValueFromDraft(
+      taskCustomStatusDraftByTaskId[task.id] ?? '',
+      taskStatusOptions
+    )
+    if (!nextStatus || isBuiltInTaskStatus(nextStatus)) return false
+
+    const mutationKey = `add:${getTaskStatusIdentityKey(nextStatus)}`
+    setTaskStatusCatalogMutationKey(mutationKey)
+    try {
+      const updated = await refreshTaskCollection({
+        action: 'add_status',
+        status: nextStatus,
+        taskStatusCatalog: parseTaskStatusCatalogPayload([
+          ...customTaskStatusCatalogValues,
+          nextStatus,
+        ]),
+      })
+      if (!updated) return false
+      setTaskCustomStatusDraftByTaskId((previous) => ({
+        ...previous,
+        [task.id]: '',
+      }))
+      return true
+    } finally {
+      setTaskStatusCatalogMutationKey((previous) => (previous === mutationKey ? null : previous))
+    }
+  }, [
+    canEditTaskContent,
+    customTaskStatusCatalogValues,
+    isGuestExtraction,
+    refreshTaskCollection,
+    taskCustomStatusDraftByTaskId,
+    taskStatusOptions,
+  ])
+
+  const handleStartEditingTaskStatus = useCallback((status: string) => {
+    setEditingTaskStatusValue(status)
+    setEditingTaskStatusDraft(status)
+  }, [])
+
+  const handleCancelEditingTaskStatus = useCallback(() => {
+    setEditingTaskStatusValue(null)
+    setEditingTaskStatusDraft('')
+  }, [])
+
+  const handleSaveTaskStatusRename = useCallback(async () => {
+    if (!canEditTaskContent || isGuestExtraction || !editingTaskStatusValue) return false
+
+    const nextStatus = resolveTaskStatusValueFromDraft(editingTaskStatusDraft, taskStatusOptions)
+    if (!nextStatus) return false
+
+    const nextCatalog = replaceTaskStatusInCatalog(
+      customTaskStatusCatalogValues,
+      editingTaskStatusValue,
+      nextStatus
+    )
+    const mutationKey = `rename:${getTaskStatusIdentityKey(editingTaskStatusValue)}`
+    setTaskStatusCatalogMutationKey(mutationKey)
+
+    try {
+      const updated = await refreshTaskCollection({
+        action: 'rename_status',
+        status: editingTaskStatusValue,
+        nextStatus,
+        taskStatusCatalog: nextCatalog,
+      })
+      if (!updated) return false
+      handleCancelEditingTaskStatus()
+      return true
+    } finally {
+      setTaskStatusCatalogMutationKey((previous) => (previous === mutationKey ? null : previous))
+    }
+  }, [
+    canEditTaskContent,
+    customTaskStatusCatalogValues,
+    editingTaskStatusDraft,
+    editingTaskStatusValue,
+    handleCancelEditingTaskStatus,
+    isGuestExtraction,
+    refreshTaskCollection,
+    taskStatusOptions,
+  ])
+
+  const handleDeleteTaskStatus = useCallback(async (status: string) => {
+    if (!canEditTaskContent || isGuestExtraction) return false
+
+    const nextCatalog = removeTaskStatusFromCatalog(customTaskStatusCatalogValues, status)
+    const mutationKey = `delete:${getTaskStatusIdentityKey(status)}`
+    setTaskStatusCatalogMutationKey(mutationKey)
+
+    try {
+      const updated = await refreshTaskCollection({
+        action: 'delete_status',
+        status,
+        taskStatusCatalog: nextCatalog,
+      })
+      if (!updated) return false
+      if (
+        editingTaskStatusValue &&
+        getTaskStatusIdentityKey(editingTaskStatusValue) === getTaskStatusIdentityKey(status)
+      ) {
+        handleCancelEditingTaskStatus()
+      }
+      return true
+    } finally {
+      setTaskStatusCatalogMutationKey((previous) => (previous === mutationKey ? null : previous))
+    }
+  }, [
+    canEditTaskContent,
+    customTaskStatusCatalogValues,
+    editingTaskStatusValue,
+    handleCancelEditingTaskStatus,
+    isGuestExtraction,
+    refreshTaskCollection,
+  ])
+
+  const handleMoveTaskStatus = useCallback(async (status: string, direction: 'up' | 'down') => {
+    if (!canEditTaskContent || isGuestExtraction) return false
+
+    const nextCatalog = moveTaskStatusInCatalog(customTaskStatusCatalogValues, status, direction)
+    if (nextCatalog.every((value, index) => value === customTaskStatusCatalogValues[index])) {
+      return false
+    }
+
+    const mutationKey = `move:${direction}:${getTaskStatusIdentityKey(status)}`
+    setTaskStatusCatalogMutationKey(mutationKey)
+
+    try {
+      return await refreshTaskCollection({
+        action: 'save_status_catalog',
+        taskStatusCatalog: nextCatalog,
+      })
+    } finally {
+      setTaskStatusCatalogMutationKey((previous) => (previous === mutationKey ? null : previous))
+    }
+  }, [
+    canEditTaskContent,
+    customTaskStatusCatalogValues,
+    isGuestExtraction,
+    refreshTaskCollection,
+  ])
+
+  const renderTaskStatusCatalogSection = useCallback((task: InteractiveTask, density: 'desktop' | 'mobile') => {
+    const taskCustomStatusDraft = taskCustomStatusDraftByTaskId[task.id] ?? ''
+    const isMobileDensity = density === 'mobile'
+    const canManageCustomStatuses = canEditTaskContent && !isGuestExtraction
+    const showSection = customTaskStatusOptions.length > 0 || canManageCustomStatuses
+
+    if (!showSection) return null
+
+    const containerClassName = isMobileDensity
+      ? 'mt-3 rounded-lg border border-slate-200 bg-white/80 px-3 py-3 dark:border-slate-700 dark:bg-slate-900/70'
+      : 'mt-2 rounded-lg border border-slate-200 bg-white/80 px-2.5 py-2.5 dark:border-slate-700 dark:bg-slate-900/70'
+    const titleClassName = isMobileDensity
+      ? 'text-sm font-semibold text-slate-600 dark:text-slate-300'
+      : 'text-[11px] font-semibold text-slate-600 dark:text-slate-300'
+    const hintClassName = isMobileDensity
+      ? 'text-xs text-slate-500 dark:text-slate-400'
+      : 'text-[10px] text-slate-500 dark:text-slate-400'
+    const addRowClassName = isMobileDensity ? 'mt-3 flex gap-2' : 'mt-2 flex gap-1.5'
+    const inputClassName = isMobileDensity
+      ? 'h-10 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
+      : 'h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
+    const addButtonClassName = isMobileDensity
+      ? 'inline-flex h-10 items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40'
+      : 'inline-flex h-9 items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40'
+    const emptyStateClassName = isMobileDensity
+      ? 'mt-3 text-xs text-slate-500 dark:text-slate-400'
+      : 'mt-2 text-[11px] text-slate-500 dark:text-slate-400'
+    const listClassName = isMobileDensity ? 'mt-3 space-y-2' : 'mt-2 space-y-2'
+    const editRowClassName = isMobileDensity ? 'flex gap-2' : 'flex gap-1.5'
+    const editInputClassName = isMobileDensity
+      ? 'h-10 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
+      : 'h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
+    const saveButtonClassName = isMobileDensity
+      ? 'inline-flex h-10 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-sm font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300 dark:hover:bg-emerald-900/40'
+      : 'inline-flex h-9 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-[11px] font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300 dark:hover:bg-emerald-900/40'
+    const cancelButtonClassName = isMobileDensity
+      ? 'inline-flex h-10 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-500 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800'
+      : 'inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-semibold text-slate-500 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800'
+    const chipTextClassName = isMobileDensity ? 'text-[11px]' : 'text-[10px]'
+
+    return (
+      <div className={containerClassName}>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className={titleClassName}>
+              {tx('playbook.task.customStatusesTitle')}
+            </p>
+            <p className={hintClassName}>
+              {tx('playbook.task.customStatusesHint')}
+            </p>
+          </div>
+          {customTaskStatusOptions.length > 0 && (
+            <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full border border-slate-200 bg-slate-50 px-2 text-[10px] font-semibold text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+              {customTaskStatusOptions.length}
+            </span>
+          )}
+        </div>
+
+        {canManageCustomStatuses && (
+          <div className={addRowClassName}>
+            <input
+              type="text"
+              value={taskCustomStatusDraft}
+              onChange={(event) => handleTaskCustomStatusDraftChange(task.id, event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  void handleCreateTaskCustomStatus(task)
+                }
+              }}
+              placeholder={tx('playbook.task.customStatusPlaceholder')}
+              maxLength={MAX_TASK_STATUS_LENGTH}
+              disabled={isTaskStatusCatalogMutating}
+              className={inputClassName}
+            />
+            <button
+              type="button"
+              onClick={() => void handleCreateTaskCustomStatus(task)}
+              disabled={isTaskStatusCatalogMutating || normalizeTaskStatusInput(taskCustomStatusDraft).length === 0}
+              className={addButtonClassName}
+            >
+              <Plus size={isMobileDensity ? 13 : 11} />
+              {tx('playbook.task.addStatus')}
+            </button>
+          </div>
+        )}
+
+        {customTaskStatusOptions.length === 0 ? (
+          <p className={emptyStateClassName}>
+            {canManageCustomStatuses
+              ? tx('playbook.task.noCustomStatuses')
+              : tx('playbook.task.noCustomStatusesReadOnly')}
+          </p>
+        ) : (
+          <div className={listClassName}>
+            {customTaskStatusOptions.map((option, index) => {
+              const statusValue = String(option.value)
+              const statusIdentity = getTaskStatusIdentityKey(statusValue)
+              const isEditing =
+                editingTaskStatusValue !== null &&
+                getTaskStatusIdentityKey(editingTaskStatusValue) === statusIdentity
+              const assignedTaskCount = taskCountsByStatus.get(statusIdentity) ?? 0
+
+              return (
+                <div
+                  key={statusValue}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 dark:border-slate-700 dark:bg-slate-800/60"
+                >
+                  {isEditing ? (
+                    <div className={editRowClassName}>
+                      <input
+                        type="text"
+                        value={editingTaskStatusDraft}
+                        onChange={(event) =>
+                          setEditingTaskStatusDraft(
+                            event.target.value.slice(0, MAX_TASK_STATUS_LENGTH)
+                          )
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault()
+                            void handleSaveTaskStatusRename()
+                          }
+                          if (event.key === 'Escape') {
+                            event.preventDefault()
+                            handleCancelEditingTaskStatus()
+                          }
+                        }}
+                        maxLength={MAX_TASK_STATUS_LENGTH}
+                        disabled={isTaskStatusCatalogMutating}
+                        className={editInputClassName}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveTaskStatusRename()}
+                        disabled={isTaskStatusCatalogMutating || normalizeTaskStatusInput(editingTaskStatusDraft).length === 0}
+                        className={saveButtonClassName}
+                        title={tx('playbook.task.saveStatus')}
+                      >
+                        <Save size={isMobileDensity ? 13 : 11} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCancelEditingTaskStatus}
+                        disabled={isTaskStatusCatalogMutating}
+                        className={cancelButtonClassName}
+                        title={tx('playbook.task.cancelStatusEdit')}
+                      >
+                        <X size={isMobileDensity ? 13 : 11} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className={`rounded-full border px-2 py-0.5 ${chipTextClassName} font-semibold ${option.chipClassName}`}>
+                            {option.label}
+                          </span>
+                          <span className={`${chipTextClassName} text-slate-500 dark:text-slate-400`}>
+                            {tx('playbook.task.statusUsedByCount', { count: assignedTaskCount })}
+                          </span>
+                        </div>
+                      </div>
+
+                      {canManageCustomStatuses && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => void handleMoveTaskStatus(statusValue, 'up')}
+                            disabled={isTaskStatusCatalogMutating || index === 0}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                            aria-label={tx('playbook.task.moveStatusUp')}
+                            title={tx('playbook.task.moveStatusUp')}
+                          >
+                            <ChevronUp size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleMoveTaskStatus(statusValue, 'down')}
+                            disabled={isTaskStatusCatalogMutating || index === customTaskStatusOptions.length - 1}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                            aria-label={tx('playbook.task.moveStatusDown')}
+                            title={tx('playbook.task.moveStatusDown')}
+                          >
+                            <ChevronDown size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditingTaskStatus(statusValue)}
+                            disabled={isTaskStatusCatalogMutating}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                            aria-label={tx('playbook.task.renameStatus')}
+                            title={tx('playbook.task.renameStatus')}
+                          >
+                            <Pencil size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteTaskStatus(statusValue)}
+                            disabled={isTaskStatusCatalogMutating}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-rose-200 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-700 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40"
+                            aria-label={tx('playbook.task.deleteStatus')}
+                            title={tx('playbook.task.deleteStatus')}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    )
+  }, [
+    canEditTaskContent,
+    customTaskStatusCatalogValues,
+    customTaskStatusOptions,
+    editingTaskStatusDraft,
+    editingTaskStatusValue,
+    handleCancelEditingTaskStatus,
+    handleCreateTaskCustomStatus,
+    handleDeleteTaskStatus,
+    handleMoveTaskStatus,
+    handleSaveTaskStatusRename,
+    handleStartEditingTaskStatus,
+    handleTaskCustomStatusDraftChange,
+    isGuestExtraction,
+    isTaskStatusCatalogMutating,
+    taskCountsByStatus,
+    taskCustomStatusDraftByTaskId,
+    tx,
+  ])
+
+  const renderTaskNumericValueField = useCallback((task: InteractiveTask, density: 'desktop' | 'mobile') => {
+    const isMobileDensity = density === 'mobile'
+    const isFormulaDriven = Boolean(task.numericFormula)
+    const draftValue = isFormulaDriven
+      ? formatTaskNumericValueDraft(task.numericValue)
+      : taskNumericValueDraftByTaskId[task.id] ?? formatTaskNumericValueDraft(task.manualNumericValue)
+    const error = isFormulaDriven ? null : taskNumericValueErrorByTaskId[task.id] ?? null
+    const isTaskMutating = taskMutationLoadingId === task.id
+    const numericValuePlaceholder = tx('playbook.task.numericValuePlaceholder')
+    const numericValueHint = isFormulaDriven
+      ? tx('playbook.task.numericFormulaComputedHint')
+      : tx('playbook.task.numericValueHint')
+
+    if (!isMobileDensity) {
+      const desktopInputWidthCh =
+        Math.max(3, draftValue.trim().length || 0, numericValuePlaceholder.length) + 1
+
+      return (
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <div className="flex items-center gap-1">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+              {tx('playbook.task.numericValueLabel')}
+            </p>
+            {isFormulaDriven && (
+              <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-semibold text-sky-700 dark:bg-sky-950/30 dark:text-sky-300">
+                {tx('playbook.task.numericFormulaModeComputed')}
+              </span>
+            )}
+          </div>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={draftValue}
+            onFocus={() => {
+              focusTask(task.id)
+            }}
+            onChange={(event) => handleTaskNumericValueDraftChange(task.id, event.target.value)}
+            onBlur={() => {
+              void handleSaveTaskNumericValue(task)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void handleSaveTaskNumericValue(task)
+              }
+            }}
+            aria-label={tx('playbook.task.numericValueLabel')}
+            placeholder={numericValuePlaceholder}
+            disabled={!canEditTaskContent || isTaskMutating || isFormulaDriven}
+            title={numericValueHint}
+            className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-right font-mono text-xs tabular-nums text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            style={{ width: `${desktopInputWidthCh}ch`, minWidth: '5ch' }}
+          />
+          {error && (
+            <p className="max-w-[10rem] text-right text-[10px] text-rose-600 dark:text-rose-300">
+              {error}
+            </p>
+          )}
+        </div>
+      )
+    }
+
+    return (
+      <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-800/50">
+        <div className="block">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+            <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">
+              {tx('playbook.task.numericValueLabel')}
+            </p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {numericValueHint}
+            </p>
+            </div>
+            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+              isFormulaDriven
+                ? 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950/30 dark:text-sky-300'
+                : 'border-slate-200 bg-white text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+            }`}>
+              {isFormulaDriven
+                ? tx('playbook.task.numericFormulaModeComputed')
+                : tx('playbook.task.numericFormulaModeManual')}
+            </span>
+          </div>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={draftValue}
+            onFocus={() => {
+              focusTask(task.id)
+            }}
+            onChange={(event) => handleTaskNumericValueDraftChange(task.id, event.target.value)}
+            onBlur={() => {
+              void handleSaveTaskNumericValue(task)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void handleSaveTaskNumericValue(task)
+              }
+            }}
+            placeholder={numericValuePlaceholder}
+            disabled={!canEditTaskContent || isTaskMutating || isFormulaDriven}
+            className="mt-2 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-right font-mono text-sm tabular-nums text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          />
+        </div>
+        {error && (
+          <p className="mt-1 text-xs text-rose-600 dark:text-rose-300">
+            {error}
+          </p>
+        )}
+      </div>
+    )
+  }, [
+    canEditTaskContent,
+    focusTask,
+    handleSaveTaskNumericValue,
+    handleTaskNumericValueDraftChange,
+    taskMutationLoadingId,
+    taskNumericValueDraftByTaskId,
+    taskNumericValueErrorByTaskId,
+    tx,
+  ])
+
+  const renderTaskNumericFormulaSection = useCallback((task: InteractiveTask, density: 'desktop' | 'mobile') => {
+    const isMobileDensity = density === 'mobile'
+    const draft = getTaskNumericFormulaDraft(task)
+    const selectedSourceTaskIds = draft.sourceTaskIds
+    const selectedSourceTaskIdsSet = new Set(selectedSourceTaskIds)
+    const availableSourceTasks = interactiveTasks.filter((candidate) => candidate.id !== task.id)
+    const error = taskNumericFormulaErrorByTaskId[task.id] ?? null
+    const isTaskMutating = taskMutationLoadingId === task.id
+
+    return (
+      <div className={`rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50 ${
+        isMobileDensity ? 'px-3 py-2.5' : 'mt-2 px-2.5 py-2'
+      }`}>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">
+              {tx('playbook.task.numericFormulaTitle')}
+            </p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {tx('playbook.task.numericFormulaHint')}
+            </p>
+          </div>
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+            task.numericFormula
+              ? 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950/30 dark:text-sky-300'
+              : 'border-slate-200 bg-white text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+          }`}>
+            {task.numericFormula
+              ? tx('playbook.task.numericFormulaModeComputed')
+              : tx('playbook.task.numericFormulaModeManual')}
+          </span>
+        </div>
+
+        <div className="mt-3">
+          <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            {tx('playbook.task.numericFormulaOperationLabel')}
+          </label>
+          <select
+            value={draft.operation}
+            onChange={(event) => {
+              handleTaskNumericFormulaOperationChange(
+                task,
+                event.target.value as TaskNumericFormulaOperation
+              )
+            }}
+            disabled={!canEditTaskContent || isTaskMutating}
+            className="mt-1.5 h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          >
+            {TASK_NUMERIC_FORMULA_OPERATIONS.map((operation) => (
+              <option key={operation} value={operation}>
+                {getTaskNumericFormulaOperationLabel(operation, tx)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="mt-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            {tx('playbook.task.numericFormulaSourcesLabel')}
+          </p>
+          {availableSourceTasks.length === 0 ? (
+            <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+              {tx('playbook.task.numericFormulaNoSources')}
+            </p>
+          ) : (
+            <div className={`mt-1.5 space-y-1.5 overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900 ${
+              isMobileDensity ? 'max-h-64' : 'max-h-48'
+            }`}>
+              {availableSourceTasks.map((sourceTask) => {
+                const sourceTaskLabel =
+                  typeof sourceTask.itemText === 'string' && sourceTask.itemText.trim()
+                    ? sourceTask.itemText.trim()
+                    : tx('playbook.subitemWithoutText')
+
+                return (
+                  <label
+                    key={sourceTask.id}
+                    className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2 py-2 transition-colors ${
+                      selectedSourceTaskIdsSet.has(sourceTask.id)
+                        ? 'border-indigo-200 bg-indigo-50 dark:border-indigo-700 dark:bg-indigo-950/20'
+                        : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedSourceTaskIdsSet.has(sourceTask.id)}
+                      onChange={() => handleTaskNumericFormulaSourceToggle(task, sourceTask.id)}
+                      disabled={!canEditTaskContent || isTaskMutating}
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="inline-flex rounded-md border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300">
+                          {sourceTask.positionPath?.trim() || `${sourceTask.phaseId}.${sourceTask.itemIndex + 1}`}
+                        </span>
+                        {selectedSourceTaskIdsSet.has(sourceTask.id) && (
+                          <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-300">
+                            {selectedSourceTaskIds.indexOf(sourceTask.id) + 1}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+                        {sourceTaskLabel}
+                      </p>
+                    </div>
+                  </label>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <p className="mt-2 text-xs text-rose-600 dark:text-rose-300">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              void handleSaveTaskNumericFormula(task)
+            }}
+            disabled={!canEditTaskContent || isTaskMutating || availableSourceTasks.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Save size={12} />
+            {tx('playbook.task.numericFormulaSave')}
+          </button>
+          {task.numericFormula && (
+            <button
+              type="button"
+              onClick={() => {
+                void handleClearTaskNumericFormula(task)
+              }}
+              disabled={!canEditTaskContent || isTaskMutating}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              <X size={12} />
+              {tx('playbook.task.numericFormulaRemove')}
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  }, [
+    canEditTaskContent,
+    getTaskNumericFormulaDraft,
+    handleClearTaskNumericFormula,
+    handleSaveTaskNumericFormula,
+    handleTaskNumericFormulaOperationChange,
+    handleTaskNumericFormulaSourceToggle,
+    interactiveTasks,
+    taskMutationLoadingId,
+    taskNumericFormulaErrorByTaskId,
+    tx,
+  ])
 
   const prevMonth = useCallback(() => {
     setCalendarMonth(prev => new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth() - 1, 1)))
@@ -1973,6 +3166,57 @@ export function ResultPanel({
     node.click()
   }
 
+  const handleSelectTaskEvidenceMode = useCallback((taskId: string, mode: EvidenceComposerMode) => {
+    setTaskAddEvidenceExpandedByTaskId((previous) => ({
+      ...previous,
+      [taskId]: true,
+    }))
+    setTaskEvidenceComposerModeByTaskId((previous) => ({
+      ...previous,
+      [taskId]: mode,
+    }))
+  }, [])
+
+  const clearPendingTaskFile = useCallback((taskId: string) => {
+    setPendingTaskFileByTaskId((previous) => ({
+      ...previous,
+      [taskId]: null,
+    }))
+    const node = taskFileInputRefs.current[taskId]
+    if (node) node.value = ''
+  }, [])
+
+  const handleTaskFileCandidate = useCallback((taskId: string, file: File | null) => {
+    if (!canEditTaskContent) return
+    if (!file) return
+
+    if (!resolveEvidenceUploadType(file.type || '', file.name)) {
+      setTaskAttachmentErrorByTaskId((previous) => ({
+        ...previous,
+        [taskId]: tx('errors.invalidEvidenceFileType'),
+      }))
+      clearPendingTaskFile(taskId)
+      return
+    }
+
+    setTaskAttachmentErrorByTaskId((previous) => ({
+      ...previous,
+      [taskId]: null,
+    }))
+    setPendingTaskFileByTaskId((previous) => ({
+      ...previous,
+      [taskId]: file,
+    }))
+    setTaskEvidenceComposerModeByTaskId((previous) => ({
+      ...previous,
+      [taskId]: 'file',
+    }))
+    setTaskAddEvidenceExpandedByTaskId((previous) => ({
+      ...previous,
+      [taskId]: true,
+    }))
+  }, [canEditTaskContent, clearPendingTaskFile, tx])
+
   const handleTaskFileSelected = async (task: InteractiveTask, file: File | null) => {
     if (!canEditTaskContent) return
     if (!file) return
@@ -2014,6 +3258,10 @@ export function ResultPanel({
         return
       }
 
+      setPendingTaskFileByTaskId((previous) => ({
+        ...previous,
+        [task.id]: null,
+      }))
       await fetchTaskAttachments(task.id)
     } catch {
       setTaskAttachmentErrorByTaskId((previous) => ({
@@ -2026,6 +3274,12 @@ export function ResultPanel({
       if (node) node.value = ''
     }
   }
+
+  const handleUploadPendingTaskFile = useCallback(async (task: InteractiveTask) => {
+    const pendingFile = pendingTaskFileByTaskId[task.id] ?? null
+    if (!pendingFile) return
+    await handleTaskFileSelected(task, pendingFile)
+  }, [handleTaskFileSelected, pendingTaskFileByTaskId])
 
   const handleTaskYoutubeDraftChange = (taskId: string, value: string) => {
     setYoutubeAttachmentDraftByTaskId((previous) => ({
@@ -3186,6 +4440,57 @@ export function ResultPanel({
     return renderNodes(roots, 0)
   }
 
+  function closeTaskPanels(taskId: string) {
+    setTaskOpenSectionByTaskId((prev) => ({
+      ...prev,
+      [taskId]: null,
+    }))
+    setTaskEvidenceOpenByTaskId((prev) => ({
+      ...prev,
+      [taskId]: false,
+    }))
+    setTaskCommunityOpenByTaskId((prev) => ({
+      ...prev,
+      [taskId]: false,
+    }))
+  }
+
+  function focusTask(taskId: string) {
+    if (selectedTaskId && selectedTaskId !== taskId) {
+      closeTaskPanels(selectedTaskId)
+    }
+    setSelectedTaskId(taskId)
+    setActiveTaskId(taskId)
+  }
+
+  function setExclusiveTaskPanel(taskId: string, panel: TaskDetailTab | null) {
+    if (panel === null) {
+      closeTaskPanels(taskId)
+      return
+    }
+
+    setTaskOpenSectionByTaskId((prev) => ({
+      ...prev,
+      [taskId]: panel === 'gestion' || panel === 'actividad' ? panel : null,
+    }))
+    setTaskEvidenceOpenByTaskId((prev) => ({
+      ...prev,
+      [taskId]: panel === 'evidencias',
+    }))
+    setTaskCommunityOpenByTaskId((prev) => ({
+      ...prev,
+      [taskId]: panel === 'comunidad',
+    }))
+  }
+
+  function openTaskDetailSheet(taskId: string, tab: TaskDetailTab) {
+    focusTask(taskId)
+    setMobileSheetTaskId(taskId)
+    setMobileSheetTab(tab)
+  }
+
+  const isMobileTaskViewport = () => typeof window !== 'undefined' && window.innerWidth < 768
+
   return (
     <div
       ref={panelRef}
@@ -4186,6 +5491,19 @@ export function ResultPanel({
                   </button>
                   <button
                     type="button"
+                    onClick={() => setTaskView('sheets')}
+                    title={tx('playbook.view.sheetsTooltip')}
+                    className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
+                      taskView === 'sheets'
+                        ? 'bg-emerald-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <FileText size={13} />
+                    <span className="hidden sm:inline">{tx('playbook.view.sheets')}</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setTaskView('kanban')}
                     title={tx('playbook.view.kanbanTooltip')}
                     className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold transition-colors ${
@@ -4462,9 +5780,185 @@ export function ResultPanel({
             </div>
           )}
 
+          {!isStructureEditing && taskView === 'sheets' && interactiveTasks.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 px-4 py-3 dark:border-emerald-800/50 dark:bg-emerald-950/20">
+                <div>
+                  <p className="text-sm font-semibold text-emerald-900 dark:text-emerald-200">
+                    {tx('playbook.sheet.title')}
+                  </p>
+                  <p className="mt-1 text-xs text-emerald-800/80 dark:text-emerald-300/80">
+                    {tx('playbook.sheet.description', { count: spreadsheetRows.length })}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDownloadSpreadsheetExcel}
+                    className="inline-flex h-9 items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 dark:border-emerald-700 dark:bg-slate-900 dark:text-emerald-300 dark:hover:bg-emerald-950/40"
+                  >
+                    <Download size={14} />
+                    {tx('playbook.sheet.exportExcel')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      googleDocsConnected
+                        ? triggerAsyncAction(onExportToGoogleSheets)
+                        : triggerAsyncAction(onConnectGoogleDocs)
+                    }
+                    disabled={
+                      googleDocsConnected
+                        ? !result.id || googleSheetsExportLoading
+                        : googleDocsLoading || !googleDocsConfigured || !result.id
+                    }
+                    className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-wait disabled:bg-slate-400"
+                  >
+                    <Zap size={14} />
+                    {googleDocsConnected
+                      ? googleSheetsExportLoading
+                        ? tx('playbook.sheet.exportingGoogleSheets')
+                        : tx('playbook.sheet.exportGoogleSheets')
+                      : googleDocsLoading
+                        ? tx('playbook.sheet.connectingGoogleSheets')
+                        : googleDocsConfigured
+                          ? tx('playbook.sheet.connectGoogleSheets')
+                          : tx('playbook.sheet.googleUnavailable')}
+                  </button>
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+                <div className="overflow-x-auto">
+                  <table className="min-w-[1200px] w-full border-collapse text-xs">
+                    <thead className="bg-slate-50 dark:bg-slate-800/80">
+                      <tr>
+                        {spreadsheetColumns.map((column) => (
+                          <th
+                            key={column.key}
+                            className={`border-b border-slate-200 px-3 py-2 font-semibold uppercase tracking-wider text-slate-500 dark:border-slate-700 dark:text-slate-300 ${
+                              column.align === 'right'
+                                ? 'text-right'
+                                : column.align === 'center'
+                                  ? 'text-center'
+                                  : 'text-left'
+                            }`}
+                          >
+                            {column.label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {spreadsheetRows.map((row) => {
+                        const task = tasksById.get(row.id) ?? null
+                        const isSelected = task?.id === selectedTaskId
+
+                        return (
+                          <tr
+                            key={row.id}
+                            onClick={() => {
+                              if (!task) return
+                              if (isMobileTaskViewport()) {
+                                openTaskDetailSheet(task.id, 'gestion')
+                                return
+                              }
+                              focusTask(task.id)
+                              setExclusiveTaskPanel(task.id, 'gestion')
+                            }}
+                            className={`cursor-pointer transition-colors ${
+                              isSelected
+                                ? 'bg-indigo-50/80 dark:bg-indigo-950/20'
+                                : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                            }`}
+                          >
+                            {spreadsheetColumns.map((column) => {
+                              const rawValue = row[column.key]
+                              const alignClassName =
+                                column.align === 'right'
+                                  ? 'text-right'
+                                  : column.align === 'center'
+                                    ? 'text-center'
+                                    : 'text-left'
+
+                              let content: React.ReactNode =
+                                rawValue === '' || rawValue === null ? (
+                                  <span className="text-slate-300 dark:text-slate-600">-</span>
+                                ) : (
+                                  String(rawValue)
+                                )
+
+                              if (column.key === 'item') {
+                                content = (
+                                  <span className="block min-w-[18rem] max-w-[28rem] whitespace-normal leading-relaxed text-slate-700 dark:text-slate-200">
+                                    {renderTextWithPlaybookReferences(row.item || tx('playbook.subitemWithoutText'))}
+                                  </span>
+                                )
+                              } else if (column.key === 'status' && task) {
+                                content = (
+                                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(task.status)}`}>
+                                    {getTaskStatusLabel(task.status, tx)}
+                                  </span>
+                                )
+                              } else if (column.key === 'checked') {
+                                content = (
+                                  <span className={`inline-flex items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                    row.checked
+                                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
+                                      : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-300'
+                                  }`}>
+                                    {row.checked ? tx('playbook.sheet.completedValue') : tx('playbook.sheet.pendingValue')}
+                                  </span>
+                                )
+                              } else if (
+                                column.key === 'numericValue' ||
+                                column.key === 'manualNumericValue' ||
+                                column.key === 'durationDays' ||
+                                column.key === 'depth'
+                              ) {
+                                content = (
+                                  <span className="font-mono tabular-nums text-slate-700 dark:text-slate-200">
+                                    {rawValue === '' || rawValue === null ? '-' : String(rawValue)}
+                                  </span>
+                                )
+                              } else if (column.key === 'formula') {
+                                content = row.formula ? (
+                                  <span className="font-mono text-[11px] text-sky-700 dark:text-sky-300">
+                                    {row.formula}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-300 dark:text-slate-600">-</span>
+                                )
+                              }
+
+                              return (
+                                <td
+                                  key={`${row.id}-${column.key}`}
+                                  className={`border-b border-slate-100 px-3 py-2 align-top text-slate-600 dark:border-slate-800 dark:text-slate-300 ${alignClassName}`}
+                                >
+                                  {content}
+                                </td>
+                              )
+                            })}
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
           {!isStructureEditing && taskView === 'kanban' && interactiveTasks.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              {TASK_STATUS_OPTIONS.map((col) => {
+            <div className="overflow-x-auto pb-1">
+              <div
+                className="grid min-w-max gap-3"
+                style={{
+                  gridTemplateColumns: `repeat(${Math.max(taskStatusOptions.length, 1)}, minmax(260px, 1fr))`,
+                }}
+              >
+              {taskStatusOptions.map((col) => {
                 const colTasks = interactiveTasks.filter((t) => t.status === col.value)
                 return (
                   <div
@@ -4481,12 +5975,9 @@ export function ResultPanel({
                     className="flex flex-col rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/40 min-h-[160px]"
                   >
                     <div className="flex items-center justify-between px-3 py-2 rounded-t-xl border-b border-slate-200 dark:border-slate-700">
-                      <span className={`text-[11px] font-bold uppercase tracking-wider ${
-                        col.value === 'pending' ? 'text-slate-500 dark:text-slate-400' :
-                        col.value === 'in_progress' ? 'text-sky-600 dark:text-sky-400' :
-                        col.value === 'blocked' ? 'text-rose-600 dark:text-rose-400' :
-                        'text-emerald-600 dark:text-emerald-400'
-                      }`}>{getTaskStatusLabel(col.value, tx)}</span>
+                      <span className={`text-[11px] font-bold uppercase tracking-wider ${getTaskStatusHeaderClassName(col.value)}`}>
+                        {col.label}
+                      </span>
                       <span className="ml-2 rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                         {colTasks.length}
                       </span>
@@ -4588,6 +6079,7 @@ export function ResultPanel({
                   </div>
                 )
               })}
+              </div>
             </div>
           )}
 
@@ -5607,61 +7099,9 @@ export function ResultPanel({
             />
           )}
 
-          {!isStructureEditing && taskView === 'list' && interactiveTasks.length > 0 && (
-            <div className="rounded-2xl border border-indigo-200 bg-gradient-to-r from-indigo-50 via-white to-sky-50 px-4 py-3 shadow-sm dark:border-indigo-800 dark:from-indigo-950/30 dark:via-slate-900 dark:to-sky-950/20">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="flex min-w-0 items-start gap-3">
-                  <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm">
-                    <LayoutList size={18} />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-indigo-700 dark:text-indigo-300">
-                      Lista guiada
-                    </p>
-                    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                      Marca avances y usa los botones rápidos de cada subítem para abrir
-                      {' '}<span className="font-semibold text-slate-800 dark:text-slate-100">{tx('playbook.management')}</span>,
-                      {' '}<span className="font-semibold text-slate-800 dark:text-slate-100">{tx('playbook.activity')}</span>,
-                      {' '}<span className="font-semibold text-slate-800 dark:text-slate-100">{tx('playbook.evidence')}</span>
-                      {' '}o <span className="font-semibold text-slate-800 dark:text-slate-100">{tx('playbook.community')}</span>.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center rounded-full border border-indigo-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-slate-900 dark:text-indigo-300">
-                    {interactiveTasks.filter((task) => task.checked).length}/{interactiveTasks.length} completados
-                  </span>
-                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                    {interactiveTasks.filter((task) => task.status === 'blocked').length} bloqueados
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
-
           {!isStructureEditing && taskView === 'list' &&
             result.phases.map((phase: Phase) => {
               const isPhaseExpanded = activePhase === phase.id
-              const phaseNodes = flattenPhaseNodes(phase.id, phase.items)
-              const phaseTaskEntries = phaseNodes.map((node, idx) => ({
-                node,
-                task:
-                  tasksByNodeId.get(node.nodeId) ??
-                  tasksByPhaseItem.get(`${phase.id}:${idx}`) ??
-                  null,
-              }))
-              const completedPhaseTaskCount = phaseTaskEntries.filter((entry) => entry.task?.checked).length
-              const evidencedPhaseTaskCount = phaseTaskEntries.filter((entry) =>
-                entry.task ? (taskAttachmentsByTaskId[entry.task.id] ?? []).length > 0 : false
-              ).length
-              const activePhaseTaskCount = phaseTaskEntries.filter((entry) =>
-                entry.task
-                  ? entry.task.events.length > 0 || (taskCommentsByTaskId[entry.task.id] ?? []).length > 0
-                  : false
-              ).length
-              const phaseProgressPct = phaseTaskEntries.length > 0
-                ? Math.round((completedPhaseTaskCount / phaseTaskEntries.length) * 100)
-                : 0
 
               return (
                 <div
@@ -5727,52 +7167,8 @@ export function ResultPanel({
                               {tx('playbook.subitems')}
                             </p>
                           </div>
-                          <div className="mb-4 rounded-2xl border border-slate-200/80 bg-white/85 p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900/80">
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div>
-                                <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-                                  Resumen de la fase
-                                </p>
-                                <p className="mt-1 text-sm font-semibold text-slate-800 dark:text-slate-100">
-                                  {completedPhaseTaskCount} de {phaseTaskEntries.length} subítems completados
-                                </p>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
-                                  {phaseProgressPct}% avance
-                                </span>
-                                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
-                                  {evidencedPhaseTaskCount} con evidencia
-                                </span>
-                                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
-                                  {activePhaseTaskCount} con actividad
-                                </span>
-                              </div>
-                            </div>
-                          <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-                            <div
-                              className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-sky-500 transition-all"
-                              style={{
-                                width: `${phaseProgressPct > 0 ? Math.max(6, phaseProgressPct) : 0}%`,
-                              }}
-                            />
-                          </div>
-                        </div>
-                          <div className="mb-4 flex items-start gap-3 rounded-2xl border border-indigo-200/80 bg-gradient-to-r from-indigo-50 via-white to-sky-50 px-3.5 py-3 shadow-sm dark:border-indigo-800/70 dark:from-indigo-950/20 dark:via-slate-900 dark:to-sky-950/10">
-                            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm">
-                              <ImageIcon size={16} />
-                            </div>
-                            <div className="min-w-0">
-                              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-indigo-700 dark:text-indigo-300">
-                                {tx('playbook.subitemInteractionHintTitle')}
-                              </p>
-                              <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                                {tx('playbook.subitemInteractionHint')}
-                              </p>
-                            </div>
-                          </div>
                           <ul className="space-y-3 md:ml-2 md:space-y-4 md:border-l-2 md:border-dashed md:border-slate-300 md:pl-4 md:dark:border-slate-700">
-                            {phaseTaskEntries.map(({ node, task }, idx) => {
+                            {flattenPhaseNodes(phase.id, phase.items).map((node, idx) => {
                               const itemText = node.text
                               const normalizedItemText =
                                 typeof itemText === 'string' ? itemText : itemText == null ? '' : String(itemText)
@@ -5780,10 +7176,23 @@ export function ResultPanel({
                                 ? renderTextWithPlaybookReferences(normalizedItemText)
                                 : tx('playbook.subitemWithoutText')
                               const subItemNumber = node.fullPath
+                              const task =
+                                tasksByNodeId.get(node.nodeId) ??
+                                tasksByPhaseItem.get(`${phase.id}:${idx}`) ??
+                                null
                               const isTaskMutating = task ? taskMutationLoadingId === task.id : false
                               const taskAttachments = task ? (taskAttachmentsByTaskId[task.id] ?? []) : []
                               const taskAttachmentError = task
                                 ? (taskAttachmentErrorByTaskId[task.id] ?? null)
+                                : null
+                              const taskAttachmentFilter = task
+                                ? (taskAttachmentFilterByTaskId[task.id] ?? 'all')
+                                : 'all'
+                              const taskEvidenceComposerMode = task
+                                ? (taskEvidenceComposerModeByTaskId[task.id] ?? 'file')
+                                : 'file'
+                              const pendingTaskFile = task
+                                ? (pendingTaskFileByTaskId[task.id] ?? null)
                                 : null
                               const taskYoutubeDraft = task
                                 ? (youtubeAttachmentDraftByTaskId[task.id] ?? '')
@@ -5794,6 +7203,25 @@ export function ResultPanel({
                               const isTaskAttachmentMutating = task
                                 ? taskAttachmentMutationId === task.id
                                 : false
+                              const isTaskFileDropTarget = task
+                                ? taskFileDropTargetId === task.id
+                                : false
+                              const taskAttachmentFilterOptions = buildAttachmentFilterOptions(
+                                taskAttachments,
+                                tx
+                              )
+                              const normalizedTaskAttachmentFilter = taskAttachmentFilterOptions.some(
+                                (option) => option.key === taskAttachmentFilter
+                              )
+                                ? taskAttachmentFilter
+                                : 'all'
+                              const visibleTaskAttachments =
+                                normalizedTaskAttachmentFilter === 'all'
+                                  ? taskAttachments
+                                  : taskAttachments.filter(
+                                      (attachment) =>
+                                        attachment.attachmentType === normalizedTaskAttachmentFilter
+                                    )
                               const taskComments = task ? (taskCommentsByTaskId[task.id] ?? []) : []
                               const taskLikeSummary = task
                                 ? (taskLikeSummaryByTaskId[task.id] ?? {
@@ -5843,12 +7271,18 @@ export function ResultPanel({
                                 autoFetchedCommunityRef.current.add(task.id)
                                 void fetchTaskCommunity(task.id)
                               }
-                              const isTaskEstadoExpanded = task
-                                ? (taskEstadoExpandedByTaskId[task.id] ?? false)
-                                : false
                               const isTaskAddEvidenceExpanded = task
                                 ? (taskAddEvidenceExpandedByTaskId[task.id] ?? false)
                                 : false
+                              const taskActivityCount = task?.events.length ?? 0
+                              const taskEvidenceCount = taskAttachments.length
+                              const taskCommentCount = taskComments.length
+                              const taskCommunityCount =
+                                taskCommentCount +
+                                (taskLikeSummary?.likesCount ?? 0) +
+                                (taskLikeSummary?.sharesCount ?? 0) +
+                                (taskLikeSummary?.followersCount ?? 0) +
+                                (taskLikeSummary?.viewsCount ?? 0)
 
                               return (
                                 <li
@@ -5876,8 +7310,10 @@ export function ResultPanel({
                                   <div className="order-1 p-3">
                                     {/* Content column — full width */}
                                     <div className="min-w-0">
-                                      <div className="mb-2 flex items-start justify-between gap-3">
-                                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+                                      {/* Top bar: checkbox + index + stats | activity/evidence + status */}
+                                      <div className="flex items-center justify-between gap-2 mb-1">
+                                        {/* ── Left: checkbox · number · community stats ── */}
+                                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                                           <button
                                             type="button"
                                             role="checkbox"
@@ -5903,92 +7339,60 @@ export function ResultPanel({
                                           <span className="inline-flex h-6 w-fit min-w-[2.3rem] items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 px-1.5 font-mono text-[11px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
                                             {subItemNumber}
                                           </span>
-                                          {node.depth > 1 && (
-                                            <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                                              Nivel {node.depth}
+                                          {/* Community micro-stats */}
+                                          <div className="flex items-center gap-2">
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.like')}>
+                                              <ThumbsUp size={10} />
+                                              {taskLikeSummary?.likesCount ?? 0}
                                             </span>
-                                          )}
-                                          {task?.checked && task?.status !== 'completed' && (
-                                            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
-                                              <CheckCircle2 size={10} />
-                                              {tx('playbook.markedAsCompleted')}
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('common.shared')}>
+                                              <Share2 size={10} />
+                                              {taskLikeSummary?.sharesCount ?? 0}
                                             </span>
-                                          )}
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.followers')}>
+                                              <Bell size={10} />
+                                              {taskLikeSummary?.followersCount ?? 0}
+                                            </span>
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.views')}>
+                                              <Eye size={10} />
+                                              {taskLikeSummary?.viewsCount ?? 0}
+                                            </span>
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.comments')}>
+                                              <MessageSquare size={10} />
+                                              {taskCommentCount}
+                                            </span>
+                                          </div>
                                         </div>
-                                        <div className="flex flex-wrap items-center justify-end gap-1.5 flex-shrink-0">
+                                        {/* ── Right: activity · evidence · status ── */}
+                                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                                          {task && taskActivityCount > 0 && (
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Actividad">
+                                              <Zap size={10} />
+                                              {taskActivityCount}
+                                            </span>
+                                          )}
+                                          {task && taskEvidenceCount > 0 && (
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.evidence')}>
+                                              <ImageIcon size={10} />
+                                              {taskEvidenceCount}
+                                            </span>
+                                          )}
+                                          {task && taskCommentCount > 0 && (
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={tx('playbook.participants')}>
+                                              <Users size={10} />
+                                              {taskCommentCount}
+                                            </span>
+                                          )}
                                           {task && (
                                             <>
-                                              <div className="hidden md:flex flex-wrap items-center gap-1.5">
-                                                <div className="flex flex-wrap items-center gap-1">
-                                                <span
-                                                  className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-300"
-                                                  title={`${taskAttachments.length} ${tx('playbook.evidence')}`}
-                                                  aria-label={`${taskAttachments.length} ${tx('playbook.evidence')}`}
-                                                >
-                                                  <ImageIcon size={10} className="text-amber-600 dark:text-amber-300" />
-                                                  {taskAttachments.length}
-                                                </span>
-                                                <span
-                                                  className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 dark:border-sky-800 dark:bg-sky-900/25 dark:text-sky-300"
-                                                  title={`${task.events.length} ${tx('playbook.activity')}`}
-                                                  aria-label={`${task.events.length} ${tx('playbook.activity')}`}
-                                                >
-                                                  <PenLine size={10} className="text-sky-600 dark:text-sky-300" />
-                                                  {task.events.length}
-                                                </span>
-                                                </div>
-                                                <div className="flex flex-wrap items-center gap-1 rounded-xl border border-violet-200/80 bg-violet-50/70 px-1.5 py-1 dark:border-violet-800/70 dark:bg-violet-900/20">
-                                                  <span
-                                                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-slate-200 bg-white/80 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-200"
-                                                    title={`${taskComments.length} ${tx('playbook.comments')}`}
-                                                    aria-label={`${taskComments.length} ${tx('playbook.comments')}`}
-                                                  >
-                                                    <MessageSquare size={10} className="text-slate-500 dark:text-slate-300" />
-                                                    {taskComments.length}
-                                                  </span>
-                                                  <span
-                                                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/25 dark:text-indigo-300"
-                                                    title={`${taskLikeSummary?.likesCount ?? 0} ${tx('playbook.like')}`}
-                                                    aria-label={`${taskLikeSummary?.likesCount ?? 0} ${tx('playbook.like')}`}
-                                                  >
-                                                    <ThumbsUp size={10} className="text-indigo-600 dark:text-indigo-300" />
-                                                    {taskLikeSummary?.likesCount ?? 0}
-                                                  </span>
-                                                  <span
-                                                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300"
-                                                    title={`${taskLikeSummary?.sharesCount ?? 0} ${tx('playbook.shares')}`}
-                                                    aria-label={`${taskLikeSummary?.sharesCount ?? 0} ${tx('playbook.shares')}`}
-                                                  >
-                                                    <Share2 size={10} className="text-emerald-600 dark:text-emerald-300" />
-                                                    {taskLikeSummary?.sharesCount ?? 0}
-                                                  </span>
-                                                  <span
-                                                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-violet-200 bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:border-violet-700 dark:bg-violet-900/35 dark:text-violet-300"
-                                                    title={`${taskLikeSummary?.followersCount ?? 0} ${tx('playbook.followers')}`}
-                                                    aria-label={`${taskLikeSummary?.followersCount ?? 0} ${tx('playbook.followers')}`}
-                                                  >
-                                                    <Bell size={10} className="text-violet-600 dark:text-violet-300" />
-                                                    {taskLikeSummary?.followersCount ?? 0}
-                                                  </span>
-                                                  <span
-                                                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                                                    title={`${taskLikeSummary?.viewsCount ?? 0} ${tx('playbook.views')}`}
-                                                    aria-label={`${taskLikeSummary?.viewsCount ?? 0} ${tx('playbook.views')}`}
-                                                  >
-                                                    <Eye size={10} className="text-slate-500 dark:text-slate-300" />
-                                                    {taskLikeSummary?.viewsCount ?? 0}
-                                                  </span>
-                                                </div>
-                                              </div>
+                                              {/* Mobile: icono compacto con color de estado */}
                                               <span
                                                 className={`md:hidden inline-flex items-center justify-center rounded-full border p-[3px] ${getTaskStatusChipClassName(task.status)}`}
                                                 title={getTaskStatusLabel(task.status, tx)}
                                               >
-                                                {task.status === 'completed' && <CheckCircle2 size={10} />}
-                                                {task.status === 'in_progress' && <Zap size={10} />}
-                                                {task.status === 'blocked' && <AlertTriangle size={10} />}
-                                                {task.status === 'pending' && <Clock size={10} />}
+                                                {renderTaskStatusIcon(task.status, 10)}
                                               </span>
+                                              {/* Desktop: chip con texto */}
                                               <span className={`hidden md:inline-flex rounded-md border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(task.status)}`}>
                                                 {getTaskStatusLabel(task.status, tx)}
                                               </span>
@@ -5997,8 +7401,8 @@ export function ResultPanel({
                                           {onFocusItemForChat && (
                                             <button
                                               type="button"
-                                              onClick={(e) => {
-                                                e.stopPropagation()
+                                              onClick={(event) => {
+                                                event.stopPropagation()
                                                 onFocusItemForChat({
                                                   path: node.fullPath,
                                                   text: typeof node.text === 'string' ? node.text : '',
@@ -6018,6 +7422,7 @@ export function ResultPanel({
                                                 type="button"
                                                 onClick={() => setTaskMenuOpenId((prev) => (prev === task.id ? null : task.id))}
                                                 className="flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+                                                aria-label="Abrir acciones rápidas del ítem"
                                               >
                                                 <MoreHorizontal size={12} />
                                               </button>
@@ -6027,7 +7432,12 @@ export function ResultPanel({
                                                     type="button"
                                                     onClick={() => {
                                                       setTaskMenuOpenId(null)
-                                                      openTaskInteractionSurface(task.id, 'actividad')
+                                                      if (isMobileTaskViewport()) {
+                                                        openTaskDetailSheet(task.id, 'actividad')
+                                                        return
+                                                      }
+                                                      focusTask(task.id)
+                                                      setExclusiveTaskPanel(task.id, 'actividad')
                                                     }}
                                                     className="flex w-full items-center gap-2 px-3 py-2 text-[11px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
                                                   >
@@ -6043,7 +7453,12 @@ export function ResultPanel({
                                                     type="button"
                                                     onClick={() => {
                                                       setTaskMenuOpenId(null)
-                                                      openTaskInteractionSurface(task.id, 'gestion')
+                                                      if (isMobileTaskViewport()) {
+                                                        openTaskDetailSheet(task.id, 'gestion')
+                                                        return
+                                                      }
+                                                      focusTask(task.id)
+                                                      setExclusiveTaskPanel(task.id, 'gestion')
                                                     }}
                                                     className="flex w-full items-center gap-2 px-3 py-2 text-[11px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
                                                   >
@@ -6068,141 +7483,178 @@ export function ResultPanel({
                                         </div>
                                       </div>
 
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          if (!task) return
-                                          toggleTaskEvidenceSurface(task.id)
-                                        }}
-                                        className={`group/item w-full rounded-xl border px-3 py-2.5 text-left transition-all ${
-                                          isTaskSelected
-                                            ? 'border-violet-200 bg-violet-50/80 shadow-sm dark:border-violet-800/70 dark:bg-violet-900/20'
-                                            : 'border-slate-200/80 bg-slate-50/70 hover:border-indigo-200 hover:bg-indigo-50/70 hover:shadow-sm dark:border-slate-700 dark:bg-slate-800/30 dark:hover:border-indigo-800 dark:hover:bg-indigo-950/20'
-                                        }`}
-                                      >
-                                        <span className="block text-slate-700 leading-relaxed text-sm font-medium dark:text-slate-200">
-                                          {itemDisplayText}
-                                        </span>
-                                        <span className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
-                                          <ImageIcon size={11} />
-                                          {isTaskSelected && isTaskEvidenceExpanded
-                                            ? tx('playbook.closeEvidence')
-                                            : tx('playbook.openEvidenceAndDetails')}
-                                          <ChevronRight
-                                            size={12}
-                                            className={`transition-transform ${
-                                              isTaskSelected && isTaskEvidenceExpanded
-                                                ? 'rotate-90'
-                                                : 'group-hover/item:translate-x-0.5'
-                                            }`}
-                                          />
-                                        </span>
-                                      </button>
+                                      {/* Text — click to focus this task and reveal quick actions */}
+                                      <div className="mt-2 grid grid-cols-[minmax(0,1fr)_max-content] items-start gap-3">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (!task) return
+                                            if (isMobileTaskViewport()) {
+                                              if (mobileSheetTaskId === task.id) {
+                                                setMobileSheetTaskId(null)
+                                              } else {
+                                                openTaskDetailSheet(task.id, 'gestion')
+                                              }
+                                            } else {
+                                              if (isTaskSelected) {
+                                                setSelectedTaskId(null)
+                                                setActiveTaskId(null)
+                                                setExclusiveTaskPanel(task.id, null)
+                                              } else {
+                                                focusTask(task.id)
+                                                setExclusiveTaskPanel(task.id, null)
+                                              }
+                                            }
+                                          }}
+                                          className={`w-full min-w-0 text-left rounded-lg px-1 py-0.5 transition-colors ${
+                                            isTaskSelected
+                                              ? 'bg-violet-50 dark:bg-violet-900/20'
+                                              : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                                          }`}
+                                        >
+                                          <span className="text-slate-600 leading-relaxed text-sm dark:text-slate-300">
+                                            {itemDisplayText}
+                                          </span>
+                                        </button>
 
-                                      {task && (
-                                        <>
-                                          <div className="mt-2 flex flex-wrap items-center gap-1.5 md:hidden">
-                                            <div className="flex flex-wrap items-center gap-1">
-                                              <span
-                                                className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-300"
-                                                title={`${taskAttachments.length} ${tx('playbook.evidence')}`}
-                                                aria-label={`${taskAttachments.length} ${tx('playbook.evidence')}`}
-                                              >
-                                                <ImageIcon size={10} className="text-amber-600 dark:text-amber-300" />
-                                                {taskAttachments.length}
-                                              </span>
-                                              <span
-                                                className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 dark:border-sky-800 dark:bg-sky-900/25 dark:text-sky-300"
-                                                title={`${task.events.length} ${tx('playbook.activity')}`}
-                                                aria-label={`${task.events.length} ${tx('playbook.activity')}`}
-                                              >
-                                                <PenLine size={10} className="text-sky-600 dark:text-sky-300" />
-                                                {task.events.length}
-                                              </span>
-                                            </div>
-                                            <div className="flex flex-wrap items-center gap-1 rounded-xl border border-violet-200/80 bg-violet-50/70 px-1.5 py-1 dark:border-violet-800/70 dark:bg-violet-900/20">
-                                              <span
-                                                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white/80 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-200"
-                                                title={`${taskComments.length} ${tx('playbook.comments')}`}
-                                                aria-label={`${taskComments.length} ${tx('playbook.comments')}`}
-                                              >
-                                                <MessageSquare size={10} className="text-slate-500 dark:text-slate-300" />
-                                                {taskComments.length}
-                                              </span>
-                                              <span
-                                                className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/25 dark:text-indigo-300"
-                                                title={`${taskLikeSummary?.likesCount ?? 0} ${tx('playbook.like')}`}
-                                                aria-label={`${taskLikeSummary?.likesCount ?? 0} ${tx('playbook.like')}`}
-                                              >
-                                                <ThumbsUp size={10} className="text-indigo-600 dark:text-indigo-300" />
-                                                {taskLikeSummary?.likesCount ?? 0}
-                                              </span>
-                                              <span
-                                                className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300"
-                                                title={`${taskLikeSummary?.sharesCount ?? 0} ${tx('playbook.shares')}`}
-                                                aria-label={`${taskLikeSummary?.sharesCount ?? 0} ${tx('playbook.shares')}`}
-                                              >
-                                                <Share2 size={10} className="text-emerald-600 dark:text-emerald-300" />
-                                                {taskLikeSummary?.sharesCount ?? 0}
-                                              </span>
-                                              <span
-                                                className="inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:border-violet-700 dark:bg-violet-900/35 dark:text-violet-300"
-                                                title={`${taskLikeSummary?.followersCount ?? 0} ${tx('playbook.followers')}`}
-                                                aria-label={`${taskLikeSummary?.followersCount ?? 0} ${tx('playbook.followers')}`}
-                                              >
-                                                <Bell size={10} className="text-violet-600 dark:text-violet-300" />
-                                                {taskLikeSummary?.followersCount ?? 0}
-                                              </span>
-                                              <span
-                                                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                                                title={`${taskLikeSummary?.viewsCount ?? 0} ${tx('playbook.views')}`}
-                                                aria-label={`${taskLikeSummary?.viewsCount ?? 0} ${tx('playbook.views')}`}
-                                              >
-                                                <Eye size={10} className="text-slate-500 dark:text-slate-300" />
-                                                {taskLikeSummary?.viewsCount ?? 0}
-                                              </span>
-                                            </div>
+                                        {task ? renderTaskNumericValueField(task, 'desktop') : null}
+                                      </div>
+
+                                      {task && isTaskSelected && (
+                                        <div className="mt-2 rounded-lg border border-slate-200/80 bg-slate-50/80 p-1.5 dark:border-slate-700 dark:bg-slate-800/40">
+                                          <div className="flex items-center justify-between gap-2">
+                                            <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                              {tx('playbook.subitemQuickActions')}
+                                            </p>
+                                            <span className="inline-flex items-center rounded-full bg-indigo-100 px-1.5 py-0.5 text-[9px] font-semibold text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                                              {tx('playbook.current')}
+                                            </span>
                                           </div>
-
-                                          <div className="mt-3 flex flex-wrap gap-2">
+                                          <div className="mt-1.5 grid grid-cols-2 gap-1 md:grid-cols-4">
                                             <button
                                               type="button"
-                                              onClick={() => openTaskInteractionSurface(task.id, 'gestion')}
-                                              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
-                                                isTaskGestionExpanded
-                                                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300'
-                                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800'
+                                              aria-pressed={isTaskSelected && isTaskEvidenceExpanded}
+                                              title={tx('playbook.evidence')}
+                                              onClick={() => {
+                                                if (isMobileTaskViewport()) {
+                                                  openTaskDetailSheet(task.id, 'evidencias')
+                                                  return
+                                                }
+                                                focusTask(task.id)
+                                                setExclusiveTaskPanel(
+                                                  task.id,
+                                                  isTaskSelected && isTaskEvidenceExpanded ? null : 'evidencias'
+                                                )
+                                                if (taskEvidenceCount === 0) {
+                                                  setTaskAddEvidenceExpandedByTaskId((prev) => ({
+                                                    ...prev,
+                                                    [task.id]: true,
+                                                  }))
+                                                }
+                                              }}
+                                              className={`inline-flex items-center justify-between gap-1.5 rounded-md border px-2 py-1.5 text-[10px] font-semibold leading-none transition-colors ${
+                                                isTaskSelected && isTaskEvidenceExpanded
+                                                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300'
+                                                  : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300 hover:text-indigo-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
                                               }`}
                                             >
-                                              <Zap size={11} />
-                                              {tx('playbook.management')}
+                                              <span className="inline-flex min-w-0 items-center gap-1">
+                                                <ImageIcon size={11} />
+                                                <span className="truncate">{tx('playbook.evidence')}</span>
+                                              </span>
+                                              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                                {taskEvidenceCount}
+                                              </span>
                                             </button>
                                             <button
                                               type="button"
-                                              onClick={() => openTaskInteractionSurface(task.id, 'actividad')}
-                                              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                                              aria-pressed={isTaskActivityExpanded}
+                                              title={tx('playbook.activity')}
+                                              onClick={() => {
+                                                if (isMobileTaskViewport()) {
+                                                  openTaskDetailSheet(task.id, 'actividad')
+                                                  return
+                                                }
+                                                focusTask(task.id)
+                                                setExclusiveTaskPanel(
+                                                  task.id,
+                                                  isTaskActivityExpanded ? null : 'actividad'
+                                                )
+                                              }}
+                                              className={`inline-flex items-center justify-between gap-1.5 rounded-md border px-2 py-1.5 text-[10px] font-semibold leading-none transition-colors ${
                                                 isTaskActivityExpanded
-                                                  ? 'border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-900/25 dark:text-sky-300'
-                                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800'
+                                                  ? 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300'
+                                                  : 'border-slate-200 bg-white text-slate-600 hover:border-amber-300 hover:text-amber-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
                                               }`}
                                             >
-                                              <PenLine size={11} />
-                                              {tx('playbook.activity')}
+                                              <span className="inline-flex min-w-0 items-center gap-1">
+                                                <Zap size={11} />
+                                                <span className="truncate">{tx('playbook.activity')}</span>
+                                              </span>
+                                              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                                {taskActivityCount}
+                                              </span>
                                             </button>
                                             <button
                                               type="button"
-                                              onClick={() => openTaskInteractionSurface(task.id, 'comunidad')}
-                                              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
-                                                isTaskCommunityExpanded
-                                                  ? 'border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-900/25 dark:text-violet-300'
-                                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800'
+                                              aria-pressed={isTaskGestionExpanded}
+                                              title={tx('playbook.management')}
+                                              onClick={() => {
+                                                if (isMobileTaskViewport()) {
+                                                  openTaskDetailSheet(task.id, 'gestion')
+                                                  return
+                                                }
+                                                focusTask(task.id)
+                                                setExclusiveTaskPanel(
+                                                  task.id,
+                                                  isTaskGestionExpanded ? null : 'gestion'
+                                                )
+                                              }}
+                                              className={`inline-flex items-center justify-between gap-1.5 rounded-md border px-2 py-1.5 text-[10px] font-semibold leading-none transition-colors ${
+                                                isTaskGestionExpanded
+                                                  ? 'border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950/30 dark:text-sky-300'
+                                                  : 'border-slate-200 bg-white text-slate-600 hover:border-sky-300 hover:text-sky-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
                                               }`}
                                             >
-                                              <MessageSquare size={11} />
-                                              {tx('playbook.community')}
+                                              <span className="inline-flex min-w-0 items-center gap-1">
+                                                <PenLine size={11} />
+                                                <span className="truncate">{tx('playbook.management')}</span>
+                                              </span>
+                                              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                                {getTaskStatusLabel(task.status, tx)}
+                                              </span>
+                                            </button>
+                                            <button
+                                              type="button"
+                                              aria-pressed={isTaskSelected && isTaskCommunityExpanded}
+                                              title={tx('playbook.community')}
+                                              onClick={() => {
+                                                if (isMobileTaskViewport()) {
+                                                  openTaskDetailSheet(task.id, 'comunidad')
+                                                  return
+                                                }
+                                                focusTask(task.id)
+                                                setExclusiveTaskPanel(
+                                                  task.id,
+                                                  isTaskSelected && isTaskCommunityExpanded ? null : 'comunidad'
+                                                )
+                                              }}
+                                              className={`inline-flex items-center justify-between gap-1.5 rounded-md border px-2 py-1.5 text-[10px] font-semibold leading-none transition-colors ${
+                                                isTaskSelected && isTaskCommunityExpanded
+                                                  ? 'border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-950/30 dark:text-violet-300'
+                                                  : 'border-slate-200 bg-white text-slate-600 hover:border-violet-300 hover:text-violet-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+                                              }`}
+                                            >
+                                              <span className="inline-flex min-w-0 items-center gap-1">
+                                                <MessageSquare size={11} />
+                                                <span className="truncate">{tx('playbook.community')}</span>
+                                              </span>
+                                              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                                {taskCommunityCount}
+                                              </span>
                                             </button>
                                           </div>
-                                        </>
+                                        </div>
                                       )}
 
                                       {isTaskMutating && (
@@ -6233,12 +7685,7 @@ export function ResultPanel({
                                             <div className="mb-2 flex justify-end">
                                               <button
                                                 type="button"
-                                                onClick={() =>
-                                                  setTaskOpenSectionByTaskId((prev) => ({
-                                                    ...prev,
-                                                    [task.id]: null,
-                                                  }))
-                                                }
+                                                onClick={() => setExclusiveTaskPanel(task.id, null)}
                                                 className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
                                                 aria-label={tx('playbook.closeActivity')}
                                                 title={tx('playbook.closeActivity')}
@@ -6246,7 +7693,7 @@ export function ResultPanel({
                                                 <X size={12} />
                                               </button>
                                             </div>
-                                            <div className="mb-4">
+                                            <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50">
                                               <p className="mb-2 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                                                 {tx('playbook.logInActivity')}
                                               </p>
@@ -6337,12 +7784,7 @@ export function ResultPanel({
                                             <div className="mb-2 flex justify-end">
                                               <button
                                                 type="button"
-                                                onClick={() =>
-                                                  setTaskOpenSectionByTaskId((prev) => ({
-                                                    ...prev,
-                                                    [task.id]: null,
-                                                  }))
-                                                }
+                                                onClick={() => setExclusiveTaskPanel(task.id, null)}
                                                 className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
                                                 aria-label={tx('playbook.closeManagement')}
                                                 title={tx('playbook.closeManagement')}
@@ -6350,63 +7792,38 @@ export function ResultPanel({
                                                 <X size={12} />
                                               </button>
                                             </div>
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                setTaskEstadoExpandedByTaskId((prev) => ({
-                                                  ...prev,
-                                                  [task.id]: !isTaskEstadoExpanded,
-                                                }))
-                                              }
-                                              className="flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:bg-slate-800"
-                                            >
-                                              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                                                {tx('playbook.statusLabel')}
-                                              </span>
-                                              <span className="flex items-center gap-2">
+                                            <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 dark:border-slate-700 dark:bg-slate-800/50">
+                                              <div className="flex items-center justify-between gap-2">
+                                                <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                                                  {tx('playbook.statusLabel')}
+                                                </span>
                                                 <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${getTaskStatusChipClassName(task.status)}`}>
                                                   {getTaskStatusLabel(task.status, tx)}
                                                 </span>
-                                                {isTaskEstadoExpanded ? (
-                                                  <ChevronUp size={12} className="text-slate-400" />
-                                                ) : (
-                                                  <ChevronDown size={12} className="text-slate-400" />
-                                                )}
-                                              </span>
-                                            </button>
-                                            <div
-                                              className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
-                                                isTaskEstadoExpanded
-                                                  ? 'grid-rows-[1fr] opacity-100'
-                                                  : 'grid-rows-[0fr] opacity-0'
-                                              }`}
-                                            >
-                                              <div className="overflow-hidden">
-                                                <div className="grid grid-cols-2 gap-1.5 pt-2">
-                                                  {TASK_STATUS_OPTIONS.map((option) => {
-                                                    const isActive = task.status === option.value
-                                                    return (
-                                                      <button
-                                                        key={option.value}
-                                                        type="button"
-                                                        onClick={() => void handleTaskStatusChange(task, option.value)}
-                                                        disabled={!canEditTaskContent || isTaskMutating || isActive}
-                                                        className={`flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[11px] font-semibold transition-all disabled:cursor-not-allowed ${
-                                                          isActive
-                                                            ? option.chipClassName + ' shadow-sm'
-                                                            : 'border-slate-200 bg-white text-slate-400 hover:border-slate-300 hover:text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-500 dark:hover:border-slate-600 dark:hover:text-slate-300'
-                                                        }`}
-                                                      >
-                                                        {option.value === 'completed' && <CheckCircle2 size={11} />}
-                                                        {option.value === 'in_progress' && <Zap size={11} />}
-                                                        {option.value === 'blocked' && <AlertTriangle size={11} />}
-                                                        {option.value === 'pending' && <Clock size={11} />}
-                                                        {getTaskStatusLabel(option.value, tx)}
-                                                      </button>
-                                                    )
-                                                  })}
-                                                </div>
                                               </div>
+                                              <div className="grid grid-cols-2 gap-1.5 pt-2">
+                                                {taskStatusOptions.map((option) => {
+                                                  const isActive = task.status === option.value
+                                                  return (
+                                                    <button
+                                                      key={option.value}
+                                                      type="button"
+                                                      onClick={() => void handleTaskStatusChange(task, option.value)}
+                                                      disabled={!canEditTaskContent || isTaskMutating || isActive}
+                                                      className={`flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[11px] font-semibold transition-all disabled:cursor-not-allowed ${
+                                                        isActive
+                                                          ? option.chipClassName + ' shadow-sm'
+                                                          : 'border-slate-200 bg-white text-slate-400 hover:border-slate-300 hover:text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-500 dark:hover:border-slate-600 dark:hover:text-slate-300'
+                                                      }`}
+                                                    >
+                                                      {renderTaskStatusIcon(option.value, 11)}
+                                                      {option.label}
+                                                    </button>
+                                                  )
+                                                })}
+                                              </div>
+                                              {renderTaskStatusCatalogSection(task, 'desktop')}
+                                              {renderTaskNumericFormulaSection(task, 'desktop')}
                                             </div>
                                           </>
                                         )}
@@ -6414,28 +7831,43 @@ export function ResultPanel({
                                     </div>
                                   </div>
 
-                                  {/* Comunidad — controlada por el botón rápido Community (desktop only) */}
+                                  {/* Comunidad — solo visible cuando el ítem está seleccionado y el panel está abierto (desktop only) */}
                                   {isTaskSelected && task && isTaskCommunityExpanded && (
                                     <div className="order-5 hidden md:block border-t border-slate-100 dark:border-slate-800">
+                                      {/* Header de comunidad visible solo mientras el panel está abierto */}
                                       <div className="flex flex-wrap items-center justify-between gap-2 px-3 pt-2 pb-1">
                                         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                                          <p className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
-                                            <MessageSquare size={12} />
-                                            {tx('playbook.community')}
-                                          </p>
                                           <button
                                             type="button"
                                             onClick={() => {
-                                              setTaskCommunityOpenByTaskId((prev) => ({
-                                                ...prev,
-                                                [task.id]: true,
-                                              }))
+                                              setExclusiveTaskPanel(
+                                                task.id,
+                                                isTaskCommunityExpanded ? null : 'comunidad'
+                                              )
+                                            }}
+                                            className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-700 dark:text-slate-300 dark:hover:text-slate-100 transition-colors"
+                                          >
+                                            <MessageSquare size={12} />
+                                            {tx('playbook.community')}
+                                            {isTaskCommunityExpanded ? (
+                                              <ChevronUp size={10} className="opacity-60" />
+                                            ) : (
+                                              <ChevronDown size={10} className="opacity-60" />
+                                            )}
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setExclusiveTaskPanel(task.id, 'comunidad')
                                               handleCancelTaskReply(task.id)
                                             }}
                                             className="inline-flex h-7 items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
                                           >
                                             <MessageSquare size={11} />
                                             {tx('playbook.comment')}
+                                            <span className="rounded bg-indigo-100/80 px-1 py-0.5 text-[10px] dark:bg-indigo-800/70">
+                                              {taskCommentCount}
+                                            </span>
                                           </button>
                                           {taskLikeSummary && (
                                             <>
@@ -6511,52 +7943,65 @@ export function ResultPanel({
                                           </p>
                                         )}
                                       </div>
-                                      <div className="px-3 pb-3">
-                                        {taskCommunityError && (
-                                          <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
-                                            {taskCommunityError}
-                                          </p>
-                                        )}
 
-                                        <div className="mt-2 flex gap-2">
-                                          <input
-                                            type="text"
-                                            value={taskCommentDraft}
-                                            onChange={(event) =>
-                                              handleTaskCommentDraftChange(task.id, event.target.value)
-                                            }
-                                            placeholder={tx('playbook.writeCommentForSubitem')}
-                                            disabled={isTaskCommunityMutating}
-                                            className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
-                                          />
-                                          <button
-                                            type="button"
-                                            onClick={() => void handleAddTaskComment(task)}
-                                            disabled={isTaskCommunityMutating || taskCommentDraft.trim().length === 0}
-                                            className="inline-flex h-9 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
-                                          >
-                                            {tx('playbook.comment')}
-                                          </button>
+                                      {/* Contenido colapsable */}
+                                      <div
+                                        aria-hidden={!isTaskCommunityExpanded}
+                                        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
+                                          isTaskCommunityExpanded
+                                            ? 'grid-rows-[1fr] opacity-100'
+                                            : 'grid-rows-[0fr] opacity-0'
+                                        }`}
+                                      >
+                                        <div className="overflow-hidden">
+                                          <div className="px-3 pb-3">
+                                            {taskCommunityError && (
+                                              <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
+                                                {taskCommunityError}
+                                              </p>
+                                            )}
+
+                                            <div className="mt-2 flex gap-2">
+                                              <input
+                                                type="text"
+                                                value={taskCommentDraft}
+                                                onChange={(event) =>
+                                                  handleTaskCommentDraftChange(task.id, event.target.value)
+                                                }
+                                                placeholder={tx('playbook.writeCommentForSubitem')}
+                                                disabled={isTaskCommunityMutating}
+                                                className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60"
+                                              />
+                                              <button
+                                                type="button"
+                                                onClick={() => void handleAddTaskComment(task)}
+                                                disabled={isTaskCommunityMutating || taskCommentDraft.trim().length === 0}
+                                                className="inline-flex h-9 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
+                                              >
+                                                {tx('playbook.comment')}
+                                              </button>
+                                            </div>
+
+                                            {isTaskCommunityLoading ? (
+                                              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                                {tx('common.loading')}
+                                              </p>
+                                            ) : taskComments.length === 0 ? (
+                                              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                                {tx('playbook.noCommentsYetForSubitem')}
+                                              </p>
+                                            ) : (
+                                              renderTaskCommentThread({
+                                                task,
+                                                comments: taskComments,
+                                                isCommunityMutating: isTaskCommunityMutating,
+                                                replyParentCommentId: taskReplyParentCommentId,
+                                                replyDraft: taskReplyDraft,
+                                                compact: false,
+                                              })
+                                            )}
+                                          </div>
                                         </div>
-
-                                        {isTaskCommunityLoading ? (
-                                          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                                            {tx('common.loading')}
-                                          </p>
-                                        ) : taskComments.length === 0 ? (
-                                          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                                            {tx('playbook.noCommentsYetForSubitem')}
-                                          </p>
-                                        ) : (
-                                          renderTaskCommentThread({
-                                            task,
-                                            comments: taskComments,
-                                            isCommunityMutating: isTaskCommunityMutating,
-                                            replyParentCommentId: taskReplyParentCommentId,
-                                            replyDraft: taskReplyDraft,
-                                            compact: false,
-                                          })
-                                        )}
                                       </div>
                                     </div>
                                   )}
@@ -6580,46 +8025,7 @@ export function ResultPanel({
                                       >
                                         {task && (
                                           <>
-                                            <div className="rounded-xl border border-slate-200 bg-white/80 dark:border-slate-700 dark:bg-slate-900/70">
-                                              <button
-                                                type="button"
-                                                onClick={() =>
-                                                  setTaskEvidenceOpenByTaskId((prev) => ({
-                                                    ...prev,
-                                                    [task.id]: !(prev[task.id] ?? true),
-                                                  }))
-                                                }
-                                                className="flex w-full items-center justify-between px-3 py-2.5"
-                                              >
-                                                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
-                                                  {tx('playbook.evidence')}
-                                                  {taskAttachments.length > 0 && (
-                                                    <span className="ml-1.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                                                      {taskAttachments.length}
-                                                    </span>
-                                                  )}
-                                                </p>
-                                                <div className="flex items-center gap-2">
-                                                  {(isTaskAttachmentLoading || isTaskAttachmentMutating) && (
-                                                    <Loader2 size={12} className="animate-spin text-slate-400" />
-                                                  )}
-                                                  {isTaskEvidenceExpanded ? (
-                                                    <ChevronUp size={13} className="text-slate-400" />
-                                                  ) : (
-                                                    <ChevronDown size={13} className="text-slate-400" />
-                                                  )}
-                                                </div>
-                                              </button>
-
-                                              <div
-                                                className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
-                                                  isTaskEvidenceExpanded
-                                                    ? 'grid-rows-[1fr] opacity-100'
-                                                    : 'grid-rows-[0fr] opacity-0'
-                                                }`}
-                                              >
-                                              <div className="overflow-hidden">
-                                              <div className="px-3 pb-3">
+                                            <div className="rounded-xl border border-slate-200 bg-white/80 px-3 pb-3 pt-3 dark:border-slate-700 dark:bg-slate-900/70">
 
                                               {taskAttachmentError && (
                                                 <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
@@ -6627,76 +8033,80 @@ export function ResultPanel({
                                                 </p>
                                               )}
 
-                                              {/* ── Agregar evidencia: tarjetas visuales ── */}
-                                              <input
-                                                ref={(node) => {
-                                                  taskFileInputRefs.current[task.id] = node
-                                                }}
-                                                type="file"
-                                                accept=".pdf,application/pdf,image/*,audio/*"
-                                                className="hidden"
-                                                disabled={!canEditTaskContent || isTaskAttachmentMutating}
-                                                onChange={(event) => {
-                                                  const file = event.target.files?.[0] ?? null
-                                                  void handleTaskFileSelected(task, file)
-                                                }}
-                                              />
-
-                                              <div className="mt-3 grid grid-cols-3 gap-2">
-                                                {/* Card: Subir archivo */}
-                                                <button
-                                                  type="button"
-                                                  onClick={() => handleOpenTaskFilePicker(task.id)}
-                                                  disabled={!canEditTaskContent || isTaskAttachmentMutating}
-                                                  className="group/card flex flex-col items-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 bg-gradient-to-b from-slate-50 to-white px-2 py-3 transition-all hover:border-indigo-300 hover:from-indigo-50 hover:to-white hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:from-slate-800/60 dark:to-slate-900 dark:hover:border-indigo-600 dark:hover:from-indigo-950/30"
-                                                >
-                                                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-100 text-indigo-600 transition-colors group-hover/card:bg-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-400">
-                                                    <Upload size={15} />
-                                                  </div>
-                                                  <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">Subir archivo</span>
-                                                  <span className="text-[9px] text-slate-400 dark:text-slate-500">PDF, imagen, audio</span>
-                                                </button>
-
-                                                {/* Card: Nota */}
+                                              <div className="mt-3 flex items-center justify-between gap-3">
+                                                <div>
+                                                  <p className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+                                                    {tx('playbook.evidenceLibrary')}
+                                                  </p>
+                                                  <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                                                    {taskAttachments.length > 0
+                                                      ? `${taskAttachments.length} ${tx('playbook.evidence').toLowerCase()}`
+                                                      : tx('playbook.evidenceEmptyHint')}
+                                                  </p>
+                                                </div>
                                                 <button
                                                   type="button"
                                                   onClick={() =>
                                                     setTaskAddEvidenceExpandedByTaskId((prev) => ({
                                                       ...prev,
-                                                      [task.id]: !prev[task.id],
+                                                      [task.id]: !isTaskAddEvidenceExpanded,
                                                     }))
                                                   }
-                                                  disabled={!canEditTaskContent}
-                                                  className="group/card flex flex-col items-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 bg-gradient-to-b from-slate-50 to-white px-2 py-3 transition-all hover:border-amber-300 hover:from-amber-50 hover:to-white hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:from-slate-800/60 dark:to-slate-900 dark:hover:border-amber-600 dark:hover:from-amber-950/30"
+                                                disabled={!canEditTaskContent}
+                                                  className="flex items-center gap-1.5 rounded-lg border border-dashed border-indigo-200 bg-indigo-50/60 px-3 py-2 transition-colors hover:border-indigo-300 hover:bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-900/10 dark:hover:border-indigo-700 dark:hover:bg-indigo-900/20"
                                                 >
-                                                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-600 transition-colors group-hover/card:bg-amber-200 dark:bg-amber-900/40 dark:text-amber-400">
-                                                    <Pencil size={15} />
-                                                  </div>
-                                                  <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">Escribir nota</span>
-                                                  <span className="text-[9px] text-slate-400 dark:text-slate-500">Texto libre</span>
-                                                </button>
-
-                                                {/* Card: YouTube */}
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    setYoutubeAttachmentDraftByTaskId((prev) => ({
-                                                      ...prev,
-                                                      [task.id]: prev[task.id] === '__yt_open__' ? '' : '__yt_open__',
-                                                    }))
-                                                  }
-                                                  disabled={!canEditTaskContent}
-                                                  className="group/card flex flex-col items-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 bg-gradient-to-b from-slate-50 to-white px-2 py-3 transition-all hover:border-rose-300 hover:from-rose-50 hover:to-white hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:from-slate-800/60 dark:to-slate-900 dark:hover:border-rose-600 dark:hover:from-rose-950/30"
-                                                >
-                                                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 text-rose-600 transition-colors group-hover/card:bg-rose-200 dark:bg-rose-900/40 dark:text-rose-400">
-                                                    <Play size={15} />
-                                                  </div>
-                                                  <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">YouTube</span>
-                                                  <span className="text-[9px] text-slate-400 dark:text-slate-500">Enlace de video</span>
+                                                  <Plus size={12} className="text-indigo-600 dark:text-indigo-400" />
+                                                  <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">
+                                                    {tx('playbook.addEvidence')}
+                                                  </span>
+                                                  {isTaskAddEvidenceExpanded ? (
+                                                    <ChevronUp size={13} className="text-indigo-400" />
+                                                  ) : (
+                                                    <ChevronDown size={13} className="text-indigo-400" />
+                                                  )}
                                                 </button>
                                               </div>
 
-                                              {/* Panel expandible: Nota de texto */}
+                                              {taskAttachments.length === 0 && !isTaskAddEvidenceExpanded && (
+                                                <div className="mt-3 rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-4 dark:border-slate-700 dark:bg-slate-900/40">
+                                                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                                                    {tx('playbook.evidenceEmptyTitle')}
+                                                  </p>
+                                                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                                    {tx('playbook.evidenceEmptyHint')}
+                                                  </p>
+                                                  <div className="mt-3 flex flex-wrap gap-2">
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => handleSelectTaskEvidenceMode(task.id, 'file')}
+                                                      disabled={!canEditTaskContent}
+                                                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold text-slate-600 transition-colors hover:border-indigo-300 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300"
+                                                    >
+                                                      <Upload size={12} />
+                                                      {tx('playbook.evidenceSourceFile')}
+                                                    </button>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => handleSelectTaskEvidenceMode(task.id, 'note')}
+                                                      disabled={!canEditTaskContent}
+                                                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold text-slate-600 transition-colors hover:border-indigo-300 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300"
+                                                    >
+                                                      <Pencil size={12} />
+                                                      {tx('playbook.evidenceSourceNote')}
+                                                    </button>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => handleSelectTaskEvidenceMode(task.id, 'youtube')}
+                                                      disabled={!canEditTaskContent}
+                                                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold text-slate-600 transition-colors hover:border-indigo-300 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300"
+                                                    >
+                                                      <Link2 size={12} />
+                                                      {tx('playbook.evidenceSourceYoutube')}
+                                                    </button>
+                                                  </div>
+                                                </div>
+                                              )}
+
                                               <div
                                                 className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
                                                   isTaskAddEvidenceExpanded
@@ -6705,123 +8115,286 @@ export function ResultPanel({
                                                 }`}
                                               >
                                                 <div className="overflow-hidden">
-                                                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-800/50 dark:bg-amber-950/20">
-                                                    <textarea
-                                                      value={noteDraftByTaskId[task.id] ?? ''}
-                                                      onChange={(event) =>
-                                                        setNoteDraftByTaskId((previous) => ({
-                                                          ...previous,
-                                                          [task.id]: event.target.value,
-                                                        }))
-                                                      }
-                                                      placeholder={tx('playbook.task.notePlaceholder')}
-                                                      disabled={!canEditTaskContent || isTaskAttachmentMutating}
-                                                      rows={3}
-                                                      className="w-full resize-none rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs text-slate-700 placeholder:text-slate-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-800 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-amber-600 dark:focus:ring-amber-900/40"
-                                                    />
-                                                    <div className="mt-2 flex items-center justify-between">
+                                                  <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900/60">
+                                                    <div className="grid gap-2 md:grid-cols-3">
                                                       <button
                                                         type="button"
-                                                        onClick={() =>
-                                                          setTaskAddEvidenceExpandedByTaskId((prev) => ({
-                                                            ...prev,
-                                                            [task.id]: false,
-                                                          }))
-                                                        }
-                                                        className="text-[11px] font-medium text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-                                                      >
-                                                        Cancelar
-                                                      </button>
-                                                      <button
-                                                        type="button"
-                                                        onClick={() => void handleAddTaskNote(task)}
-                                                        disabled={
-                                                          !canEditTaskContent ||
-                                                          isTaskAttachmentMutating ||
-                                                          !(noteDraftByTaskId[task.id] ?? '').trim()
-                                                        }
-                                                        className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-40"
-                                                      >
-                                                        <Save size={11} />
-                                                        Guardar nota
-                                                      </button>
-                                                    </div>
-                                                  </div>
-                                                </div>
-                                              </div>
-
-                                              {/* Panel expandible: YouTube */}
-                                              <div
-                                                className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
-                                                  taskYoutubeDraft === '__yt_open__'
-                                                    ? 'grid-rows-[1fr] opacity-100'
-                                                    : 'grid-rows-[0fr] opacity-0'
-                                                }`}
-                                              >
-                                                <div className="overflow-hidden">
-                                                  <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50/50 p-3 dark:border-rose-800/50 dark:bg-rose-950/20">
-                                                    <div className="flex gap-2">
-                                                      <input
-                                                        type="text"
-                                                        value={taskYoutubeDraft === '__yt_open__' ? '' : taskYoutubeDraft}
-                                                        onChange={(event) =>
-                                                          handleTaskYoutubeDraftChange(task.id, event.target.value)
-                                                        }
-                                                        placeholder="https://youtube.com/watch?v=..."
+                                                        onClick={() => handleSelectTaskEvidenceMode(task.id, 'file')}
                                                         disabled={!canEditTaskContent || isTaskAttachmentMutating}
-                                                        className="h-9 min-w-0 flex-1 rounded-lg border border-rose-200 bg-white px-3 text-xs text-slate-700 placeholder:text-slate-400 focus:border-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-800 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-rose-600"
-                                                      />
+                                                        className={`rounded-xl border px-3 py-3 text-left transition-colors ${
+                                                          taskEvidenceComposerMode === 'file'
+                                                            ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300'
+                                                            : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-white dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300'
+                                                        } disabled:cursor-not-allowed disabled:opacity-60`}
+                                                      >
+                                                        <div className="flex items-center gap-2">
+                                                          <Upload size={14} />
+                                                          <span className="text-xs font-semibold">{tx('playbook.evidenceSourceFile')}</span>
+                                                        </div>
+                                                        <p className="mt-1 text-[11px] opacity-80">
+                                                          {tx('playbook.evidenceSourceFileHint')}
+                                                        </p>
+                                                      </button>
                                                       <button
                                                         type="button"
-                                                        onClick={() => void handleAddTaskYoutubeLink(task)}
-                                                        disabled={
-                                                          !canEditTaskContent ||
-                                                          isTaskAttachmentMutating ||
-                                                          !taskYoutubeDraft.trim() || taskYoutubeDraft === '__yt_open__'
-                                                        }
-                                                        className="inline-flex h-9 flex-shrink-0 items-center gap-1.5 rounded-lg bg-rose-500 px-4 text-[11px] font-semibold text-white shadow-sm transition-all hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
+                                                        onClick={() => handleSelectTaskEvidenceMode(task.id, 'note')}
+                                                        disabled={!canEditTaskContent || isTaskAttachmentMutating}
+                                                        className={`rounded-xl border px-3 py-3 text-left transition-colors ${
+                                                          taskEvidenceComposerMode === 'note'
+                                                            ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300'
+                                                            : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-white dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300'
+                                                        } disabled:cursor-not-allowed disabled:opacity-60`}
                                                       >
-                                                        <Plus size={12} />
-                                                        Agregar
+                                                        <div className="flex items-center gap-2">
+                                                          <Pencil size={14} />
+                                                          <span className="text-xs font-semibold">{tx('playbook.evidenceSourceNote')}</span>
+                                                        </div>
+                                                        <p className="mt-1 text-[11px] opacity-80">
+                                                          {tx('playbook.evidenceSourceNoteHint')}
+                                                        </p>
+                                                      </button>
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => handleSelectTaskEvidenceMode(task.id, 'youtube')}
+                                                        disabled={!canEditTaskContent || isTaskAttachmentMutating}
+                                                        className={`rounded-xl border px-3 py-3 text-left transition-colors ${
+                                                          taskEvidenceComposerMode === 'youtube'
+                                                            ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300'
+                                                            : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-white dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300'
+                                                        } disabled:cursor-not-allowed disabled:opacity-60`}
+                                                      >
+                                                        <div className="flex items-center gap-2">
+                                                          <Link2 size={14} />
+                                                          <span className="text-xs font-semibold">{tx('playbook.evidenceSourceYoutube')}</span>
+                                                        </div>
+                                                        <p className="mt-1 text-[11px] opacity-80">
+                                                          {tx('playbook.evidenceSourceYoutubeHint')}
+                                                        </p>
                                                       </button>
                                                     </div>
-                                                    <button
-                                                      type="button"
-                                                      onClick={() =>
-                                                        setYoutubeAttachmentDraftByTaskId((prev) => ({
-                                                          ...prev,
-                                                          [task.id]: '',
-                                                        }))
-                                                      }
-                                                      className="mt-2 text-[11px] font-medium text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-                                                    >
-                                                      Cancelar
-                                                    </button>
+
+                                                    <input
+                                                      ref={(node) => {
+                                                        taskFileInputRefs.current[task.id] = node
+                                                      }}
+                                                      type="file"
+                                                      accept=".pdf,application/pdf,image/*,audio/*"
+                                                      className="hidden"
+                                                      disabled={!canEditTaskContent || isTaskAttachmentMutating}
+                                                      onChange={(event) => {
+                                                        handleTaskFileCandidate(
+                                                          task.id,
+                                                          event.target.files?.[0] ?? null
+                                                        )
+                                                      }}
+                                                    />
+
+                                                    {taskEvidenceComposerMode === 'file' ? (
+                                                      <div className="mt-3 space-y-3">
+                                                        <button
+                                                          type="button"
+                                                          onClick={() => handleOpenTaskFilePicker(task.id)}
+                                                          onDragOver={(event) => {
+                                                            event.preventDefault()
+                                                            if (!canEditTaskContent || isTaskAttachmentMutating) return
+                                                            setTaskFileDropTargetId(task.id)
+                                                          }}
+                                                          onDragLeave={(event) => {
+                                                            event.preventDefault()
+                                                            if (
+                                                              event.currentTarget.contains(
+                                                                event.relatedTarget as Node | null
+                                                              )
+                                                            ) {
+                                                              return
+                                                            }
+                                                            setTaskFileDropTargetId((previous) =>
+                                                              previous === task.id ? null : previous
+                                                            )
+                                                          }}
+                                                          onDrop={(event) => {
+                                                            event.preventDefault()
+                                                            setTaskFileDropTargetId((previous) =>
+                                                              previous === task.id ? null : previous
+                                                            )
+                                                            handleTaskFileCandidate(
+                                                              task.id,
+                                                              event.dataTransfer.files?.[0] ?? null
+                                                            )
+                                                          }}
+                                                          disabled={!canEditTaskContent || isTaskAttachmentMutating}
+                                                          className={`flex w-full flex-col items-center justify-center rounded-xl border border-dashed px-4 py-6 text-center transition-colors ${
+                                                            isTaskFileDropTarget
+                                                              ? 'border-indigo-400 bg-indigo-50 text-indigo-700 dark:border-indigo-500 dark:bg-indigo-950/30 dark:text-indigo-300'
+                                                              : 'border-slate-300 bg-slate-50 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300'
+                                                          } disabled:cursor-not-allowed disabled:opacity-60`}
+                                                        >
+                                                          <Upload size={18} />
+                                                          <p className="mt-2 text-sm font-semibold">
+                                                            {tx('playbook.evidenceDropTitle')}
+                                                          </p>
+                                                          <p className="mt-1 text-xs opacity-80">
+                                                            {tx('playbook.evidenceDropHint')}
+                                                          </p>
+                                                        </button>
+
+                                                        {pendingTaskFile && (
+                                                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-700 dark:bg-slate-950">
+                                                            <div className="flex items-start justify-between gap-3">
+                                                              <div className="min-w-0">
+                                                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                                                                  {tx('playbook.evidenceSelectedFile')}
+                                                                </p>
+                                                                <p className="mt-1 truncate text-sm font-semibold text-slate-700 dark:text-slate-200">
+                                                                  {pendingTaskFile.name}
+                                                                </p>
+                                                                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                                                  {formatAttachmentSize(pendingTaskFile.size) ?? tx('playbook.evidenceSourceFile')}
+                                                                </p>
+                                                              </div>
+                                                              <div className="flex flex-wrap justify-end gap-2">
+                                                                <button
+                                                                  type="button"
+                                                                  onClick={() => handleOpenTaskFilePicker(task.id)}
+                                                                  disabled={!canEditTaskContent || isTaskAttachmentMutating}
+                                                                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                                                                >
+                                                                  {tx('playbook.evidenceChooseAnotherFile')}
+                                                                </button>
+                                                                <button
+                                                                  type="button"
+                                                                  onClick={() => clearPendingTaskFile(task.id)}
+                                                                  disabled={!canEditTaskContent || isTaskAttachmentMutating}
+                                                                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-500 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                                                                >
+                                                                  {tx('playbook.evidenceRemovePendingFile')}
+                                                                </button>
+                                                                <button
+                                                                  type="button"
+                                                                  onClick={() => void handleUploadPendingTaskFile(task)}
+                                                                  disabled={!canEditTaskContent || isTaskAttachmentMutating}
+                                                                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                                                >
+                                                                  <Upload size={11} />
+                                                                  {tx('playbook.evidenceUploadFile')}
+                                                                </button>
+                                                              </div>
+                                                            </div>
+                                                          </div>
+                                                        )}
+                                                      </div>
+                                                    ) : taskEvidenceComposerMode === 'note' ? (
+                                                      <div className="mt-3 space-y-1.5">
+                                                        <textarea
+                                                          value={noteDraftByTaskId[task.id] ?? ''}
+                                                          onChange={(event) =>
+                                                            setNoteDraftByTaskId((previous) => ({
+                                                              ...previous,
+                                                              [task.id]: event.target.value,
+                                                            }))
+                                                          }
+                                                          placeholder={tx('playbook.task.notePlaceholder')}
+                                                          disabled={!canEditTaskContent || isTaskAttachmentMutating}
+                                                          style={{ minHeight: '5.25rem' }}
+                                                          onInput={(event) => {
+                                                            const el = event.currentTarget
+                                                            el.style.height = 'auto'
+                                                            el.style.height = `${el.scrollHeight}px`
+                                                          }}
+                                                          className="w-full resize-none overflow-hidden rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:bg-slate-800 dark:focus:ring-indigo-900/40"
+                                                        />
+                                                        <div className="flex justify-end">
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => void handleAddTaskNote(task)}
+                                                            disabled={
+                                                              !canEditTaskContent ||
+                                                              isTaskAttachmentMutating ||
+                                                              !(noteDraftByTaskId[task.id] ?? '').trim()
+                                                            }
+                                                            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                                          >
+                                                            <Save size={11} />
+                                                            {tx('playbook.task.saveNote')}
+                                                          </button>
+                                                        </div>
+                                                      </div>
+                                                    ) : (
+                                                      <div className="mt-3 space-y-1.5">
+                                                        <div className="flex gap-2">
+                                                          <input
+                                                            type="text"
+                                                            value={taskYoutubeDraft}
+                                                            onChange={(event) =>
+                                                              handleTaskYoutubeDraftChange(task.id, event.target.value)
+                                                            }
+                                                            placeholder={tx('playbook.evidenceYoutubePlaceholder')}
+                                                            disabled={!canEditTaskContent || isTaskAttachmentMutating}
+                                                            className="h-8 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:bg-slate-800"
+                                                          />
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => void handleAddTaskYoutubeLink(task)}
+                                                            disabled={
+                                                              !canEditTaskContent ||
+                                                              isTaskAttachmentMutating ||
+                                                              taskYoutubeDraft.trim().length === 0
+                                                            }
+                                                            className="inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-lg bg-rose-600 px-3 text-[11px] font-semibold text-white shadow-sm transition-all hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                                          >
+                                                            <Plus size={11} />
+                                                            {tx('common.add')}
+                                                          </button>
+                                                        </div>
+                                                      </div>
+                                                    )}
                                                   </div>
                                                 </div>
                                               </div>
 
-                                              {/* ── Lista de evidencias ── */}
                                               {isTaskAttachmentLoading ? (
-                                                <div className="mt-4 flex items-center justify-center gap-2 py-4">
-                                                  <Loader2 size={16} className="animate-spin text-indigo-400" />
-                                                  <span className="text-xs text-slate-500 dark:text-slate-400">Cargando evidencias...</span>
-                                                </div>
+                                                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                                  {tx('common.loading')}
+                                                </p>
                                               ) : taskAttachments.length === 0 ? (
-                                                <div className="mt-4 flex flex-col items-center gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50/50 py-6 dark:border-slate-700 dark:bg-slate-800/30">
-                                                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800">
-                                                    <ImageIcon size={18} className="text-slate-300 dark:text-slate-600" />
-                                                  </div>
-                                                  <p className="text-xs font-medium text-slate-400 dark:text-slate-500">
-                                                    {tx('playbook.subitemHasNoEvidenceYet')}
-                                                  </p>
-                                                  <p className="text-[10px] text-slate-400/70 dark:text-slate-500/70">
-                                                    Sube archivos, escribe notas o agrega videos
-                                                  </p>
-                                                </div>
+                                                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                                  {tx('playbook.subitemHasNoEvidenceYet')}
+                                                </p>
                                               ) : (
-                                                <ul className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-                                                  {taskAttachments.map((attachment) => {
+                                                <>
+                                                  <div className="mt-3 flex flex-wrap gap-1.5">
+                                                    {taskAttachmentFilterOptions.map((option) => {
+                                                      const isActive = normalizedTaskAttachmentFilter === option.key
+                                                      return (
+                                                        <button
+                                                          key={option.key}
+                                                          type="button"
+                                                          onClick={() =>
+                                                            setTaskAttachmentFilterByTaskId((previous) => ({
+                                                              ...previous,
+                                                              [task.id]: option.key,
+                                                            }))
+                                                          }
+                                                          className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+                                                            isActive
+                                                              ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300'
+                                                              : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
+                                                          }`}
+                                                        >
+                                                          {option.label}
+                                                          <span className="ml-1 opacity-70">{option.count}</span>
+                                                        </button>
+                                                      )
+                                                    })}
+                                                  </div>
+
+                                                  {visibleTaskAttachments.length === 0 ? (
+                                                    <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                                                      {tx('playbook.subitemHasNoEvidenceYet')}
+                                                    </p>
+                                                  ) : (
+                                                <ul className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                                  {visibleTaskAttachments.map((attachment) => {
                                                     const attachmentLabel = getAttachmentTypeLabel(
                                                       attachment.attachmentType,
                                                       tx
@@ -6887,7 +8460,7 @@ export function ResultPanel({
                                                             <p className="truncate text-xs font-semibold text-slate-700 dark:text-slate-200">
                                                               {attachment.title?.trim() ||
                                                                 attachment.url ||
-                                                                'Evidencia'}
+                                                                attachmentLabel}
                                                             </p>
                                                           )}
                                                           <div className={`flex flex-wrap items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400 ${isNote ? '' : 'mt-1'}`}>
@@ -6933,7 +8506,7 @@ export function ResultPanel({
                                                                   ? 'bg-black/70 text-white backdrop-blur-sm'
                                                                   : 'bg-black/30 text-white opacity-60 hover:bg-black/55 hover:opacity-100 group-hover:opacity-100 backdrop-blur-sm'
                                                             }`}
-                                                            aria-label="Opciones de la evidencia"
+                                                            aria-label={tx('playbook.evidenceMenuLabel')}
                                                           >
                                                             <MoreHorizontal size={13} />
                                                           </button>
@@ -6956,7 +8529,7 @@ export function ResultPanel({
                                                                       className="flex items-center gap-2.5 px-3 py-2.5 text-[12px] font-medium text-slate-700 transition-colors hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
                                                                     >
                                                                       <ExternalLink size={13} className="flex-shrink-0 text-slate-400" />
-                                                                      Abrir
+                                                                      {tx('playbook.source.openInNewTab')}
                                                                     </a>
                                                                     <a
                                                                       href={attachment.url}
@@ -6965,7 +8538,7 @@ export function ResultPanel({
                                                                       className="flex items-center gap-2.5 px-3 py-2.5 text-[12px] font-medium text-slate-700 transition-colors hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
                                                                     >
                                                                       <Download size={13} className="flex-shrink-0 text-slate-400" />
-                                                                      Descargar
+                                                                      {tx('playbook.source.download')}
                                                                     </a>
                                                                   </>
                                                                 )}
@@ -7017,10 +8590,9 @@ export function ResultPanel({
                                                     )
                                                   })}
                                                 </ul>
+                                                  )}
+                                                </>
                                               )}
-                                              </div>{/* px-3 pb-3 */}
-                                              </div>{/* overflow-hidden */}
-                                              </div>{/* grid */}
                                             </div>{/* Evidencias card */}
 
                                           </>
@@ -7089,9 +8661,25 @@ export function ResultPanel({
 
         const sheetTaskAttachments = taskAttachmentsByTaskId[sheetTask.id] ?? []
         const sheetTaskAttachmentError = taskAttachmentErrorByTaskId[sheetTask.id] ?? null
+        const sheetTaskAttachmentFilter = taskAttachmentFilterByTaskId[sheetTask.id] ?? 'all'
+        const sheetEvidenceComposerMode = taskEvidenceComposerModeByTaskId[sheetTask.id] ?? 'file'
+        const sheetPendingTaskFile = pendingTaskFileByTaskId[sheetTask.id] ?? null
         const sheetTaskYoutubeDraft = youtubeAttachmentDraftByTaskId[sheetTask.id] ?? ''
         const sheetIsAttachmentLoading = taskAttachmentLoadingId === sheetTask.id
         const sheetIsAttachmentMutating = taskAttachmentMutationId === sheetTask.id
+        const sheetIsFileDropTarget = taskFileDropTargetId === sheetTask.id
+        const sheetAttachmentFilterOptions = buildAttachmentFilterOptions(sheetTaskAttachments, tx)
+        const normalizedSheetAttachmentFilter = sheetAttachmentFilterOptions.some(
+          (option) => option.key === sheetTaskAttachmentFilter
+        )
+          ? sheetTaskAttachmentFilter
+          : 'all'
+        const visibleSheetTaskAttachments =
+          normalizedSheetAttachmentFilter === 'all'
+            ? sheetTaskAttachments
+            : sheetTaskAttachments.filter(
+                (attachment) => attachment.attachmentType === normalizedSheetAttachmentFilter
+              )
         const sheetTaskComments = taskCommentsByTaskId[sheetTask.id] ?? []
         const sheetTaskLikeSummary = taskLikeSummaryByTaskId[sheetTask.id] ?? {
           taskId: sheetTask.id,
@@ -7113,7 +8701,6 @@ export function ResultPanel({
         const sheetIsCommunityLoading = taskCommunityLoadingId === sheetTask.id
         const sheetIsCommunityMutating = taskCommunityMutationId === sheetTask.id
         const sheetIsTaskMutating = taskMutationLoadingId === sheetTask.id
-        const sheetEstadoExpanded = taskEstadoExpandedByTaskId[sheetTask.id] ?? false
         const sheetAddEvidenceExpanded = taskAddEvidenceExpandedByTaskId[sheetTask.id] ?? false
         const sheetNoteContent = noteDraftByTaskId[sheetTask.id] ?? ''
         const sheetTaskDisplayText =
@@ -7209,54 +8796,41 @@ export function ResultPanel({
                       </span>
                     </div>
 
+                    {renderTaskNumericValueField(sheetTask, 'mobile')}
+                    {renderTaskNumericFormulaSection(sheetTask, 'mobile')}
+
                     {/* Estado selector */}
-                    <div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setTaskEstadoExpandedByTaskId((prev) => ({
-                            ...prev,
-                            [sheetTask.id]: !sheetEstadoExpanded,
-                          }))
-                        }
-                        className="flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:bg-slate-800"
-                      >
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-800/50">
+                      <div className="flex w-full items-center justify-between gap-2">
                         <span className="text-sm font-semibold text-slate-600 dark:text-slate-300">
                           {tx('playbook.statusLabel')}
                         </span>
-                        <span className="flex items-center gap-2">
-                          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(sheetTask.status)}`}>
-                            {getTaskStatusLabel(sheetTask.status, tx)}
-                          </span>
-                          {sheetEstadoExpanded ? <ChevronUp size={14} className="text-slate-400" /> : <ChevronDown size={14} className="text-slate-400" />}
+                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(sheetTask.status)}`}>
+                          {getTaskStatusLabel(sheetTask.status, tx)}
                         </span>
-                      </button>
-                      {sheetEstadoExpanded && (
-                        <div className="mt-2 grid grid-cols-2 gap-2">
-                          {TASK_STATUS_OPTIONS.map((option) => {
-                            const isActive = sheetTask.status === option.value
-                            return (
-                              <button
-                                key={option.value}
-                                type="button"
-                                onClick={() => void handleTaskStatusChange(sheetTask, option.value)}
-                                disabled={!canEditTaskContent || sheetIsTaskMutating || isActive}
-                                className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-xs font-semibold transition-all disabled:cursor-not-allowed ${
-                                  isActive
-                                    ? option.chipClassName + ' shadow-sm'
-                                    : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
-                                }`}
-                              >
-                                {option.value === 'completed' && <CheckCircle2 size={13} />}
-                                {option.value === 'in_progress' && <Zap size={13} />}
-                                {option.value === 'blocked' && <AlertTriangle size={13} />}
-                                {option.value === 'pending' && <Clock size={13} />}
-                                {getTaskStatusLabel(option.value, tx)}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      )}
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        {taskStatusOptions.map((option) => {
+                          const isActive = sheetTask.status === option.value
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => void handleTaskStatusChange(sheetTask, option.value)}
+                              disabled={!canEditTaskContent || sheetIsTaskMutating || isActive}
+                              className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-xs font-semibold transition-all disabled:cursor-not-allowed ${
+                                isActive
+                                  ? option.chipClassName + ' shadow-sm'
+                                  : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
+                              }`}
+                            >
+                              {renderTaskStatusIcon(option.value, 13)}
+                              {option.label}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      {renderTaskStatusCatalogSection(sheetTask, 'mobile')}
                     </div>
 
                   </div>
@@ -7265,7 +8839,7 @@ export function ResultPanel({
                 {/* ── TAB: ACTIVIDAD ── */}
                 {mobileSheetTab === 'actividad' && (
                   <div>
-                    <div className="mb-4">
+                    <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50">
                       <p className="mb-2 text-sm font-semibold text-slate-600 dark:text-slate-300">
                         {tx('playbook.logInActivity')}
                       </p>
@@ -7346,8 +8920,17 @@ export function ResultPanel({
                       </p>
                     )}
 
-                    {/* Toggle agregar evidencia */}
-                    <div className="mb-4 flex justify-end">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                          {tx('playbook.evidenceLibrary')}
+                        </p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          {sheetTaskAttachments.length > 0
+                            ? `${sheetTaskAttachments.length} ${tx('playbook.evidence').toLowerCase()}`
+                            : tx('playbook.evidenceEmptyHint')}
+                        </p>
+                      </div>
                       <button
                         type="button"
                         onClick={() =>
@@ -7367,89 +8950,137 @@ export function ResultPanel({
                       </button>
                     </div>
 
+                    {sheetTaskAttachments.length === 0 && !sheetAddEvidenceExpanded && (
+                      <div className="mb-4 rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-4 dark:border-slate-700 dark:bg-slate-900/40">
+                        <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                          {tx('playbook.evidenceEmptyTitle')}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          {tx('playbook.evidenceEmptyHint')}
+                        </p>
+                        <div className="mt-3 grid grid-cols-3 gap-2">
+                          <button type="button" onClick={() => handleSelectTaskEvidenceMode(sheetTask.id, 'file')} disabled={!canEditTaskContent} className="inline-flex items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-2 text-[11px] font-semibold text-slate-600 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300"><Upload size={12} />{tx('playbook.evidenceSourceFile')}</button>
+                          <button type="button" onClick={() => handleSelectTaskEvidenceMode(sheetTask.id, 'note')} disabled={!canEditTaskContent} className="inline-flex items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-2 text-[11px] font-semibold text-slate-600 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300"><Pencil size={12} />{tx('playbook.evidenceSourceNote')}</button>
+                          <button type="button" onClick={() => handleSelectTaskEvidenceMode(sheetTask.id, 'youtube')} disabled={!canEditTaskContent} className="inline-flex items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-2 text-[11px] font-semibold text-slate-600 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300"><Link2 size={12} />{tx('playbook.evidenceSourceYoutube')}</button>
+                        </div>
+                      </div>
+                    )}
+
                     {sheetAddEvidenceExpanded && (
                       <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800/60">
-                        {/* Nota de texto */}
-                        <div className="space-y-2">
-                          <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                            <Pencil size={10} />Nota de texto
-                          </p>
-                          <textarea
-                            value={sheetNoteContent}
-                            onChange={(event) =>
-                              setNoteDraftByTaskId((prev) => ({ ...prev, [sheetTask.id]: event.target.value }))
-                            }
-                            placeholder={tx('playbook.task.notePlaceholder')}
-                            disabled={!canEditTaskContent || sheetIsAttachmentMutating}
-                            style={{ minHeight: '5rem' }}
-                            className="w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200"
-                          />
-                          <div className="flex justify-end">
+                        <div className="grid grid-cols-3 gap-2">
+                          <button type="button" onClick={() => handleSelectTaskEvidenceMode(sheetTask.id, 'file')} disabled={!canEditTaskContent || sheetIsAttachmentMutating} className={`rounded-xl border px-2 py-2 text-center text-[11px] font-semibold transition-colors ${sheetEvidenceComposerMode === 'file' ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300' : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300'} disabled:opacity-60`}><Upload size={12} className="mx-auto mb-1" />{tx('playbook.evidenceSourceFile')}</button>
+                          <button type="button" onClick={() => handleSelectTaskEvidenceMode(sheetTask.id, 'note')} disabled={!canEditTaskContent || sheetIsAttachmentMutating} className={`rounded-xl border px-2 py-2 text-center text-[11px] font-semibold transition-colors ${sheetEvidenceComposerMode === 'note' ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300' : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300'} disabled:opacity-60`}><Pencil size={12} className="mx-auto mb-1" />{tx('playbook.evidenceSourceNote')}</button>
+                          <button type="button" onClick={() => handleSelectTaskEvidenceMode(sheetTask.id, 'youtube')} disabled={!canEditTaskContent || sheetIsAttachmentMutating} className={`rounded-xl border px-2 py-2 text-center text-[11px] font-semibold transition-colors ${sheetEvidenceComposerMode === 'youtube' ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300' : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300'} disabled:opacity-60`}><Link2 size={12} className="mx-auto mb-1" />{tx('playbook.evidenceSourceYoutube')}</button>
+                        </div>
+
+                        <input
+                          ref={(node) => { taskFileInputRefs.current[sheetTask.id] = node }}
+                          type="file"
+                          accept=".pdf,application/pdf,image/*,audio/*"
+                          className="hidden"
+                          disabled={!canEditTaskContent || sheetIsAttachmentMutating}
+                          onChange={(event) => {
+                            handleTaskFileCandidate(sheetTask.id, event.target.files?.[0] ?? null)
+                          }}
+                        />
+
+                        {sheetEvidenceComposerMode === 'file' ? (
+                          <div className="mt-3 space-y-3">
                             <button
                               type="button"
-                              onClick={() => void handleAddTaskNote(sheetTask)}
-                              disabled={!canEditTaskContent || sheetIsAttachmentMutating || !sheetNoteContent.trim()}
-                              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              <Save size={12} />{tx('playbook.task.saveNote')}
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="my-3 border-t border-dashed border-slate-200 dark:border-slate-700" />
-
-                        {/* Archivo */}
-                        <div className="space-y-2">
-                          <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                            <Upload size={10} />Archivo
-                          </p>
-                          <input
-                            ref={(node) => { taskFileInputRefs.current[sheetTask.id] = node }}
-                            type="file"
-                            accept=".pdf,application/pdf,image/*,audio/*"
-                            className="hidden"
-                            disabled={!canEditTaskContent || sheetIsAttachmentMutating}
-                            onChange={(event) => {
-                              const file = event.target.files?.[0] ?? null
-                              void handleTaskFileSelected(sheetTask, file)
-                            }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleOpenTaskFilePicker(sheetTask.id)}
-                            disabled={!canEditTaskContent || sheetIsAttachmentMutating}
-                            className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-xs font-semibold text-slate-500 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600 disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800/40 dark:text-slate-400"
-                          >
-                            <Upload size={14} />PDF · imagen · audio
-                          </button>
-                        </div>
-
-                        <div className="my-3 border-t border-dashed border-slate-200 dark:border-slate-700" />
-
-                        {/* YouTube */}
-                        <div className="space-y-2">
-                          <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                            <Link2 size={10} />YouTube
-                          </p>
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              value={sheetTaskYoutubeDraft}
-                              onChange={(event) => handleTaskYoutubeDraftChange(sheetTask.id, event.target.value)}
-                              placeholder="Pega la URL del video..."
+                              onClick={() => handleOpenTaskFilePicker(sheetTask.id)}
+                              onDragOver={(event) => {
+                                event.preventDefault()
+                                if (!canEditTaskContent || sheetIsAttachmentMutating) return
+                                setTaskFileDropTargetId(sheetTask.id)
+                              }}
+                              onDragLeave={(event) => {
+                                event.preventDefault()
+                                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+                                setTaskFileDropTargetId((previous) => (previous === sheetTask.id ? null : previous))
+                              }}
+                              onDrop={(event) => {
+                                event.preventDefault()
+                                setTaskFileDropTargetId((previous) => (previous === sheetTask.id ? null : previous))
+                                handleTaskFileCandidate(sheetTask.id, event.dataTransfer.files?.[0] ?? null)
+                              }}
                               disabled={!canEditTaskContent || sheetIsAttachmentMutating}
-                              className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => void handleAddTaskYoutubeLink(sheetTask)}
-                              disabled={!canEditTaskContent || sheetIsAttachmentMutating || sheetTaskYoutubeDraft.trim().length === 0}
-                              className="inline-flex h-9 flex-shrink-0 items-center gap-1.5 rounded-lg bg-rose-600 px-3 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-40"
+                              className={`flex w-full flex-col items-center justify-center rounded-xl border border-dashed px-4 py-5 text-center transition-colors ${
+                                sheetIsFileDropTarget
+                                  ? 'border-indigo-400 bg-indigo-50 text-indigo-700 dark:border-indigo-500 dark:bg-indigo-950/30 dark:text-indigo-300'
+                                  : 'border-slate-300 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300'
+                              } disabled:opacity-60`}
                             >
-                              <Plus size={12} />{tx('common.add')}
+                              <Upload size={18} />
+                              <p className="mt-2 text-sm font-semibold">{tx('playbook.evidenceDropTitle')}</p>
+                              <p className="mt-1 text-xs opacity-80">{tx('playbook.evidenceDropHint')}</p>
                             </button>
+
+                            {sheetPendingTaskFile && (
+                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-700 dark:bg-slate-950">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                                  {tx('playbook.evidenceSelectedFile')}
+                                </p>
+                                <p className="mt-1 truncate text-sm font-semibold text-slate-700 dark:text-slate-200">
+                                  {sheetPendingTaskFile.name}
+                                </p>
+                                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                  {formatAttachmentSize(sheetPendingTaskFile.size) ?? tx('playbook.evidenceSourceFile')}
+                                </p>
+                                <div className="mt-3 grid grid-cols-3 gap-2">
+                                  <button type="button" onClick={() => handleOpenTaskFilePicker(sheetTask.id)} disabled={!canEditTaskContent || sheetIsAttachmentMutating} className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-[11px] font-semibold text-slate-600 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">{tx('playbook.evidenceChooseAnotherFile')}</button>
+                                  <button type="button" onClick={() => clearPendingTaskFile(sheetTask.id)} disabled={!canEditTaskContent || sheetIsAttachmentMutating} className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-[11px] font-semibold text-slate-500 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">{tx('playbook.evidenceRemovePendingFile')}</button>
+                                  <button type="button" onClick={() => void handleUploadPendingTaskFile(sheetTask)} disabled={!canEditTaskContent || sheetIsAttachmentMutating} className="rounded-lg bg-indigo-600 px-2 py-2 text-[11px] font-semibold text-white disabled:opacity-40">{tx('playbook.evidenceUploadFile')}</button>
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        </div>
+                        ) : sheetEvidenceComposerMode === 'note' ? (
+                          <div className="mt-3 space-y-2">
+                            <textarea
+                              value={sheetNoteContent}
+                              onChange={(event) =>
+                                setNoteDraftByTaskId((prev) => ({ ...prev, [sheetTask.id]: event.target.value }))
+                              }
+                              placeholder={tx('playbook.task.notePlaceholder')}
+                              disabled={!canEditTaskContent || sheetIsAttachmentMutating}
+                              style={{ minHeight: '5rem' }}
+                              className="w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200"
+                            />
+                            <div className="flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => void handleAddTaskNote(sheetTask)}
+                                disabled={!canEditTaskContent || sheetIsAttachmentMutating || !sheetNoteContent.trim()}
+                                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                <Save size={12} />{tx('playbook.task.saveNote')}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-3 space-y-2">
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                value={sheetTaskYoutubeDraft}
+                                onChange={(event) => handleTaskYoutubeDraftChange(sheetTask.id, event.target.value)}
+                                placeholder={tx('playbook.evidenceYoutubePlaceholder')}
+                                disabled={!canEditTaskContent || sheetIsAttachmentMutating}
+                                className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => void handleAddTaskYoutubeLink(sheetTask)}
+                                disabled={!canEditTaskContent || sheetIsAttachmentMutating || sheetTaskYoutubeDraft.trim().length === 0}
+                                className="inline-flex h-9 flex-shrink-0 items-center gap-1.5 rounded-lg bg-rose-600 px-3 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-40"
+                              >
+                                <Plus size={12} />{tx('common.add')}
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -7462,8 +9093,39 @@ export function ResultPanel({
                         {tx('playbook.subitemHasNoEvidenceYet')}
                       </p>
                     ) : (
+                      <>
+                        <div className="mb-3 flex flex-wrap gap-1.5">
+                          {sheetAttachmentFilterOptions.map((option) => {
+                            const isActive = normalizedSheetAttachmentFilter === option.key
+                            return (
+                              <button
+                                key={option.key}
+                                type="button"
+                                onClick={() =>
+                                  setTaskAttachmentFilterByTaskId((previous) => ({
+                                    ...previous,
+                                    [sheetTask.id]: option.key,
+                                  }))
+                                }
+                                className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+                                  isActive
+                                    ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300'
+                                    : 'border-slate-200 bg-white text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
+                                }`}
+                              >
+                                {option.label}
+                                <span className="ml-1 opacity-70">{option.count}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                        {visibleSheetTaskAttachments.length === 0 ? (
+                          <p className="text-sm text-slate-500 dark:text-slate-400">
+                            {tx('playbook.subitemHasNoEvidenceYet')}
+                          </p>
+                        ) : (
                       <ul className="grid grid-cols-2 gap-3">
-                        {sheetTaskAttachments.map((attachment) => {
+                        {visibleSheetTaskAttachments.map((attachment) => {
                           const attachmentLabel = getAttachmentTypeLabel(attachment.attachmentType, tx)
                           const attachmentSize = formatAttachmentSize(attachment.sizeBytes)
                           const previewUrl =
@@ -7522,6 +9184,8 @@ export function ResultPanel({
                           )
                         })}
                       </ul>
+                        )}
+                      </>
                     )}
                   </div>
                 )}
@@ -7614,9 +9278,12 @@ export function ResultPanel({
                         type="button"
                         onClick={() => void handleAddTaskComment(sheetTask)}
                         disabled={sheetIsCommunityMutating || sheetCommentDraft.trim().length === 0}
-                        className="inline-flex h-10 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-4 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300"
+                        className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-4 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-300"
                       >
                         {tx('playbook.comment')}
+                        <span className="rounded bg-indigo-100/80 px-1.5 py-0.5 text-xs dark:bg-indigo-800/70">
+                          {sheetTaskComments.length}
+                        </span>
                       </button>
                     </div>
 

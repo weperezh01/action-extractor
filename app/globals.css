@@ -23,6 +23,18 @@
   animation: fade-slide-up 0.7s ease-out;
 }
 
+.chat-avatar-float {
+  animation: chat-avatar-float 4.8s ease-in-out infinite;
+}
+
+.chat-avatar-halo {
+  animation: chat-avatar-halo 3.2s ease-in-out infinite;
+}
+
+.chat-avatar-inline {
+  animation: chat-avatar-inline 5.4s ease-in-out infinite;
+}
+
 @keyframes fade-slide-up {
   0% {
     opacity: 0;
@@ -31,6 +43,47 @@
   100% {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes chat-avatar-float {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-7px) scale(1.03);
+  }
+}
+
+@keyframes chat-avatar-halo {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 0.78;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes chat-avatar-inline {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-avatar-float,
+  .chat-avatar-halo,
+  .chat-avatar-inline {
+    animation: none !important;
+    transform: none !important;
   }
 }
 

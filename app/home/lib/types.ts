@@ -1,5 +1,7 @@
 import type { ExtractionMode } from '@/lib/extraction-modes'
 import type { PlaybookNode } from '@/lib/playbook-tree'
+import type { TaskNumericFormula } from '@/lib/task-numeric-formulas'
+import type { BuiltInTaskStatus } from '@/lib/task-statuses'
 
 export type ShareVisibility = 'private' | 'circle' | 'unlisted' | 'public'
 export type ExtractionAccessRole = 'owner' | 'editor' | 'viewer'
@@ -100,7 +102,7 @@ export interface SharedExtractionItem extends HistoryItem {
   } | null
 }
 
-export type InteractiveTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed'
+export type InteractiveTaskStatus = BuiltInTaskStatus | (string & {})
 export type InteractiveTaskEventType = 'note' | 'pending_action' | 'blocker' | 'resolved'
 export type InteractiveTaskAttachmentType = 'pdf' | 'image' | 'audio' | 'youtube_link' | 'note'
 export type InteractiveTaskAttachmentStorageProvider = 'cloudinary' | 'external'
@@ -151,6 +153,9 @@ export interface InteractiveTask {
   positionPath?: string
   checked: boolean
   status: InteractiveTaskStatus
+  manualNumericValue: number | null
+  numericFormula: TaskNumericFormula | null
+  numericValue: number | null
   dueAt: string | null
   completedAt: string | null
   scheduledStartAt: string | null

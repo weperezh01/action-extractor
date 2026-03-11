@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
+import {
+  writeTaskStatusCatalogToMetadataJson,
+  type BuiltInTaskStatus,
+} from '@/lib/task-statuses'
 import { flattenPlaybookPhases, normalizePlaybookPhases } from '@/lib/playbook-tree'
 import {
   calculateGrossMarginPct,
@@ -316,7 +320,7 @@ export interface DbCommunityPostReactionSummary {
   reacted_by_me: boolean
 }
 
-export type ExtractionTaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed'
+export type ExtractionTaskStatus = BuiltInTaskStatus | (string & {})
 export type ExtractionTaskEventType = 'note' | 'pending_action' | 'blocker' | 'resolved'
 export type ExtractionTaskAttachmentType = 'pdf' | 'image' | 'audio' | 'youtube_link' | 'note'
 export type ExtractionTaskAttachmentStorageProvider = 'cloudinary' | 'external'
@@ -335,6 +339,8 @@ export interface DbExtractionTask {
   position_path: string
   checked: boolean
   status: ExtractionTaskStatus
+  numeric_value: number | null
+  numeric_formula_json: string
   due_at: string | null
   completed_at: string | null
   scheduled_start_at: string | null
@@ -776,6 +782,8 @@ interface DbExtractionTaskRow {
   position_path: string | null
   checked: boolean
   status: ExtractionTaskStatus
+  numeric_value: number | string | null
+  numeric_formula_json: string | null
   due_at: Date | string | null
   completed_at: Date | string | null
   scheduled_start_at: Date | string | null
@@ -1049,7 +1057,7 @@ export const pool =
           host: process.env.ACTION_EXTRACTOR_DB_HOST ?? 'postgres-db',
           port: Number(process.env.ACTION_EXTRACTOR_DB_PORT ?? 5432),
           database: process.env.ACTION_EXTRACTOR_DB_NAME ?? 'action_extractor_db',
-          user: process.env.ACTION_EXTRACTOR_DB_USER ?? 'well',
+          user: process.env.ACTION_EXTRACTOR_DB_USER ?? 'action_extractor_user',
           password: process.env.ACTION_EXTRACTOR_DB_PASSWORD ?? '',
           ...POOL_SHARED_CONFIG,
         }
@@ -1213,6 +1221,8 @@ const INIT_SQL = `
     position_path TEXT NOT NULL,
     checked BOOLEAN NOT NULL DEFAULT FALSE,
     status TEXT NOT NULL DEFAULT 'pending',
+    numeric_value DOUBLE PRECISION,
+    numeric_formula_json TEXT NOT NULL DEFAULT '{}',
     due_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1318,6 +1328,8 @@ const INIT_SQL = `
 
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS checked BOOLEAN NOT NULL DEFAULT FALSE;
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS numeric_value DOUBLE PRECISION;
+  ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS numeric_formula_json TEXT NOT NULL DEFAULT '{}';
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS due_at TIMESTAMPTZ;
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
   ALTER TABLE extraction_tasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
@@ -1571,6 +1583,8 @@ const INIT_SQL = `
     item_text TEXT NOT NULL,
     checked BOOLEAN NOT NULL DEFAULT FALSE,
     status TEXT NOT NULL DEFAULT 'pending',
+    numeric_value DOUBLE PRECISION,
+    numeric_formula_json TEXT NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (guest_id, phase_id, item_index)
@@ -1622,6 +1636,8 @@ const INIT_SQL = `
   ALTER TABLE guest_task_comments ADD COLUMN IF NOT EXISTS parent_comment_id TEXT REFERENCES guest_task_comments(id) ON DELETE SET NULL;
 
   CREATE INDEX IF NOT EXISTS idx_guest_tasks_guest_id ON guest_tasks(guest_id);
+  ALTER TABLE guest_tasks ADD COLUMN IF NOT EXISTS numeric_value DOUBLE PRECISION;
+  ALTER TABLE guest_tasks ADD COLUMN IF NOT EXISTS numeric_formula_json TEXT NOT NULL DEFAULT '{}';
   CREATE INDEX IF NOT EXISTS idx_guest_task_events_task_id ON guest_task_events(task_id);
   CREATE INDEX IF NOT EXISTS idx_guest_task_attachments_task_id ON guest_task_attachments(task_id);
   CREATE INDEX IF NOT EXISTS idx_guest_task_comments_task_id ON guest_task_comments(task_id);
@@ -2023,7 +2039,7 @@ const INIT_SQL = `
   ALTER TABLE user_storage ADD COLUMN IF NOT EXISTS storage_limit_override_bytes BIGINT;
 `
 
-const DB_INIT_SIGNATURE = '2026-03-06-profitability-v1'
+const DB_INIT_SIGNATURE = '2026-03-10-task-numeric-formula-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -2100,6 +2116,14 @@ function parseDbNullableInteger(value: unknown) {
   }
 
   return null
+}
+
+function parseDbNullableFloat(value: unknown) {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+
+  const parsed = Number.parseFloat(String(value ?? ''))
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function getEstimatedStorageCostUsdPerByteMonth() {
@@ -2452,6 +2476,11 @@ function mapExtractionTaskRow(row: DbExtractionTaskRow): DbExtractionTask {
     position_path: positionPath,
     checked: row.checked === true,
     status: row.status,
+    numeric_value: parseDbNullableFloat(row.numeric_value),
+    numeric_formula_json:
+      typeof row.numeric_formula_json === 'string' && row.numeric_formula_json.trim()
+        ? row.numeric_formula_json
+        : '{}',
     due_at: row.due_at ? toIso(row.due_at) : null,
     completed_at: row.completed_at ? toIso(row.completed_at) : null,
     scheduled_start_at: row.scheduled_start_at ? toIso(row.scheduled_start_at) : null,
@@ -4708,6 +4737,8 @@ export async function syncExtractionTasksForUser(input: {
           position_path,
           checked,
           status,
+          numeric_value,
+          numeric_formula_json,
           due_at,
           completed_at,
           created_at,
@@ -4909,6 +4940,8 @@ export async function listExtractionTasksWithEventsForUser(input: { extractionId
         position_path,
         checked,
         status,
+        numeric_value,
+        numeric_formula_json,
         due_at,
         completed_at,
         scheduled_start_at,
@@ -4983,6 +5016,8 @@ export async function listExtractionTasksWithEventsForSharedExtraction(extractio
         position_path,
         checked,
         status,
+        numeric_value,
+        numeric_formula_json,
         due_at,
         completed_at,
         scheduled_start_at,
@@ -5059,6 +5094,8 @@ export async function findExtractionTaskByIdForUser(input: {
         position_path,
         checked,
         status,
+        numeric_value,
+        numeric_formula_json,
         due_at,
         completed_at,
         scheduled_start_at,
@@ -5082,6 +5119,8 @@ export async function updateExtractionTaskStateForUser(input: {
   extractionId: string
   checked: boolean
   status: ExtractionTaskStatus
+  numericValue: number | null
+  numericFormulaJson: string
 }) {
   await ensureDbReady()
   const { rows } = await pool.query<DbExtractionTaskRow>(
@@ -5090,12 +5129,14 @@ export async function updateExtractionTaskStateForUser(input: {
       SET
         checked = $1,
         status = $2,
+        numeric_value = $3,
+        numeric_formula_json = $4,
         completed_at = CASE
           WHEN $2 = 'completed' THEN COALESCE(completed_at, NOW())
           ELSE NULL
         END,
         updated_at = NOW()
-      WHERE id = $3 AND extraction_id = $4
+      WHERE id = $5 AND extraction_id = $6
       RETURNING
         id,
         extraction_id,
@@ -5110,15 +5151,25 @@ export async function updateExtractionTaskStateForUser(input: {
         position_path,
         checked,
         status,
+        numeric_value,
+        numeric_formula_json,
         due_at,
         completed_at,
         scheduled_start_at,
         scheduled_end_at,
         duration_days,
+        flow_node_type,
         created_at,
         updated_at
     `,
-    [input.checked, input.status, input.taskId, input.extractionId]
+    [
+      input.checked,
+      input.status,
+      input.numericValue,
+      input.numericFormulaJson,
+      input.taskId,
+      input.extractionId,
+    ]
   )
 
   return rows[0] ? mapExtractionTaskRow(rows[0]) : null
@@ -5137,7 +5188,7 @@ export async function updateExtractionTaskScheduleForUser(input: {
      WHERE id = $3 AND extraction_id = $4
      RETURNING id, extraction_id, user_id, phase_id, phase_title, item_index, item_text,
        node_id, parent_node_id, depth, position_path, checked, status,
-       due_at, completed_at, scheduled_start_at, scheduled_end_at, duration_days, flow_node_type, created_at, updated_at`,
+       numeric_value, numeric_formula_json, due_at, completed_at, scheduled_start_at, scheduled_end_at, duration_days, flow_node_type, created_at, updated_at`,
     [input.scheduledStartAt || null, input.scheduledEndAt || null, input.taskId, input.extractionId]
   )
   return rows[0] ? mapExtractionTaskRow(rows[0]) : null
@@ -5211,6 +5262,78 @@ export async function updateExtractionTaskPlanningForUser(input: {
   } finally {
     client.release()
   }
+}
+
+export async function updateExtractionTaskStatusCatalogById(input: {
+  extractionId: string
+  taskStatusCatalog: string[]
+}) {
+  await ensureDbReady()
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const { rows } = await client.query<{ metadata_json: string }>(
+      `SELECT metadata_json
+       FROM extractions
+       WHERE id = $1
+       FOR UPDATE`,
+      [input.extractionId]
+    )
+
+    if (!rows[0]) {
+      await client.query('ROLLBACK')
+      return false
+    }
+
+    const nextMetadataJson = writeTaskStatusCatalogToMetadataJson(
+      rows[0].metadata_json,
+      input.taskStatusCatalog
+    )
+
+    await client.query(
+      `UPDATE extractions
+       SET metadata_json = $1
+       WHERE id = $2`,
+      [nextMetadataJson, input.extractionId]
+    )
+
+    await client.query('COMMIT')
+    return true
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function replaceExtractionTaskStatusForExtraction(input: {
+  extractionId: string
+  previousStatus: ExtractionTaskStatus
+  nextStatus: ExtractionTaskStatus
+}) {
+  await ensureDbReady()
+  await pool.query(
+    `
+      UPDATE extraction_tasks
+      SET
+        checked = CASE
+          WHEN $3 = 'completed' THEN TRUE
+          ELSE FALSE
+        END,
+        status = $3,
+        completed_at = CASE
+          WHEN $3 = 'completed' THEN COALESCE(completed_at, NOW())
+          ELSE NULL
+        END,
+        updated_at = NOW()
+      WHERE extraction_id = $1
+        AND status = $2
+    `,
+    [input.extractionId, input.previousStatus, input.nextStatus]
+  )
 }
 
 export async function createExtractionTaskEventForUser(input: {

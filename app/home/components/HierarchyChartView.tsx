@@ -2,8 +2,9 @@
 
 import React, { useCallback, useMemo, useRef, useState } from 'react'
 import { X } from 'lucide-react'
-import type { Phase, InteractiveTask, InteractiveTaskStatus } from '@/app/home/lib/types'
+import type { Phase, InteractiveTask } from '@/app/home/lib/types'
 import type { PlaybookNode } from '@/lib/playbook-tree'
+import { getTaskStatusChipClassName } from '@/lib/task-statuses'
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 const LEVEL_Y_GAP = 120  // center-to-center vertical distance between depth levels
@@ -26,12 +27,12 @@ const PHASE_PALETTE = [
 
 const NEUTRAL_CONN = '#94a3b8'   // slate-400 — used for root → phase connectors
 
-// ── Status chip data ──────────────────────────────────────────────────────────
-const STATUS_META: Record<InteractiveTaskStatus, { label: string; cls: string }> = {
-  pending:     { label: 'Pendiente',   cls: 'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300' },
-  in_progress: { label: 'En progreso', cls: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-900/25 dark:text-sky-300' },
-  blocked:     { label: 'Bloqueada',   cls: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300' },
-  completed:   { label: 'Completada',  cls: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300' },
+function getStatusLabel(status: InteractiveTask['status']) {
+  if (status === 'completed') return 'Completada'
+  if (status === 'in_progress') return 'En progreso'
+  if (status === 'blocked') return 'Bloqueada'
+  if (status === 'pending') return 'Pendiente'
+  return status
 }
 
 // ── Internal types ────────────────────────────────────────────────────────────
@@ -536,9 +537,9 @@ export function HierarchyChartView({
                     {node.task && (
                       <div className="mt-1 flex flex-wrap items-center gap-1">
                         <span
-                          className={`rounded border px-1 py-0.5 text-[9px] font-semibold ${STATUS_META[node.task.status].cls}`}
+                          className={`rounded border px-1 py-0.5 text-[9px] font-semibold ${getTaskStatusChipClassName(node.task.status)}`}
                         >
-                          {STATUS_META[node.task.status].label}
+                          {getStatusLabel(node.task.status)}
                         </span>
                         {node.task.scheduledStartAt && node.task.scheduledEndAt && (
                           <span className="text-[9px] text-slate-400 dark:text-slate-500">
@@ -580,9 +581,9 @@ export function HierarchyChartView({
           {/* Status */}
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <span
-              className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${STATUS_META[popoverNode.task.status].cls}`}
+              className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${getTaskStatusChipClassName(popoverNode.task.status)}`}
             >
-              {STATUS_META[popoverNode.task.status].label}
+              {getStatusLabel(popoverNode.task.status)}
             </span>
             {popoverNode.task.checked && (
               <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300">

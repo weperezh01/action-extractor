@@ -77,13 +77,27 @@ function toClientAttachment(attachment: DbExtractionTaskAttachment) {
   }
 }
 
-function resolveAttachmentTypeByMime(mimeType: string): ExtractionTaskAttachmentType | null {
+function resolveAttachmentTypeByMime(
+  mimeType: string,
+  fileName?: string
+): ExtractionTaskAttachmentType | null {
   const normalized = mimeType.trim().toLowerCase()
-  if (!normalized) return null
-
   if (normalized === 'application/pdf') return 'pdf'
   if (normalized.startsWith('image/')) return 'image'
   if (normalized.startsWith('audio/')) return 'audio'
+
+  const normalizedName = (fileName ?? '').trim().toLowerCase()
+  const extension =
+    normalizedName.lastIndexOf('.') >= 0 ? normalizedName.slice(normalizedName.lastIndexOf('.') + 1) : ''
+  if (!extension) return null
+
+  if (extension === 'pdf') return 'pdf'
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif', 'heic', 'heif'].includes(extension)) {
+    return 'image'
+  }
+  if (['mp3', 'wav', 'm4a', 'aac', 'ogg', 'oga', 'flac', 'opus'].includes(extension)) {
+    return 'audio'
+  }
   return null
 }
 
@@ -330,7 +344,7 @@ export async function POST(
       }
 
       const mimeType = (rawFile.type || '').trim().toLowerCase()
-      const attachmentType = resolveAttachmentTypeByMime(mimeType)
+      const attachmentType = resolveAttachmentTypeByMime(mimeType, rawFile.name)
       if (!attachmentType) {
         return NextResponse.json(
           { error: 'Solo se permiten archivos PDF, imagen o audio.' },

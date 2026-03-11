@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { pool, ensureDbReady } from '@/lib/db'
 import { flattenPlaybookPhases, normalizePlaybookPhases } from '@/lib/playbook-tree'
+import { parseTaskNumericFormulaJson, type TaskNumericFormula } from '@/lib/task-numeric-formulas'
 import type {
   ExtractionTaskStatus,
   ExtractionTaskEventType,
@@ -19,6 +20,9 @@ export interface GuestTask {
   itemText: string
   checked: boolean
   status: ExtractionTaskStatus
+  manualNumericValue: number | null
+  numericFormula: TaskNumericFormula | null
+  numericValue: number | null
   createdAt: string
   updatedAt: string
   events: GuestTaskEvent[]
@@ -67,6 +71,14 @@ function toIso(value: Date | string): string {
   return parsed.toISOString()
 }
 
+function parseGuestNumericValue(value: unknown) {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+
+  const parsed = Number.parseFloat(String(value ?? ''))
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 // ── Task operations ────────────────────────────────────────────────────────
 
 export async function syncGuestTasks(input: {
@@ -113,10 +125,12 @@ export async function listGuestTasksWithEvents(guestId: string): Promise<GuestTa
     item_text: string
     checked: boolean
     status: string
+    numeric_value: number | string | null
+    numeric_formula_json: string | null
     created_at: Date | string
     updated_at: Date | string
   }>(
-    `SELECT id, guest_id, phase_id, phase_title, item_index, item_text, checked, status, created_at, updated_at
+    `SELECT id, guest_id, phase_id, phase_title, item_index, item_text, checked, status, numeric_value, numeric_formula_json, created_at, updated_at
      FROM guest_tasks
      WHERE guest_id = $1
      ORDER BY phase_id ASC, item_index ASC`,
@@ -155,19 +169,27 @@ export async function listGuestTasksWithEvents(guestId: string): Promise<GuestTa
     eventsByTaskId.set(e.task_id, arr)
   }
 
-  return taskRows.map((r) => ({
-    id: r.id,
-    guestId: r.guest_id,
-    phaseId: Number(r.phase_id),
-    phaseTitle: r.phase_title,
-    itemIndex: Number(r.item_index),
-    itemText: r.item_text,
-    checked: r.checked,
-    status: r.status as ExtractionTaskStatus,
-    createdAt: toIso(r.created_at),
-    updatedAt: toIso(r.updated_at),
-    events: eventsByTaskId.get(r.id) ?? [],
-  }))
+  return taskRows.map((r) => {
+    const manualNumericValue = parseGuestNumericValue(r.numeric_value)
+    const numericFormula = parseTaskNumericFormulaJson(r.numeric_formula_json)
+
+    return {
+      id: r.id,
+      guestId: r.guest_id,
+      phaseId: Number(r.phase_id),
+      phaseTitle: r.phase_title,
+      itemIndex: Number(r.item_index),
+      itemText: r.item_text,
+      checked: r.checked,
+      status: r.status as ExtractionTaskStatus,
+      manualNumericValue,
+      numericFormula,
+      numericValue: manualNumericValue,
+      createdAt: toIso(r.created_at),
+      updatedAt: toIso(r.updated_at),
+      events: eventsByTaskId.get(r.id) ?? [],
+    }
+  })
 }
 
 export async function findGuestTaskById(input: {
@@ -185,10 +207,12 @@ export async function findGuestTaskById(input: {
     item_text: string
     checked: boolean
     status: string
+    numeric_value: number | string | null
+    numeric_formula_json: string | null
     created_at: Date | string
     updated_at: Date | string
   }>(
-    `SELECT id, guest_id, phase_id, phase_title, item_index, item_text, checked, status, created_at, updated_at
+    `SELECT id, guest_id, phase_id, phase_title, item_index, item_text, checked, status, numeric_value, numeric_formula_json, created_at, updated_at
      FROM guest_tasks WHERE id = $1 AND guest_id = $2`,
     [input.taskId, input.guestId]
   )
@@ -209,6 +233,8 @@ export async function findGuestTaskById(input: {
     [r.id]
   )
 
+  const manualNumericValue = parseGuestNumericValue(r.numeric_value)
+  const numericFormula = parseTaskNumericFormulaJson(r.numeric_formula_json)
   return {
     id: r.id,
     guestId: r.guest_id,
@@ -218,6 +244,9 @@ export async function findGuestTaskById(input: {
     itemText: r.item_text,
     checked: r.checked,
     status: r.status as ExtractionTaskStatus,
+    manualNumericValue,
+    numericFormula,
+    numericValue: manualNumericValue,
     createdAt: toIso(r.created_at),
     updatedAt: toIso(r.updated_at),
     events: eventRows.map((e) => ({
@@ -236,6 +265,8 @@ export async function updateGuestTask(input: {
   taskId: string
   checked: boolean
   status: ExtractionTaskStatus
+  numericValue: number | null
+  numericFormulaJson: string
 }): Promise<GuestTask | null> {
   await ensureDbReady()
 
@@ -248,19 +279,23 @@ export async function updateGuestTask(input: {
     item_text: string
     checked: boolean
     status: string
+    numeric_value: number | string | null
+    numeric_formula_json: string | null
     created_at: Date | string
     updated_at: Date | string
   }>(
     `UPDATE guest_tasks
-     SET checked = $3, status = $4, updated_at = NOW()
+     SET checked = $3, status = $4, numeric_value = $5, numeric_formula_json = $6, updated_at = NOW()
      WHERE id = $1 AND guest_id = $2
-     RETURNING id, guest_id, phase_id, phase_title, item_index, item_text, checked, status, created_at, updated_at`,
-    [input.taskId, input.guestId, input.checked, input.status]
+     RETURNING id, guest_id, phase_id, phase_title, item_index, item_text, checked, status, numeric_value, numeric_formula_json, created_at, updated_at`,
+    [input.taskId, input.guestId, input.checked, input.status, input.numericValue, input.numericFormulaJson]
   )
 
   if (!rows[0]) return null
   const r = rows[0]
 
+  const manualNumericValue = parseGuestNumericValue(r.numeric_value)
+  const numericFormula = parseTaskNumericFormulaJson(r.numeric_formula_json)
   return {
     id: r.id,
     guestId: r.guest_id,
@@ -270,6 +305,9 @@ export async function updateGuestTask(input: {
     itemText: r.item_text,
     checked: r.checked,
     status: r.status as ExtractionTaskStatus,
+    manualNumericValue,
+    numericFormula,
+    numericValue: manualNumericValue,
     createdAt: toIso(r.created_at),
     updatedAt: toIso(r.updated_at),
     events: [],

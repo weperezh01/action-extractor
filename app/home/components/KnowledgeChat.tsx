@@ -611,14 +611,17 @@ _"${focusedItemContext.text}"_
         <button
           type="button"
           onClick={() => setIsOpen(true)}
-          className="fixed bottom-24 right-4 z-40 rounded-full shadow-[0_20px_42px_-18px_rgba(79,70,229,0.85)] transition-all hover:-translate-y-0.5 hover:shadow-[0_24px_48px_-14px_rgba(79,70,229,0.95)] lg:right-20"
+          className="group fixed bottom-24 right-4 z-40 rounded-full transition-all duration-300 hover:-translate-y-1 hover:scale-[1.03] lg:right-20 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-200 dark:focus-visible:ring-indigo-900/50"
           aria-label="Abrir asistente de contenidos"
         >
-          <img
-            src="/notes-aide-bot.png"
-            alt="Asistente IA"
-            className="h-14 w-14 rounded-full border-2 border-indigo-400/60 object-cover"
-          />
+          <span aria-hidden="true" className="chat-avatar-halo absolute inset-1 rounded-full bg-indigo-500/25 blur-md" />
+          <span className="chat-avatar-float relative block">
+            <img
+              src="/notes-aide-bot.png"
+              alt="Asistente IA"
+              className="h-16 w-16 rounded-full border-2 border-indigo-400/70 object-cover shadow-[0_24px_54px_-20px_rgba(79,70,229,0.95)] md:h-[4.5rem] md:w-[4.5rem]"
+            />
+          </span>
         </button>
       )}
 
@@ -634,7 +637,9 @@ _"${focusedItemContext.text}"_
               ) : (
                 <>
                   <p className="inline-flex items-center gap-2 text-sm font-semibold text-slate-800 dark:text-slate-100">
-                    <img src="/notes-aide-bot.png" alt="Asistente" className="h-6 w-6 rounded-full object-cover" />
+                    <span className="chat-avatar-inline inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-100/80 ring-1 ring-indigo-200/80 dark:bg-indigo-500/10 dark:ring-indigo-400/20">
+                      <img src="/notes-aide-bot.png" alt="Asistente" className="h-7 w-7 rounded-full object-cover" />
+                    </span>
                     <span className="truncate max-w-[160px]" title={activeConversationTitle}>
                       {activeConversationTitle}
                     </span>

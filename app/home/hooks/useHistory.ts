@@ -4,6 +4,7 @@ import { normalizePlaybookPhases } from '@/lib/playbook-tree'
 import { formatHistoryDate } from '@/app/home/lib/utils'
 import type { HistoryItem } from '@/app/home/lib/types'
 
+const HISTORY_REQUEST_TIMEOUT_MS = 45000
 interface HistoryMutationResult {
   ok: boolean
   unauthorized?: boolean
@@ -40,9 +41,12 @@ export function useHistory() {
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), HISTORY_REQUEST_TIMEOUT_MS)
     try {
       const res = await fetch('/api/history', {
         cache: 'no-store',
+        signal: controller.signal,
       })
       if (res.status === 401) {
         setHistory([])
@@ -61,11 +65,13 @@ export function useHistory() {
           }))
         : []
       setHistory(nextHistory)
-    } catch {
-      // Keep the current history on transient failures. Right after login the
-      // first authenticated history request can be slower than usual while the
-      // app and DB warm up.
+    } catch (error) {
+      // Keep the last successful history snapshot on transient timeouts/network failures.
+      if ((error as { name?: unknown } | null)?.name === 'AbortError') {
+        return
+      }
     } finally {
+      clearTimeout(timeoutId)
       setHistoryLoading(false)
     }
   }, [])

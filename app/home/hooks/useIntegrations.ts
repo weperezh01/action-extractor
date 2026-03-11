@@ -35,6 +35,7 @@ export function useIntegrations({ user, onUnauthorized, setError, setNotice }: U
   const [googleDocsUserEmail, setGoogleDocsUserEmail] = useState<string | null>(null)
   const [googleDocsLoading, setGoogleDocsLoading] = useState(false)
   const [googleDocsExportLoading, setGoogleDocsExportLoading] = useState(false)
+  const [googleSheetsExportLoading, setGoogleSheetsExportLoading] = useState(false)
   const [googleDocsDisconnectLoading, setGoogleDocsDisconnectLoading] = useState(false)
 
   const resetIntegrations = useCallback(() => {
@@ -64,6 +65,7 @@ export function useIntegrations({ user, onUnauthorized, setError, setNotice }: U
     setGoogleDocsUserEmail(null)
     setGoogleDocsLoading(false)
     setGoogleDocsExportLoading(false)
+    setGoogleSheetsExportLoading(false)
     setGoogleDocsDisconnectLoading(false)
   }, [])
 
@@ -676,6 +678,59 @@ export function useIntegrations({ user, onUnauthorized, setError, setNotice }: U
     [googleDocsExportLoading, loadGoogleDocsStatus, onUnauthorized, setError, setNotice]
   )
 
+  const handleExportToGoogleSheets = useCallback(
+    async (extractionId?: string) => {
+      if (!extractionId || googleSheetsExportLoading) return
+
+      setGoogleSheetsExportLoading(true)
+      setError(null)
+      setNotice(null)
+      try {
+        const res = await fetch('/api/google-sheets/export', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ extractionId }),
+        })
+
+        if (res.status === 401) {
+          onUnauthorized()
+          setGoogleDocsConnected(false)
+          setGoogleDocsUserEmail(null)
+          setError('Tu sesión expiró. Vuelve a iniciar sesión.')
+          return
+        }
+
+        const data = (await res.json().catch(() => null)) as
+          | { error?: unknown; spreadsheetUrl?: unknown }
+          | null
+
+        if (!res.ok) {
+          const message =
+            typeof data?.error === 'string' && data.error.trim()
+              ? data.error
+              : 'No se pudo exportar a Google Sheets.'
+          setError(message)
+          void loadGoogleDocsStatus()
+          return
+        }
+
+        const spreadsheetUrl =
+          typeof data?.spreadsheetUrl === 'string' ? data.spreadsheetUrl : ''
+        if (spreadsheetUrl) {
+          window.open(spreadsheetUrl, '_blank', 'noopener,noreferrer')
+        }
+
+        setNotice('Exportación completada en Google Sheets.')
+        void loadGoogleDocsStatus()
+      } catch {
+        setError('Error de conexión al exportar a Google Sheets.')
+      } finally {
+        setGoogleSheetsExportLoading(false)
+      }
+    },
+    [googleSheetsExportLoading, loadGoogleDocsStatus, onUnauthorized, setError, setNotice]
+  )
+
   return {
     notionConfigured,
     notionConnected,
@@ -704,6 +759,7 @@ export function useIntegrations({ user, onUnauthorized, setError, setNotice }: U
     googleDocsUserEmail,
     googleDocsLoading,
     googleDocsExportLoading,
+    googleSheetsExportLoading,
     googleDocsDisconnectLoading,
 
     loadNotionStatus,
@@ -727,5 +783,6 @@ export function useIntegrations({ user, onUnauthorized, setError, setNotice }: U
     handleConnectGoogleDocs,
     handleDisconnectGoogleDocs,
     handleExportToGoogleDocs,
+    handleExportToGoogleSheets,
   }
 }

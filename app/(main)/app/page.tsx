@@ -843,7 +843,8 @@ function ActionExtractor() {
   }, [])
 
   const handleAuthenticated = useCallback(async () => {
-    await Promise.all([loadHistory(), loadFolders(), refreshSharedResources(), loadTags()])
+    await loadHistory()
+    void Promise.all([loadFolders(), refreshSharedResources(), loadTags()])
   }, [loadFolders, loadHistory, loadTags, refreshSharedResources])
 
   // ── Tag handlers ────────────────────────────────────────────────────────
@@ -1280,6 +1281,7 @@ function ActionExtractor() {
     googleDocsUserEmail,
     googleDocsLoading,
     googleDocsExportLoading,
+    googleSheetsExportLoading,
     googleDocsDisconnectLoading,
     loadNotionStatus,
     loadTrelloStatus,
@@ -1298,6 +1300,7 @@ function ActionExtractor() {
     handleConnectGoogleDocs,
     handleDisconnectGoogleDocs,
     handleExportToGoogleDocs,
+    handleExportToGoogleSheets,
   } = useIntegrations({
     user,
     onUnauthorized: handleUnauthorized,
@@ -3379,12 +3382,14 @@ function ActionExtractor() {
                 id="community-drawer-panel"
                 className="h-full overflow-hidden rounded-r-2xl border border-slate-200 bg-white/95 shadow-2xl shadow-slate-950/20 backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/95"
               >
-                <CommunityPanel
-                  currentExtractionId={result?.id ?? null}
-                  onError={setError}
-                  onNotice={setNotice}
-                  className="mt-0 h-full min-h-0 overflow-y-auto rounded-none border-0 bg-transparent p-3 shadow-none"
-                />
+                {isCommunityDrawerOpen ? (
+                  <CommunityPanel
+                    currentExtractionId={result?.id ?? null}
+                    onError={setError}
+                    onNotice={setNotice}
+                    className="mt-0 h-full min-h-0 overflow-y-auto rounded-none border-0 bg-transparent p-3 shadow-none"
+                  />
+                ) : null}
               </div>
 
               <button
@@ -3893,6 +3898,7 @@ function ActionExtractor() {
                       googleDocsUserEmail={googleDocsUserEmail}
                       googleDocsLoading={googleDocsLoading}
                       googleDocsExportLoading={googleDocsExportLoading}
+                      googleSheetsExportLoading={googleSheetsExportLoading}
                       onDownloadPdf={handleDownloadPdf}
                       onCopyShareLink={handleCopyShareLink}
                       onCopyMarkdown={() => handleCopyMarkdown()}
@@ -3917,6 +3923,7 @@ function ActionExtractor() {
                       onExportToTodoist={() => handleExportToTodoist(result.id)}
                       onConnectTodoist={handleConnectTodoist}
                       onExportToGoogleDocs={() => handleExportToGoogleDocs(result.id)}
+                      onExportToGoogleSheets={() => handleExportToGoogleSheets(result.id)}
                       onConnectGoogleDocs={handleConnectGoogleDocs}
                       onOpenPlaybookReference={openDeskPlaybookByIdentifier}
                       onFocusItemForChat={setFocusedItemForChat}
@@ -3977,6 +3984,7 @@ function ActionExtractor() {
                             googleDocsUserEmail={googleDocsUserEmail}
                             googleDocsLoading={googleDocsLoading}
                             googleDocsExportLoading={googleDocsExportLoading}
+                            googleSheetsExportLoading={googleSheetsExportLoading}
                             onDownloadPdf={() => handleDownloadPdf(stackedResult)}
                             onCopyShareLink={() => {
                               if (item.source === 'mine') {
@@ -4008,6 +4016,7 @@ function ActionExtractor() {
                             onExportToTodoist={() => handleExportToTodoist(item.id)}
                             onConnectTodoist={handleConnectTodoist}
                             onExportToGoogleDocs={() => handleExportToGoogleDocs(item.id)}
+                            onExportToGoogleSheets={() => handleExportToGoogleSheets(item.id)}
                             onConnectGoogleDocs={handleConnectGoogleDocs}
                             onOpenPlaybookReference={openDeskPlaybookByIdentifier}
                       onFocusItemForChat={setFocusedItemForChat}

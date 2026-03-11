@@ -8,6 +8,7 @@ import {
 } from '@/lib/db'
 import type { InteractiveTask, InteractiveTaskAttachment } from '@/app/home/lib/types'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
+import { parseTaskNumericFormulaJson, resolveTaskNumericValues } from '@/lib/task-numeric-formulas'
 import { buildYoutubeThumbnailUrl } from '@/lib/video-preview'
 import { SharePageContent } from './SharePageContent'
 
@@ -115,7 +116,7 @@ export async function generateMetadata({
 function mapSharedTasksToInteractiveTasks(
   tasks: Awaited<ReturnType<typeof listExtractionTasksWithEventsForSharedExtraction>>
 ): InteractiveTask[] {
-  return tasks.map((task) => ({
+  const interactiveTasks = tasks.map((task) => ({
     id: task.id,
     extractionId: task.extraction_id,
     phaseId: task.phase_id,
@@ -128,6 +129,9 @@ function mapSharedTasksToInteractiveTasks(
     positionPath: task.position_path,
     checked: task.checked,
     status: task.status,
+    manualNumericValue: task.numeric_value,
+    numericFormula: parseTaskNumericFormulaJson(task.numeric_formula_json),
+    numericValue: task.numeric_value,
     dueAt: task.due_at,
     completedAt: task.completed_at,
     scheduledStartAt: task.scheduled_start_at,
@@ -147,6 +151,11 @@ function mapSharedTasksToInteractiveTasks(
       userName: event.user_name ?? null,
       userEmail: event.user_email ?? null,
     })),
+  }))
+  const resolvedValues = resolveTaskNumericValues(interactiveTasks)
+  return interactiveTasks.map((task) => ({
+    ...task,
+    numericValue: resolvedValues.get(task.id) ?? null,
   }))
 }
 

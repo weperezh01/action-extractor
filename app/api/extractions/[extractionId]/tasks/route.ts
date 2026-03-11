@@ -6,7 +6,9 @@ import {
   findExtractionTaskByIdForUser,
   listExtractionTaskDependencies,
   listExtractionTasksWithEventsForUser,
+  replaceExtractionTaskStatusForExtraction,
   syncExtractionTasksForUser,
+  updateExtractionTaskStatusCatalogById,
   updateExtractionTaskPlanningForUser,
   updateExtractionTaskScheduleForUser,
   updateExtractionTaskStateForUser,
@@ -16,6 +18,21 @@ import {
 } from '@/lib/db'
 import { notifyTaskStatusChange } from '@/lib/email-notifications'
 import { normalizePlaybookPhases } from '@/lib/playbook-tree'
+import {
+  MAX_TASK_STATUS_LENGTH,
+  isBuiltInTaskStatus,
+  normalizeTaskStatusInput,
+  parseTaskStatusCatalogFromMetadataJson,
+  sanitizeCustomTaskStatusCatalog,
+} from '@/lib/task-statuses'
+import {
+  parseTaskNumericFormulaInput,
+  parseTaskNumericFormulaJson,
+  resolveTaskNumericValues,
+  serializeTaskNumericFormula,
+  taskNumericFormulaCreatesCycle,
+  type TaskNumericFormula,
+} from '@/lib/task-numeric-formulas'
 import {
   addGuestTaskEvent,
   findGuestTaskById,
@@ -28,13 +45,6 @@ import {
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const ALLOWED_TASK_STATUSES = new Set<ExtractionTaskStatus>([
-  'pending',
-  'in_progress',
-  'blocked',
-  'completed',
-])
-
 const ALLOWED_EVENT_TYPES = new Set<ExtractionTaskEventType>([
   'note',
   'pending_action',
@@ -46,6 +56,168 @@ const GUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 
 function parseExtractionId(raw: unknown) {
   return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function parseTaskStatus(body: unknown) {
+  const statusProvided = typeof (body as { status?: unknown })?.status === 'string'
+  if (!statusProvided) {
+    return { statusProvided: false as const, statusInput: undefined }
+  }
+
+  const normalized = normalizeTaskStatusInput((body as { status: string }).status)
+  if (!normalized) {
+    return { statusProvided: true as const, statusInput: undefined }
+  }
+
+  return {
+    statusProvided: true as const,
+    statusInput: normalized.slice(0, MAX_TASK_STATUS_LENGTH) as ExtractionTaskStatus,
+  }
+}
+
+function parseTaskNumericValue(body: unknown) {
+  if (!Object.prototype.hasOwnProperty.call(Object(body), 'numericValue')) {
+    return { numericValueProvided: false as const, numericValue: undefined }
+  }
+
+  const rawValue = (body as { numericValue?: unknown }).numericValue
+  if (rawValue === null) {
+    return { numericValueProvided: true as const, numericValue: null }
+  }
+
+  if (typeof rawValue === 'number') {
+    if (!Number.isFinite(rawValue)) {
+      return { numericValueProvided: true as const, numericValue: undefined }
+    }
+    return { numericValueProvided: true as const, numericValue: rawValue }
+  }
+
+  if (typeof rawValue === 'string') {
+    const normalized = rawValue.trim().replace(/,/g, '.')
+    if (!normalized) {
+      return { numericValueProvided: true as const, numericValue: null }
+    }
+
+    const parsed = Number.parseFloat(normalized)
+    if (!Number.isFinite(parsed)) {
+      return { numericValueProvided: true as const, numericValue: undefined }
+    }
+
+    return { numericValueProvided: true as const, numericValue: parsed }
+  }
+
+  return { numericValueProvided: true as const, numericValue: undefined }
+}
+
+function parseTaskNumericFormula(body: unknown) {
+  if (!Object.prototype.hasOwnProperty.call(Object(body), 'numericFormula')) {
+    return { numericFormulaProvided: false as const, numericFormula: undefined }
+  }
+
+  const rawValue = (body as { numericFormula?: unknown }).numericFormula
+  if (rawValue === null) {
+    return { numericFormulaProvided: true as const, numericFormula: null }
+  }
+
+  const parsed = parseTaskNumericFormulaInput(rawValue)
+  if (!parsed) {
+    return { numericFormulaProvided: true as const, numericFormula: undefined }
+  }
+
+  return { numericFormulaProvided: true as const, numericFormula: parsed }
+}
+
+function parseExplicitTaskStatus(raw: unknown) {
+  const normalized = normalizeTaskStatusInput(raw)
+  if (!normalized) return undefined
+  return normalized.slice(0, MAX_TASK_STATUS_LENGTH) as ExtractionTaskStatus
+}
+
+function parseTaskStatusCatalog(body: unknown) {
+  const rawCatalog = (body as { taskStatusCatalog?: unknown })?.taskStatusCatalog
+  if (rawCatalog === undefined) {
+    return { taskStatusCatalogProvided: false as const, taskStatusCatalog: undefined }
+  }
+  if (!Array.isArray(rawCatalog)) {
+    return { taskStatusCatalogProvided: true as const, taskStatusCatalog: undefined }
+  }
+  return {
+    taskStatusCatalogProvided: true as const,
+    taskStatusCatalog: sanitizeCustomTaskStatusCatalog(rawCatalog),
+  }
+}
+
+function getTaskStatusIdentity(status: string) {
+  return normalizeTaskStatusInput(status).toLocaleLowerCase()
+}
+
+function areTaskStatusCatalogsEqual(a: string[], b: string[]) {
+  if (a.length !== b.length) return false
+  return a.every((value, index) => value === b[index])
+}
+
+function appendTaskStatusCatalogValue(catalog: string[], status: string) {
+  return sanitizeCustomTaskStatusCatalog([...catalog, status])
+}
+
+function replaceTaskStatusCatalogValue(catalog: string[], status: string, nextStatus: string) {
+  const statusKey = getTaskStatusIdentity(status)
+  return sanitizeCustomTaskStatusCatalog(
+    catalog.map((catalogStatus) =>
+      getTaskStatusIdentity(catalogStatus) === statusKey ? nextStatus : catalogStatus
+    )
+  )
+}
+
+function removeTaskStatusCatalogValue(catalog: string[], status: string) {
+  const statusKey = getTaskStatusIdentity(status)
+  return catalog.filter((catalogStatus) => getTaskStatusIdentity(catalogStatus) !== statusKey)
+}
+
+function resolveClientTaskNumericValues<
+  T extends {
+    id: string
+    manualNumericValue: number | null
+    numericFormula: TaskNumericFormula | null
+    numericValue: number | null
+  },
+>(tasks: T[]) {
+  const resolvedValues = resolveTaskNumericValues(tasks)
+  return tasks.map((task) => ({
+    ...task,
+    numericValue: resolvedValues.get(task.id) ?? null,
+  }))
+}
+
+function validateTaskNumericFormulaSelection<
+  T extends {
+    id: string
+    numericFormula: TaskNumericFormula | null
+  },
+>(tasks: T[], taskId: string, numericFormula: TaskNumericFormula | null) {
+  if (!numericFormula) {
+    return { ok: true as const }
+  }
+
+  const availableTaskIds = new Set(tasks.map((task) => task.id))
+  const hasInvalidSource = numericFormula.sourceTaskIds.some(
+    (sourceTaskId) => sourceTaskId === taskId || !availableTaskIds.has(sourceTaskId)
+  )
+  if (hasInvalidSource) {
+    return {
+      ok: false as const,
+      error: 'La fórmula numérica contiene subtítems inválidos.',
+    }
+  }
+
+  if (taskNumericFormulaCreatesCycle(tasks, taskId, numericFormula)) {
+    return {
+      ok: false as const,
+      error: 'La fórmula numérica no puede crear una dependencia circular.',
+    }
+  }
+
+  return { ok: true as const }
 }
 
 function toGuestClientTask(task: GuestTask, extractionId: string) {
@@ -62,6 +234,9 @@ function toGuestClientTask(task: GuestTask, extractionId: string) {
     positionPath: `${task.phaseId}.${task.itemIndex + 1}`,
     checked: task.checked,
     status: task.status,
+    manualNumericValue: task.manualNumericValue,
+    numericFormula: task.numericFormula,
+    numericValue: task.numericValue,
     dueAt: null,
     completedAt: null,
     scheduledStartAt: null,
@@ -102,6 +277,9 @@ function toClientTask(task: Awaited<ReturnType<typeof listExtractionTasksWithEve
     positionPath: task.position_path,
     checked: task.checked,
     status: task.status,
+    manualNumericValue: task.numeric_value,
+    numericFormula: parseTaskNumericFormulaJson(task.numeric_formula_json),
+    numericValue: task.numeric_value,
     dueAt: task.due_at,
     completedAt: task.completed_at,
     scheduledStartAt: task.scheduled_start_at,
@@ -129,15 +307,23 @@ async function getTasksResponse(extractionId: string) {
     listExtractionTasksWithEventsForUser({ extractionId }),
     listExtractionTaskDependencies(extractionId),
   ])
-  return tasks.map(task => ({
+  return resolveClientTaskNumericValues(tasks.map(task => ({
     ...toClientTask(task),
     predecessorIds: depsMap.get(task.id) ?? [],
-  }))
+  })))
+}
+
+async function getTaskCollectionPayload(extractionId: string, taskStatusCatalog: string[]) {
+  return {
+    tasks: await getTasksResponse(extractionId),
+    taskStatusCatalog,
+  }
 }
 
 interface AuthTaskAccess {
   role: ExtractionAccessRole
   canEdit: boolean
+  taskStatusCatalog: string[]
 }
 
 async function resolveAuthTaskAccess(input: {
@@ -158,7 +344,14 @@ async function resolveAuthTaskAccess(input: {
   }
 
   const canEdit = accessResult.role === 'owner' || accessResult.role === 'editor'
-  return { ok: true, access: { role: accessResult.role, canEdit } }
+  return {
+    ok: true,
+    access: {
+      role: accessResult.role,
+      canEdit,
+      taskStatusCatalog: parseTaskStatusCatalogFromMetadataJson(accessResult.extraction.metadata_json),
+    },
+  }
 }
 
 export async function GET(
@@ -178,7 +371,10 @@ export async function GET(
         return NextResponse.json({ error: 'guestId inválido.' }, { status: 400 })
       }
       const tasks = await listGuestTasksWithEvents(guestId)
-      return NextResponse.json({ tasks: tasks.map((t) => toGuestClientTask(t, extractionId)) })
+      return NextResponse.json({
+        tasks: resolveClientTaskNumericValues(tasks.map((t) => toGuestClientTask(t, extractionId))),
+        taskStatusCatalog: [],
+      })
     }
 
     // ── Authenticated mode ──────────────────────────────────────────────────
@@ -195,9 +391,9 @@ export async function GET(
       return NextResponse.json({ error: access.error }, { status: access.status })
     }
 
-    return NextResponse.json({
-      tasks: await getTasksResponse(extractionId),
-    })
+    return NextResponse.json(
+      await getTaskCollectionPayload(extractionId, access.access.taskStatusCatalog)
+    )
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'No se pudieron cargar las tareas.'
     console.error('[ActionExtractor] extraction tasks GET error:', message)
@@ -236,7 +432,10 @@ export async function POST(
 
       const guestTasksResponse = async () => {
         const tasks = await listGuestTasksWithEvents(guestId)
-        return NextResponse.json({ tasks: tasks.map((t) => toGuestClientTask(t, extractionId)) })
+        return NextResponse.json({
+          tasks: resolveClientTaskNumericValues(tasks.map((t) => toGuestClientTask(t, extractionId))),
+          taskStatusCatalog: [],
+        })
       }
 
       if (action === 'sync') {
@@ -270,23 +469,36 @@ export async function POST(
             ? (body as { checked: boolean }).checked
             : undefined
 
-        const statusRaw =
-          typeof (body as { status?: unknown }).status === 'string'
-            ? (body as { status: string }).status.trim()
-            : ''
-        const statusInput = ALLOWED_TASK_STATUSES.has(statusRaw as ExtractionTaskStatus)
-          ? (statusRaw as ExtractionTaskStatus)
-          : undefined
+        const { statusProvided, statusInput } = parseTaskStatus(body)
+        const { numericValueProvided, numericValue } = parseTaskNumericValue(body)
+        const { numericFormulaProvided, numericFormula } = parseTaskNumericFormula(body)
 
-        if (checkedInput === undefined && statusInput === undefined) {
+        if (statusProvided && statusInput === undefined) {
+          return NextResponse.json({ error: 'status inválido.' }, { status: 400 })
+        }
+        if (numericValueProvided && numericValue === undefined) {
+          return NextResponse.json({ error: 'numericValue inválido.' }, { status: 400 })
+        }
+        if (numericFormulaProvided && numericFormula === undefined) {
+          return NextResponse.json({ error: 'numericFormula inválida.' }, { status: 400 })
+        }
+
+        if (
+          checkedInput === undefined &&
+          statusInput === undefined &&
+          !numericValueProvided &&
+          !numericFormulaProvided
+        ) {
           return NextResponse.json(
-            { error: 'Debes enviar checked o status para actualizar la tarea.' },
+            { error: 'Debes enviar checked, status, numericValue o numericFormula para actualizar la tarea.' },
             { status: 400 }
           )
         }
 
         let nextChecked = checkedInput ?? currentTask.checked
         let nextStatus = statusInput ?? currentTask.status
+        const nextNumericValue = numericValueProvided ? numericValue ?? null : currentTask.numericValue
+        const nextNumericFormula = numericFormulaProvided ? numericFormula : currentTask.numericFormula
 
         if (statusInput) {
           if (statusInput === 'completed') nextChecked = true
@@ -298,7 +510,22 @@ export async function POST(
           else if (!checkedInput && currentTask.status === 'completed') nextStatus = 'pending'
         }
 
-        const updatedTask = await updateGuestTask({ guestId, taskId, checked: nextChecked, status: nextStatus })
+        if (numericFormulaProvided) {
+          const tasks = await listGuestTasksWithEvents(guestId)
+          const formulaValidation = validateTaskNumericFormulaSelection(tasks, taskId, nextNumericFormula)
+          if (!formulaValidation.ok) {
+            return NextResponse.json({ error: formulaValidation.error }, { status: 400 })
+          }
+        }
+
+        const updatedTask = await updateGuestTask({
+          guestId,
+          taskId,
+          checked: nextChecked,
+          status: nextStatus,
+          numericValue: nextNumericValue,
+          numericFormulaJson: serializeTaskNumericFormula(nextNumericFormula),
+        })
         if (!updatedTask) {
           return NextResponse.json({ error: 'No se pudo actualizar la tarea.' }, { status: 404 })
         }
@@ -394,6 +621,13 @@ export async function POST(
       return NextResponse.json({ error: access.error }, { status: access.status })
     }
 
+    const { taskStatusCatalogProvided, taskStatusCatalog } = parseTaskStatusCatalog(body)
+    if (taskStatusCatalogProvided && taskStatusCatalog === undefined) {
+      return NextResponse.json({ error: 'taskStatusCatalog inválido.' }, { status: 400 })
+    }
+
+    const requestedTaskStatusCatalog = taskStatusCatalog ?? access.access.taskStatusCatalog
+
     if (action === 'sync') {
       if (!access.access.canEdit) {
         return NextResponse.json({ error: 'No tienes permisos para editar esta extracción.' }, { status: 403 })
@@ -413,9 +647,19 @@ export async function POST(
         phases,
       })
 
-      return NextResponse.json({
-        tasks: await getTasksResponse(extractionId),
-      })
+      if (!areTaskStatusCatalogsEqual(requestedTaskStatusCatalog, access.access.taskStatusCatalog)) {
+        const updated = await updateExtractionTaskStatusCatalogById({
+          extractionId,
+          taskStatusCatalog: requestedTaskStatusCatalog,
+        })
+        if (!updated) {
+          return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
+        }
+      }
+
+      return NextResponse.json(
+        await getTaskCollectionPayload(extractionId, requestedTaskStatusCatalog)
+      )
     }
 
     if (action === 'update') {
@@ -444,23 +688,38 @@ export async function POST(
           ? (body as { checked: boolean }).checked
           : undefined
 
-      const statusRaw =
-        typeof (body as { status?: unknown }).status === 'string'
-          ? (body as { status: string }).status.trim()
-          : ''
-      const statusInput = ALLOWED_TASK_STATUSES.has(statusRaw as ExtractionTaskStatus)
-        ? (statusRaw as ExtractionTaskStatus)
-        : undefined
+      const { statusProvided, statusInput } = parseTaskStatus(body)
+      const { numericValueProvided, numericValue } = parseTaskNumericValue(body)
+      const { numericFormulaProvided, numericFormula } = parseTaskNumericFormula(body)
 
-      if (checkedInput === undefined && statusInput === undefined) {
+      if (statusProvided && statusInput === undefined) {
+        return NextResponse.json({ error: 'status inválido.' }, { status: 400 })
+      }
+      if (numericValueProvided && numericValue === undefined) {
+        return NextResponse.json({ error: 'numericValue inválido.' }, { status: 400 })
+      }
+      if (numericFormulaProvided && numericFormula === undefined) {
+        return NextResponse.json({ error: 'numericFormula inválida.' }, { status: 400 })
+      }
+
+      if (
+        checkedInput === undefined &&
+        statusInput === undefined &&
+        !numericValueProvided &&
+        !numericFormulaProvided
+      ) {
         return NextResponse.json(
-          { error: 'Debes enviar checked o status para actualizar la tarea.' },
+          { error: 'Debes enviar checked, status, numericValue o numericFormula para actualizar la tarea.' },
           { status: 400 }
         )
       }
 
       let nextChecked = checkedInput ?? currentTask.checked
       let nextStatus = statusInput ?? currentTask.status
+      const nextNumericValue = numericValueProvided ? numericValue ?? null : currentTask.numeric_value
+      const nextNumericFormula = numericFormulaProvided
+        ? numericFormula
+        : parseTaskNumericFormulaJson(currentTask.numeric_formula_json)
 
       if (statusInput) {
         if (statusInput === 'completed') {
@@ -478,11 +737,46 @@ export async function POST(
         }
       }
 
+      if (numericFormulaProvided) {
+        const tasks = await listExtractionTasksWithEventsForUser({ extractionId })
+        const formulaValidation = validateTaskNumericFormulaSelection(
+          tasks.map((task) => ({
+            id: task.id,
+            numericFormula: parseTaskNumericFormulaJson(task.numeric_formula_json),
+          })),
+          taskId,
+          nextNumericFormula
+        )
+        if (!formulaValidation.ok) {
+          return NextResponse.json({ error: formulaValidation.error }, { status: 400 })
+        }
+      }
+
+      let nextTaskStatusCatalog = requestedTaskStatusCatalog
+      if (statusInput && !isBuiltInTaskStatus(statusInput)) {
+        const updatedCatalog = appendTaskStatusCatalogValue(nextTaskStatusCatalog, statusInput)
+        if (!areTaskStatusCatalogsEqual(updatedCatalog, nextTaskStatusCatalog)) {
+          nextTaskStatusCatalog = updatedCatalog
+        }
+      }
+
+      if (!areTaskStatusCatalogsEqual(nextTaskStatusCatalog, access.access.taskStatusCatalog)) {
+        const catalogUpdated = await updateExtractionTaskStatusCatalogById({
+          extractionId,
+          taskStatusCatalog: nextTaskStatusCatalog,
+        })
+        if (!catalogUpdated) {
+          return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
+        }
+      }
+
       const updatedTask = await updateExtractionTaskStateForUser({
         taskId,
         extractionId,
         checked: nextChecked,
         status: nextStatus,
+        numericValue: nextNumericValue,
+        numericFormulaJson: serializeTaskNumericFormula(nextNumericFormula),
       })
       if (!updatedTask) {
         return NextResponse.json({ error: 'No se pudo actualizar la tarea.' }, { status: 404 })
@@ -521,9 +815,130 @@ export async function POST(
         })
       }
 
-      return NextResponse.json({
-        tasks: await getTasksResponse(extractionId),
+      return NextResponse.json(
+        await getTaskCollectionPayload(extractionId, nextTaskStatusCatalog)
+      )
+    }
+
+    if (action === 'add_status') {
+      if (!access.access.canEdit) {
+        return NextResponse.json({ error: 'No tienes permisos para editar esta extracción.' }, { status: 403 })
+      }
+
+      const status = parseExplicitTaskStatus((body as { status?: unknown }).status)
+      if (!status) {
+        return NextResponse.json({ error: 'status inválido.' }, { status: 400 })
+      }
+      if (isBuiltInTaskStatus(status)) {
+        return NextResponse.json({ error: 'Ese estado ya existe por defecto.' }, { status: 400 })
+      }
+
+      const nextTaskStatusCatalog =
+        taskStatusCatalog ?? appendTaskStatusCatalogValue(access.access.taskStatusCatalog, status)
+      if (!areTaskStatusCatalogsEqual(nextTaskStatusCatalog, access.access.taskStatusCatalog)) {
+        const updated = await updateExtractionTaskStatusCatalogById({
+          extractionId,
+          taskStatusCatalog: nextTaskStatusCatalog,
+        })
+        if (!updated) {
+          return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
+        }
+      }
+
+      return NextResponse.json(
+        await getTaskCollectionPayload(extractionId, nextTaskStatusCatalog)
+      )
+    }
+
+    if (action === 'rename_status') {
+      if (!access.access.canEdit) {
+        return NextResponse.json({ error: 'No tienes permisos para editar esta extracción.' }, { status: 403 })
+      }
+
+      const status = parseExplicitTaskStatus((body as { status?: unknown }).status)
+      const nextStatus = parseExplicitTaskStatus((body as { nextStatus?: unknown }).nextStatus)
+      if (!status || isBuiltInTaskStatus(status)) {
+        return NextResponse.json({ error: 'Solo puedes renombrar estados personalizados.' }, { status: 400 })
+      }
+      if (!nextStatus) {
+        return NextResponse.json({ error: 'nextStatus inválido.' }, { status: 400 })
+      }
+
+      const nextTaskStatusCatalog =
+        taskStatusCatalog ??
+        replaceTaskStatusCatalogValue(access.access.taskStatusCatalog, status, nextStatus)
+
+      await replaceExtractionTaskStatusForExtraction({
+        extractionId,
+        previousStatus: status,
+        nextStatus,
       })
+
+      const updated = await updateExtractionTaskStatusCatalogById({
+        extractionId,
+        taskStatusCatalog: nextTaskStatusCatalog,
+      })
+      if (!updated) {
+        return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
+      }
+
+      return NextResponse.json(
+        await getTaskCollectionPayload(extractionId, nextTaskStatusCatalog)
+      )
+    }
+
+    if (action === 'delete_status') {
+      if (!access.access.canEdit) {
+        return NextResponse.json({ error: 'No tienes permisos para editar esta extracción.' }, { status: 403 })
+      }
+
+      const status = parseExplicitTaskStatus((body as { status?: unknown }).status)
+      if (!status || isBuiltInTaskStatus(status)) {
+        return NextResponse.json({ error: 'Solo puedes eliminar estados personalizados.' }, { status: 400 })
+      }
+
+      const nextTaskStatusCatalog =
+        taskStatusCatalog ?? removeTaskStatusCatalogValue(access.access.taskStatusCatalog, status)
+
+      await replaceExtractionTaskStatusForExtraction({
+        extractionId,
+        previousStatus: status,
+        nextStatus: 'pending',
+      })
+
+      const updated = await updateExtractionTaskStatusCatalogById({
+        extractionId,
+        taskStatusCatalog: nextTaskStatusCatalog,
+      })
+      if (!updated) {
+        return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
+      }
+
+      return NextResponse.json(
+        await getTaskCollectionPayload(extractionId, nextTaskStatusCatalog)
+      )
+    }
+
+    if (action === 'save_status_catalog') {
+      if (!access.access.canEdit) {
+        return NextResponse.json({ error: 'No tienes permisos para editar esta extracción.' }, { status: 403 })
+      }
+
+      if (!taskStatusCatalogProvided || taskStatusCatalog === undefined) {
+        return NextResponse.json({ error: 'taskStatusCatalog inválido.' }, { status: 400 })
+      }
+
+      const updated = await updateExtractionTaskStatusCatalogById({
+        extractionId,
+        taskStatusCatalog,
+      })
+      if (!updated) {
+        return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
+      }
+
+      return NextResponse.json(
+        await getTaskCollectionPayload(extractionId, taskStatusCatalog)
+      )
     }
 
     if (action === 'add_event') {
@@ -573,9 +988,19 @@ export async function POST(
         return NextResponse.json({ error: 'No se encontró la tarea solicitada.' }, { status: 404 })
       }
 
-      return NextResponse.json({
-        tasks: await getTasksResponse(extractionId),
-      })
+      if (!areTaskStatusCatalogsEqual(requestedTaskStatusCatalog, access.access.taskStatusCatalog)) {
+        const updated = await updateExtractionTaskStatusCatalogById({
+          extractionId,
+          taskStatusCatalog: requestedTaskStatusCatalog,
+        })
+        if (!updated) {
+          return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
+        }
+      }
+
+      return NextResponse.json(
+        await getTaskCollectionPayload(extractionId, requestedTaskStatusCatalog)
+      )
     }
 
     if (action === 'update_schedule') {
@@ -594,7 +1019,18 @@ export async function POST(
         : typeof rawEnd === 'string' ? rawEnd.trim() : null
 
       await updateExtractionTaskScheduleForUser({ taskId, extractionId, scheduledStartAt, scheduledEndAt })
-      return NextResponse.json({ tasks: await getTasksResponse(extractionId) })
+      if (!areTaskStatusCatalogsEqual(requestedTaskStatusCatalog, access.access.taskStatusCatalog)) {
+        const updated = await updateExtractionTaskStatusCatalogById({
+          extractionId,
+          taskStatusCatalog: requestedTaskStatusCatalog,
+        })
+        if (!updated) {
+          return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
+        }
+      }
+      return NextResponse.json(
+        await getTaskCollectionPayload(extractionId, requestedTaskStatusCatalog)
+      )
     }
 
     if (action === 'update_planning') {
@@ -618,7 +1054,18 @@ export async function POST(
       if (!result.ok) {
         return NextResponse.json({ error: result.error ?? 'Error al guardar planificación.' }, { status: 400 })
       }
-      return NextResponse.json({ tasks: await getTasksResponse(extractionId) })
+      if (!areTaskStatusCatalogsEqual(requestedTaskStatusCatalog, access.access.taskStatusCatalog)) {
+        const updated = await updateExtractionTaskStatusCatalogById({
+          extractionId,
+          taskStatusCatalog: requestedTaskStatusCatalog,
+        })
+        if (!updated) {
+          return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
+        }
+      }
+      return NextResponse.json(
+        await getTaskCollectionPayload(extractionId, requestedTaskStatusCatalog)
+      )
     }
 
     return NextResponse.json({ error: 'Acción no soportada.' }, { status: 400 })

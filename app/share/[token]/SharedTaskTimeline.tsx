@@ -9,6 +9,7 @@ import type {
   InteractiveTaskLikeSummary,
   SessionUser,
 } from '@/app/home/lib/types'
+import { getTaskStatusChipClassName } from '@/lib/task-statuses'
 
 interface SharedTaskTimelineProps {
   extractionId: string
@@ -74,20 +75,8 @@ function getTaskStatusLabel(status: InteractiveTask['status']) {
   if (status === 'completed') return 'Completada'
   if (status === 'in_progress') return 'En progreso'
   if (status === 'blocked') return 'Bloqueada'
-  return 'Pendiente'
-}
-
-function getTaskStatusClassName(status: InteractiveTask['status']) {
-  if (status === 'completed') {
-    return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300'
-  }
-  if (status === 'in_progress') {
-    return 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-300'
-  }
-  if (status === 'blocked') {
-    return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300'
-  }
-  return 'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
+  if (status === 'pending') return 'Pendiente'
+  return status
 }
 
 function resolveErrorMessage(payload: unknown, fallback: string) {
@@ -429,7 +418,7 @@ export function SharedTaskTimeline({
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <span
-                    className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusClassName(task.status)}`}
+                    className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${getTaskStatusChipClassName(task.status)}`}
                   >
                     {getTaskStatusLabel(task.status)}
                   </span>
