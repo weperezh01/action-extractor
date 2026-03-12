@@ -540,6 +540,30 @@ html.dark textarea::placeholder {
   color: rgba(29, 74, 138, 0.82);
 }
 
+.paper-playbook-ink-note {
+  display: inline-block;
+  font-family: 'Patrick Hand', 'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  font-weight: 700;
+  color: rgba(29, 74, 138, 0.86);
+  text-shadow: 0.28px 0 rgba(20, 71, 146, 0.4);
+  white-space: nowrap;
+}
+
+.paper-playbook-ink-note-left {
+  font-size: 1.18rem;
+  transform: rotate(-3.1deg);
+  transform-origin: left center;
+}
+
+.paper-playbook-ink-note-right {
+  text-align: right;
+  font-size: 0.98rem;
+  transform: rotate(2.2deg);
+  transform-origin: right center;
+}
+
 .paper-playbook-owner-signature {
   display: inline-block;
   max-width: min(100%, 22rem);
@@ -645,6 +669,11 @@ html.dark textarea::placeholder {
 }
 
 html.dark .paper-playbook-owner-signature {
+  color: rgba(123, 176, 255, 0.95);
+  text-shadow: 0.25px 0 rgba(152, 198, 255, 0.35);
+}
+
+html.dark .paper-playbook-ink-note {
   color: rgba(123, 176, 255, 0.95);
   text-shadow: 0.25px 0 rgba(152, 198, 255, 0.35);
 }
@@ -1918,6 +1947,14 @@ html.dark .folder-playbooks-desk-owner-signature {
   .paper-playbook-date-note {
     max-width: min(100%, 14rem);
     font-size: 0.92rem;
+  }
+
+  .paper-playbook-ink-note-left {
+    font-size: 1.04rem;
+  }
+
+  .paper-playbook-ink-note-right {
+    font-size: 0.9rem;
   }
 
   .paper-playbook-owner-signature {

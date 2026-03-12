@@ -1144,7 +1144,6 @@ export function ResultPanel({
 
   // ── Source access ─────────────────────────────────────────────────────────
   const [showYoutubeEmbed, setShowYoutubeEmbed] = useState(false)
-  const [isSourceSectionHidden, setIsSourceSectionHidden] = useState(false)
   const [showSourceTextModal, setShowSourceTextModal] = useState(false)
   const [sourceTextContent, setSourceTextContent] = useState<string | null>(null)
   const [sourceTextLoading, setSourceTextLoading] = useState(false)
@@ -1312,8 +1311,6 @@ export function ResultPanel({
   }, [])
 
   const [isActionsExpanded, setIsActionsExpanded] = useState(false)
-  const [isActionsModalOpen, setIsActionsModalOpen] = useState(false)
-  const [isIntegrationsModalOpen, setIsIntegrationsModalOpen] = useState(false)
   const [isShareMenuOpen, setIsShareMenuOpen] = useState(false)
   const [collapseAfterAsyncAction, setCollapseAfterAsyncAction] = useState(false)
   const asyncActionLoadingRef = useRef(false)
@@ -1372,7 +1369,6 @@ export function ResultPanel({
   const [taskMutationLoadingId, setTaskMutationLoadingId] = useState<string | null>(null)
   const [eventDraftContent, setEventDraftContent] = useState('')
   const [idCopied, setIdCopied] = useState(false)
-  const [isIdModalOpen, setIsIdModalOpen] = useState(false)
   const [playbookLinkCopied, setPlaybookLinkCopied] = useState(false)
   const [isAssigningFolder, setIsAssigningFolder] = useState(false)
   const [closeStage, setCloseStage] = useState<PlaybookCloseStage>('cover')
@@ -1487,8 +1483,7 @@ export function ResultPanel({
     todoistLoading ||
     todoistExportLoading ||
     googleDocsLoading ||
-    googleDocsExportLoading ||
-    googleSheetsExportLoading
+    googleDocsExportLoading
   const isBookFullyClosed = closeStage === 'cover'
   const isBookOpen = closeStage === 'idle'
   const isPageTurning = pageTurnStage !== 'idle'
@@ -1628,13 +1623,28 @@ export function ResultPanel({
     }
   }, [isActionsExpanded, isReextractExpanded])
 
-  // Share menu close-on-outside-click is handled by the modal backdrop onClick
+  useEffect(() => {
+    if (!isShareMenuOpen) return
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+
+      const button = shareMenuButtonRef.current
+      const panel = shareMenuPanelRef.current
+      if ((button && button.contains(target)) || (panel && panel.contains(target))) return
+
+      setIsShareMenuOpen(false)
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+    }
+  }, [isShareMenuOpen])
 
   useEffect(() => {
     setIdCopied(false)
-    setIsIdModalOpen(false)
-    setIsActionsModalOpen(false)
-    setIsIntegrationsModalOpen(false)
     setIsShareMenuOpen(false)
   }, [result.id])
 
@@ -4566,141 +4576,46 @@ export function ResultPanel({
           }`}
           style={{ marginInline: '4.5%' }}
         >
-          <div className="mb-4 flex flex-wrap items-center justify-center gap-2.5">
-            <div className="flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
-              <Clock size={14} /> {tx('playbook.savedTimeLabel')}: {result.metadata.savedTime}
-            </div>
-            <div className="flex items-center gap-1.5 rounded-lg border border-orange-100 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-700 dark:border-orange-800 dark:bg-orange-900/20 dark:text-orange-300">
-              <Brain size={14} /> {tx('playbook.difficultyLabel')}: {result.metadata.difficulty}
-            </div>
-            <div className="flex items-center gap-1.5 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300">
-              <Zap size={14} /> {tx('playbook.modeLabel')}: {getExtractionModeLabel(resolvedMode)}
-            </div>
-          </div>
           <div className="mb-3 flex flex-wrap items-start justify-between gap-2.5">
             <div className="flex min-w-0 flex-col items-start gap-2">
               {((result.orderNumber && result.orderNumber > 0) || result.id) && (
-                <div className="flex flex-col items-start gap-2">
+                <div className="flex flex-wrap items-center gap-2.5">
                   {result.orderNumber && result.orderNumber > 0 && (
                     <p className="paper-playbook-ink-note paper-playbook-ink-note-left">
                       #{result.orderNumber}
                     </p>
                   )}
                   {result.id && (
-                    <div className="flex flex-wrap items-center gap-2.5">
-                      <button
-                        type="button"
-                        onClick={() => setIsIdModalOpen(true)}
-                        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 text-[11px] font-mono text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-                        title={result.id}
-                      >
-                        <span className="max-w-[180px] truncate">ID: {result.id}</span>
-                        <Copy size={11} className="shrink-0 opacity-60" />
-                      </button>
-                      <span
-                        title={`${tx('playbook.folder.label')}: ${coverFolderLabel}`}
-                        className="inline-flex min-w-0 items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-200"
-                      >
-                        <Folder size={12} />
-                        <span className="max-w-[220px] truncate">{coverFolderLabel}</span>
+                    <p className="inline-flex max-w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                      <span className="truncate" title={result.id}>
+                        ID: {result.id}
                       </span>
-                      {isIdModalOpen && typeof window !== 'undefined' && createPortal(
-                        <div
-                          role="dialog"
-                          aria-modal="true"
-                          aria-label={tx('playbook.uniqueId')}
-                          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/25 backdrop-blur-[1px]"
-                          onClick={() => setIsIdModalOpen(false)}
-                        >
-                          <div
-                            onClick={(event) => event.stopPropagation()}
-                            className="mx-4 w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
-                          >
-                            <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                              {tx('playbook.uniqueId')}
-                            </p>
-                            <p className="break-all rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                              {result.id}
-                            </p>
-                            <div className="mt-3 flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={handleCopyExtractionId}
-                                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-                              >
-                                <Copy size={13} />
-                                {idCopied ? tx('common.copied') : tx('common.copy')}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setIsIdModalOpen(false)}
-                                className="inline-flex h-8 items-center rounded-lg px-3 text-xs font-semibold text-slate-500 transition-colors hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-                              >
-                                {tx('common.close')}
-                              </button>
-                            </div>
-                          </div>
-                        </div>,
-                        document.body
-                      )}
-                    </div>
+                    </p>
                   )}
-                </div>
-              )}
-              {result.id && (onAddTag || resultTags.length > 0) && (
-                <div className="flex max-w-full flex-wrap items-center justify-start gap-1.5">
-                  {resultTags.map((tag) => (
-                    <span
-                      key={tag.id}
-                      className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300"
+                  {result.id && (
+                    <button
+                      type="button"
+                      onClick={handleCopyExtractionId}
+                      className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                      aria-label={tx('playbook.copyUniqueIdAria')}
                     >
-                      #{tag.name}
-                      {onRemoveTag && (
-                        <button
-                          type="button"
-                          onClick={() => void handleRemoveTag(tag.id)}
-                          disabled={tagLoading}
-                          aria-label={tx('playbook.tags.removeAria', { tag: tag.name })}
-                          className="ml-0.5 rounded-full p-0.5 opacity-60 transition-opacity hover:opacity-100 disabled:cursor-not-allowed"
-                        >
-                          <X size={9} />
-                        </button>
-                      )}
-                    </span>
-                  ))}
-                  {onAddTag && (
-                    <div className="relative">
-                      <input
-                        ref={tagInputRef}
-                        type="text"
-                        value={tagInput}
-                        onChange={(e) => { setTagInput(e.target.value); setShowTagDropdown(true) }}
-                        onKeyDown={(e) => void handleTagKeyDown(e)}
-                        onFocus={() => setShowTagDropdown(true)}
-                        onBlur={() => setTimeout(() => setShowTagDropdown(false), 150)}
-                        placeholder="+ tag"
-                        disabled={tagLoading}
-                        className="h-6 w-20 rounded-full border border-dashed border-slate-300 bg-transparent px-2 text-[11px] text-slate-500 outline-none placeholder:text-slate-300 focus:border-indigo-400 focus:text-slate-700 disabled:opacity-50 dark:border-slate-600 dark:text-slate-400 dark:focus:border-indigo-500"
-                      />
-                      {showTagDropdown && filteredTagSuggestions.length > 0 && (
-                        <div className="absolute left-0 top-full z-30 mt-1 min-w-[140px] rounded-xl border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
-                          {filteredTagSuggestions.slice(0, 6).map((tag) => (
-                            <button
-                              key={tag.id}
-                              type="button"
-                              onMouseDown={(e) => { e.preventDefault(); void handlePickSuggestion(tag) }}
-                              className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
-                            >
-                              <span className="inline-block h-2 w-2 rounded-full bg-indigo-400" />
-                              #{tag.name}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                      <Copy size={12} />
+                      {idCopied ? tx('common.copied') : tx('common.copy')}
+                    </button>
                   )}
                 </div>
               )}
+              <div className="flex flex-wrap items-center justify-start gap-2.5">
+                <div className="flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
+                  <Clock size={14} /> {tx('playbook.savedTimeLabel')}: {result.metadata.savedTime}
+                </div>
+                <div className="flex items-center gap-1.5 rounded-lg border border-orange-100 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-700 dark:border-orange-800 dark:bg-orange-900/20 dark:text-orange-300">
+                  <Brain size={14} /> {tx('playbook.difficultyLabel')}: {result.metadata.difficulty}
+                </div>
+                <div className="flex items-center gap-1.5 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300">
+                  <Zap size={14} /> {tx('playbook.modeLabel')}: {getExtractionModeLabel(resolvedMode)}
+                </div>
+              </div>
             </div>
             <div className="flex flex-col items-end gap-2">
               {formattedPlaybookDateTime && (
@@ -4708,7 +4623,7 @@ export function ResultPanel({
                   {formattedPlaybookDateTime}
                 </p>
               )}
-              <div className="flex flex-wrap items-center justify-end gap-2">
+              <div className="flex items-center gap-2">
                 {result.id && onStarResult && (
                   <button
                     type="button"
@@ -4718,77 +4633,14 @@ export function ResultPanel({
                         ? tx('playbook.removeFromFavorites')
                         : tx('playbook.addToFavorites')
                     }
-                    title={
-                      result.isStarred
-                        ? tx('playbook.removeFromFavorites')
-                        : tx('playbook.addToFavorites')
-                    }
-                    className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-colors ${
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${
                       result.isStarred
                         ? 'border-amber-300 bg-amber-50 text-amber-600 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/25 dark:text-amber-300'
                         : 'border-slate-200 bg-white text-slate-400 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-500 dark:hover:text-amber-400'
                     }`}
                   >
                     <Star size={13} fill={result.isStarred ? 'currentColor' : 'none'} />
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsIntegrationsModalOpen(false)
-                    setIsActionsModalOpen(true)
-                  }}
-                  aria-label={tx('playbook.actions')}
-                  title={tx('playbook.actions')}
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-violet-200 bg-violet-50 text-violet-700 transition-colors hover:border-violet-300 hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-900/25 dark:text-violet-300 dark:hover:bg-violet-900/40"
-                >
-                  <FileText size={13} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsActionsModalOpen(false)
-                    setIsIntegrationsModalOpen(true)
-                  }}
-                  aria-label={tx('playbook.integrations')}
-                  title={tx('playbook.integrations')}
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 transition-colors hover:border-emerald-300 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300 dark:hover:bg-emerald-900/40"
-                >
-                  <Zap size={13} />
-                </button>
-                {result.id && onAssignFolder && canManageFolder && (
-                  <label
-                    aria-label={tx('playbook.folder.assign')}
-                    title={`${tx('playbook.folder.assign')}: ${coverFolderLabel}`}
-                    className={`relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/25 dark:text-amber-300 dark:hover:bg-amber-900/40 ${
-                      isAssigningFolder ? 'opacity-60' : ''
-                    }`}
-                  >
-                    <Folder size={13} />
-                    <select
-                      value={result.folderId ?? ''}
-                      disabled={isAssigningFolder}
-                      onChange={(event) => handleAssignCurrentFolder(event.target.value || null)}
-                      className="absolute inset-0 cursor-pointer opacity-0"
-                      aria-label={tx('playbook.folder.assign')}
-                    >
-                      {folders.map((folder) => (
-                        <option key={folder.id} value={folder.id}>
-                          {folder.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                {result.id && !isMetaEditing && canEditMeta && (
-                  <button
-                    type="button"
-                    onClick={handleStartMetaEdit}
-                    aria-label={tx('common.edit')}
-                    title={tx('common.edit')}
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-                  >
-                    <Pencil size={13} />
+                    {result.isStarred ? tx('playbook.save') : tx('playbook.favorite')}
                   </button>
                 )}
                 <button
@@ -4797,20 +4649,20 @@ export function ResultPanel({
                   aria-label={
                     isFullscreen ? tx('playbook.exitFullscreen') : tx('playbook.enterFullscreen')
                   }
-                  title={isFullscreen ? tx('playbook.exitFullscreen') : tx('playbook.enterFullscreen')}
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
                 >
                   {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                  {isFullscreen ? tx('playbook.minimize') : tx('playbook.expand')}
                 </button>
                 {onClose && isBookOpen && (
                   <button
                     type="button"
                     onClick={handleClose}
                     aria-label={tx('playbook.close')}
-                    title={tx('playbook.close')}
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
                   >
                     <X size={13} />
+                    {tx('common.close')}
                   </button>
                 )}
               </div>
@@ -4836,20 +4688,14 @@ export function ResultPanel({
                 <MoreHorizontal size={15} />
               </button>
             )}
-            {result.id && isShareMenuOpen && typeof window !== 'undefined' && createPortal(
+            {result.id && isShareMenuOpen && (
               <div
-                role="dialog"
-                aria-modal="true"
-                aria-label={tx('playbook.actionsAndExport')}
-                className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/25 backdrop-blur-[1px]"
-                onClick={() => setIsShareMenuOpen(false)}
+                ref={shareMenuPanelRef}
+                onPointerDownCapture={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+                className="absolute top-full left-1/2 z-30 mt-3 w-full max-w-md -translate-x-1/2 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-xl shadow-slate-200/60 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95 dark:shadow-none"
               >
-                <div
-                  ref={shareMenuPanelRef}
-                  onClick={(event) => event.stopPropagation()}
-                  className="mx-4 w-full max-w-md rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
-                >
-                  <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-3">
                   {canManageVisibility ? (
                     <div className="inline-flex min-h-8 flex-wrap items-center overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-950">
                       <button
@@ -5030,10 +4876,8 @@ export function ResultPanel({
                       )}
                     </div>
                   )}
-                  </div>
                 </div>
-              </div>,
-              document.body
+              </div>
             )}
           </div>
         </div>
@@ -5046,26 +4890,101 @@ export function ResultPanel({
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
                 {sourceSectionLabel}
               </h2>
+              <span
+                title={`${tx('playbook.folder.label')}: ${coverFolderLabel}`}
+                className="inline-flex min-w-0 items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-200"
+              >
+                <Folder size={12} />
+                <span className="max-w-[220px] truncate">{coverFolderLabel}</span>
+              </span>
             </div>
-            <button
-              type="button"
-              onClick={() => setIsSourceSectionHidden((previous) => !previous)}
-              aria-expanded={!isSourceSectionHidden}
-              aria-label={
-                isSourceSectionHidden
-                  ? tx('playbook.source.showPanel')
-                  : tx('playbook.source.hidePanel')
-              }
-              className="inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-            >
-              {isSourceSectionHidden ? <Eye size={12} /> : <EyeOff size={12} />}
-              {isSourceSectionHidden
-                ? tx('playbook.source.showPanel')
-                : tx('playbook.source.hidePanel')}
-            </button>
+            <div className="flex items-center gap-2">
+              {result.id && onAssignFolder && canManageFolder && (
+                <label className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                  <Folder size={12} />
+                  <select
+                    value={result.folderId ?? ''}
+                    disabled={isAssigningFolder}
+                    onChange={(event) => handleAssignCurrentFolder(event.target.value || null)}
+                    className="bg-transparent pr-1 outline-none"
+                    aria-label={tx('playbook.folder.assign')}
+                  >
+                    {folders.map((folder) => (
+                      <option key={folder.id} value={folder.id}>
+                        {folder.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {result.id && !isMetaEditing && canEditMeta && (
+                <button
+                  type="button"
+                  onClick={handleStartMetaEdit}
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                >
+                  <Pencil size={12} /> {tx('common.edit')}
+                </button>
+              )}
+            </div>
           </div>
 
-          {!isSourceSectionHidden && (
+          {/* ── Tag chips ─────────────────────────────────────────────────── */}
+          {result.id && (onAddTag || resultTags.length > 0) && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {resultTags.map((tag) => (
+                <span
+                  key={tag.id}
+                  className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 dark:border-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300"
+                >
+                  #{tag.name}
+                  {onRemoveTag && (
+                    <button
+                      type="button"
+                      onClick={() => void handleRemoveTag(tag.id)}
+                      disabled={tagLoading}
+                      aria-label={tx('playbook.tags.removeAria', { tag: tag.name })}
+                      className="ml-0.5 rounded-full p-0.5 opacity-60 transition-opacity hover:opacity-100 disabled:cursor-not-allowed"
+                    >
+                      <X size={9} />
+                    </button>
+                  )}
+                </span>
+              ))}
+              {onAddTag && (
+                <div className="relative">
+                  <input
+                    ref={tagInputRef}
+                    type="text"
+                    value={tagInput}
+                    onChange={(e) => { setTagInput(e.target.value); setShowTagDropdown(true) }}
+                    onKeyDown={(e) => void handleTagKeyDown(e)}
+                    onFocus={() => setShowTagDropdown(true)}
+                    onBlur={() => setTimeout(() => setShowTagDropdown(false), 150)}
+                    placeholder="+ tag"
+                    disabled={tagLoading}
+                    className="h-6 w-20 rounded-full border border-dashed border-slate-300 bg-transparent px-2 text-[11px] text-slate-500 outline-none placeholder:text-slate-300 focus:border-indigo-400 focus:text-slate-700 disabled:opacity-50 dark:border-slate-600 dark:text-slate-400 dark:focus:border-indigo-500"
+                  />
+                  {showTagDropdown && filteredTagSuggestions.length > 0 && (
+                    <div className="absolute left-0 top-full z-30 mt-1 min-w-[140px] rounded-xl border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+                      {filteredTagSuggestions.slice(0, 6).map((tag) => (
+                        <button
+                          key={tag.id}
+                          type="button"
+                          onMouseDown={(e) => { e.preventDefault(); void handlePickSuggestion(tag) }}
+                          className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
+                        >
+                          <span className="inline-block h-2 w-2 rounded-full bg-indigo-400" />
+                          #{tag.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
             <div className="flex min-w-0 flex-1 flex-col gap-4 md:flex-row">
               {/* Thumbnail — edit or display */}
@@ -5300,91 +5219,218 @@ export function ResultPanel({
 
             <div className="w-full lg:w-[22rem] lg:shrink-0">
               <div ref={rightControlsRef} className="flex flex-col gap-3">
-                {isActionsModalOpen && typeof window !== 'undefined' && createPortal(
-                  <div
-                    role="dialog"
-                    aria-modal="true"
-                    aria-label={tx('playbook.actions')}
-                    className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/25 backdrop-blur-[1px]"
-                    onClick={() => setIsActionsModalOpen(false)}
-                  >
+                <div className="rounded-xl border border-slate-200 bg-slate-50/90 p-3.5 dark:border-slate-700 dark:bg-slate-800/45">
+                <button
+                  type="button"
+                  onClick={handleToggleActions}
+                  aria-expanded={isActionsExpanded}
+                  className="flex w-full items-center justify-between gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-slate-100/70 dark:hover:bg-slate-700/30"
+                >
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
+                      {tx('playbook.actionsAndExport')}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">
+                      {isActionsExpanded
+                        ? tx('playbook.selectActionOrExport')
+                        : tx('playbook.clickToExpandOptions')}
+                    </p>
+                  </div>
+                  <ChevronDown
+                    size={16}
+                    className={`text-slate-500 transition-transform duration-500 ease-out dark:text-slate-300 ${
+                      isActionsExpanded ? 'rotate-180' : 'rotate-0'
+                    }`}
+                  />
+                </button>
+
+                <div
+                  aria-hidden={!isActionsExpanded}
+                  className={`grid transition-[grid-template-rows,opacity,margin-top] duration-700 ease-out ${
+                    isActionsExpanded
+                      ? 'visible mt-3 grid-rows-[1fr] opacity-100'
+                      : 'invisible mt-0 grid-rows-[0fr] opacity-0 pointer-events-none'
+                  }`}
+                >
+                  <div className="overflow-hidden">
                     <div
-                      onClick={(event) => event.stopPropagation()}
-                      className="mx-4 max-h-[80vh] w-full max-w-md overflow-y-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+                      className={`transition-transform duration-700 ease-out ${
+                        isActionsExpanded ? 'translate-y-0' : '-translate-y-2'
+                      }`}
                     >
-                      <div className="mb-4 flex items-center justify-between">
-                        <p className="text-sm font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-                          {tx('playbook.actions')}
-                        </p>
-                        <button type="button" onClick={() => setIsActionsModalOpen(false)} className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200">
-                          <X size={15} />
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button onClick={() => { void triggerAsyncAction(onDownloadPdf); setIsActionsModalOpen(false) }} disabled={isExportingPdf} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-wait disabled:text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
-                          <Download size={14} />
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-1">
+                        <button
+                          onClick={() => triggerAsyncAction(onDownloadPdf)}
+                          disabled={isExportingPdf}
+                          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-wait disabled:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                        >
+                          <Download size={15} />
                           {isExportingPdf ? tx('common.generating') : tx('playbook.savePdf')}
                         </button>
-                        <button onClick={() => { void triggerAsyncAction(onCopyShareLink); setIsActionsModalOpen(false) }} disabled={!canManageVisibility || !result.id || shareLoading || !isShareableVisibility} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-wait disabled:text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
-                          <Share2 size={14} />
-                          {shareLoading ? tx('common.generating') : !isShareableVisibility ? tx('playbook.visibility.publicOrLink') : shareCopied ? tx('common.copied') : tx('common.share')}
+
+                        <button
+                          onClick={() => triggerAsyncAction(onCopyShareLink)}
+                          disabled={!canManageVisibility || !result.id || shareLoading || !isShareableVisibility}
+                          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-wait disabled:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                        >
+                          <Share2 size={15} />
+                          {shareLoading
+                            ? tx('common.generating')
+                            : !isShareableVisibility
+                              ? tx('playbook.visibility.publicOrLink')
+                              : shareCopied
+                                ? tx('common.copied')
+                                : tx('common.share')}
                         </button>
-                        <button onClick={() => { void triggerInstantAction(onCopyMarkdown); setIsActionsModalOpen(false) }} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
-                          <Copy size={14} />
+
+                        <button
+                          onClick={() => triggerInstantAction(onCopyMarkdown)}
+                          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                        >
+                          <Copy size={15} />
                           {tx('playbook.copyMarkdown')}
                         </button>
                       </div>
-                    </div>
-                  </div>,
-                  document.body
-                )}
 
-                {isIntegrationsModalOpen && typeof window !== 'undefined' && createPortal(
-                  <div
-                    role="dialog"
-                    aria-modal="true"
-                    aria-label={tx('playbook.integrations')}
-                    className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/25 backdrop-blur-[1px]"
-                    onClick={() => setIsIntegrationsModalOpen(false)}
-                  >
-                    <div
-                      onClick={(event) => event.stopPropagation()}
-                      className="mx-4 max-h-[80vh] w-full max-w-md overflow-y-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
-                    >
-                      <div className="mb-4 flex items-center justify-between">
-                        <p className="text-sm font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                      <div className="mt-3 border-t border-slate-200 pt-3 dark:border-slate-700">
+                        <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300">
                           {tx('playbook.integrations')}
                         </p>
-                        <button type="button" onClick={() => setIsIntegrationsModalOpen(false)} className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200">
-                          <X size={15} />
-                        </button>
+
+                        <div className="mt-2 grid grid-cols-1 gap-2">
+                          {notionConnected ? (
+                            <button
+                              onClick={() => triggerAsyncAction(onExportToNotion)}
+                              disabled={!result.id || notionExportLoading}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {notionExportLoading
+                                ? tx('playbook.exportingToNotion')
+                                : tx('playbook.exportToNotion')}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => triggerAsyncAction(onConnectNotion)}
+                              disabled={notionLoading || !notionConfigured}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {notionLoading
+                                ? 'Conectando Notion...'
+                                : notionConfigured
+                                  ? tx('playbook.connectNotion')
+                                  : 'Notion no configurado'}
+                            </button>
+                          )}
+
+                          {trelloConnected ? (
+                            <button
+                              onClick={() => triggerAsyncAction(onExportToTrello)}
+                              disabled={!result.id || trelloExportLoading}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-sky-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-sky-700 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {trelloExportLoading
+                                ? tx('playbook.exportingToTrello')
+                                : tx('playbook.exportToTrello')}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => triggerAsyncAction(onConnectTrello)}
+                              disabled={trelloLoading || !trelloConfigured}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {trelloLoading
+                                ? 'Conectando Trello...'
+                                : trelloConfigured
+                                  ? tx('playbook.connectTrello')
+                                  : 'Trello no configurado'}
+                            </button>
+                          )}
+
+                          {todoistConnected ? (
+                            <button
+                              onClick={() => triggerAsyncAction(onExportToTodoist)}
+                              disabled={!result.id || todoistExportLoading}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-rose-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-rose-700 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {todoistExportLoading
+                                ? tx('playbook.exportingToTodoist')
+                                : tx('playbook.exportToTodoist')}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => triggerAsyncAction(onConnectTodoist)}
+                              disabled={todoistLoading || !todoistConfigured}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {todoistLoading
+                                ? 'Conectando Todoist...'
+                                : todoistConfigured
+                                  ? tx('playbook.connectTodoist')
+                                  : 'Todoist no configurado'}
+                            </button>
+                          )}
+
+                          {googleDocsConnected ? (
+                            <button
+                              onClick={() => triggerAsyncAction(onExportToGoogleDocs)}
+                              disabled={!result.id || googleDocsExportLoading}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {googleDocsExportLoading
+                                ? tx('playbook.exportingToGoogleDocs')
+                                : tx('playbook.exportToGoogleDocs')}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => triggerAsyncAction(onConnectGoogleDocs)}
+                              disabled={googleDocsLoading || !googleDocsConfigured}
+                              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
+                            >
+                              <Zap size={14} />
+                              {googleDocsLoading
+                                ? 'Conectando Google Docs...'
+                                : googleDocsConfigured
+                                  ? tx('playbook.connectGoogleDocs')
+                                  : 'Google Docs no configurado'}
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        {notionConnected ? (
-                          <button onClick={() => { void triggerAsyncAction(onExportToNotion); setIsIntegrationsModalOpen(false) }} disabled={!result.id || notionExportLoading} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 disabled:cursor-wait disabled:bg-slate-400"><Zap size={14} />{notionExportLoading ? tx('playbook.exportingToNotion') : tx('playbook.exportToNotion')}</button>
-                        ) : (
-                          <button onClick={() => { void triggerAsyncAction(onConnectNotion); setIsIntegrationsModalOpen(false) }} disabled={notionLoading || !notionConfigured} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400 dark:bg-slate-700"><Zap size={14} />{notionLoading ? 'Conectando...' : notionConfigured ? tx('playbook.connectNotion') : 'No configurado'}</button>
+
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {notionConnected && notionWorkspaceName && (
+                          <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                            Notion: {notionWorkspaceName}
+                          </span>
                         )}
-                        {trelloConnected ? (
-                          <button onClick={() => { void triggerAsyncAction(onExportToTrello); setIsIntegrationsModalOpen(false) }} disabled={!result.id || trelloExportLoading} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-sky-600 px-3 text-xs font-semibold text-white hover:bg-sky-700 disabled:cursor-wait disabled:bg-slate-400"><Zap size={14} />{trelloExportLoading ? tx('playbook.exportingToTrello') : tx('playbook.exportToTrello')}</button>
-                        ) : (
-                          <button onClick={() => { void triggerAsyncAction(onConnectTrello); setIsIntegrationsModalOpen(false) }} disabled={trelloLoading || !trelloConfigured} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400 dark:bg-slate-700"><Zap size={14} />{trelloLoading ? 'Conectando...' : trelloConfigured ? tx('playbook.connectTrello') : 'No configurado'}</button>
+                        {trelloConnected && trelloUsername && (
+                          <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                            Trello: @{trelloUsername}
+                          </span>
                         )}
-                        {todoistConnected ? (
-                          <button onClick={() => { void triggerAsyncAction(onExportToTodoist); setIsIntegrationsModalOpen(false) }} disabled={!result.id || todoistExportLoading} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-rose-600 px-3 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-wait disabled:bg-slate-400"><Zap size={14} />{todoistExportLoading ? tx('playbook.exportingToTodoist') : tx('playbook.exportToTodoist')}</button>
-                        ) : (
-                          <button onClick={() => { void triggerAsyncAction(onConnectTodoist); setIsIntegrationsModalOpen(false) }} disabled={todoistLoading || !todoistConfigured} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400 dark:bg-slate-700"><Zap size={14} />{todoistLoading ? 'Conectando...' : todoistConfigured ? tx('playbook.connectTodoist') : 'No configurado'}</button>
+                        {todoistConnected && todoistUserLabel && (
+                          <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                            Todoist: {todoistUserLabel}
+                          </span>
                         )}
-                        {googleDocsConnected ? (
-                          <button onClick={() => { void triggerAsyncAction(onExportToGoogleDocs); setIsIntegrationsModalOpen(false) }} disabled={!result.id || googleDocsExportLoading} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-wait disabled:bg-slate-400"><Zap size={14} />{googleDocsExportLoading ? tx('playbook.exportingToGoogleDocs') : tx('playbook.exportToGoogleDocs')}</button>
-                        ) : (
-                          <button onClick={() => { void triggerAsyncAction(onConnectGoogleDocs); setIsIntegrationsModalOpen(false) }} disabled={googleDocsLoading || !googleDocsConfigured} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400 dark:bg-slate-700"><Zap size={14} />{googleDocsLoading ? 'Conectando...' : googleDocsConfigured ? tx('playbook.connectGoogleDocs') : 'No configurado'}</button>
+                        {googleDocsConnected && googleDocsUserEmail && (
+                          <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                            Google: {googleDocsUserEmail}
+                          </span>
                         )}
                       </div>
                     </div>
-                  </div>,
-                  document.body
-                )}
+                  </div>
+                </div>
+
+                </div>
 
                 {sourceUrl && (
                   <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 dark:border-indigo-900/60 dark:bg-indigo-950/20">
@@ -5466,7 +5512,6 @@ export function ResultPanel({
               </div>
             </div>
           </div>
-          )}
         </div>
 
         <div

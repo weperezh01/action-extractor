@@ -616,11 +616,13 @@ _"${focusedItemContext.text}"_
         >
           <span aria-hidden="true" className="chat-avatar-halo absolute inset-1 rounded-full bg-indigo-500/25 blur-md" />
           <span className="chat-avatar-float relative block">
-            <img
-              src="/notes-aide-bot.png"
-              alt="Asistente IA"
-              className="h-16 w-16 rounded-full border-2 border-indigo-400/70 object-cover shadow-[0_24px_54px_-20px_rgba(79,70,229,0.95)] md:h-[4.5rem] md:w-[4.5rem]"
-            />
+            <span className="chat-avatar-inline inline-block">
+              <img
+                src="/notes-aide-bot.png"
+                alt="Asistente IA"
+                className="h-16 w-16 rounded-full border-2 border-indigo-400/70 object-cover shadow-[0_24px_54px_-20px_rgba(79,70,229,0.95)] md:h-[4.5rem] md:w-[4.5rem]"
+              />
+            </span>
           </span>
         </button>
       )}

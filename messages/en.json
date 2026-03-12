@@ -158,6 +158,7 @@
     "title": "Schedule task"
   },
   "playbook": {
+    "actions": "Actions",
     "actionsAndExport": "Actions & Export",
     "activity": "Activity",
     "addChild": "Add child",
@@ -354,6 +355,7 @@
       "fileSizeMb": "{size} MB",
       "fileUnavailable": "File not available for download",
       "hideEmbed": "Hide video",
+      "hidePanel": "Hide source",
       "manualExtraction": "Manual extraction",
       "manualExtractionLabel": "Manual extraction",
       "noSourceText": "No source text stored for this extraction.",
@@ -362,6 +364,7 @@
       "openYoutube": "Open on YouTube",
       "pdfDocument": "PDF document",
       "playVideo": "Play video",
+      "showPanel": "Show source",
       "sourceVideo": "Source video",
       "textAnalysis": "Text analysis",
       "textViewer": "Source text",
