@@ -27,7 +27,10 @@ export async function GET(
 
   // Sanitize URL before returning (only allow http/https)
   const safeUrl = data.url && /^https?:\/\//i.test(data.url) ? data.url : null
-  const safeFileUrl = data.sourceFileUrl && /^https?:\/\//i.test(data.sourceFileUrl) ? data.sourceFileUrl : null
+  const safeFileUrl =
+    data.sourceFileUrl && (/^https?:\/\//i.test(data.sourceFileUrl) || data.sourceFileUrl.startsWith('/api/uploads/'))
+      ? data.sourceFileUrl
+      : null
 
   return NextResponse.json({
     sourceType: data.sourceType,

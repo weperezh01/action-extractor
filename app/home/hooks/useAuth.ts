@@ -36,6 +36,10 @@ interface UseAuthParams {
   onLogout: () => void
   setGlobalNotice: (value: string | null) => void
   setGlobalError: (value: string | null) => void
+  initialAuthMode?: AuthMode
+  blockSessionCheck?: boolean
+  googleNextPath?: string
+  historyBasePath?: string
 }
 
 export function useAuth({
@@ -46,13 +50,20 @@ export function useAuth({
   onLogout,
   setGlobalNotice,
   setGlobalError,
+  initialAuthMode = 'login',
+  blockSessionCheck = true,
+  googleNextPath = '/app',
+  historyBasePath = '/app',
 }: UseAuthParams) {
-  const [sessionLoading, setSessionLoading] = useState(true)
+  const [sessionLoading, setSessionLoading] = useState(blockSessionCheck)
   const [user, setUser] = useState<SessionUser | null>(null)
 
-  const [authMode, setAuthMode] = useState<AuthMode>(
-    searchParams.get('mode') === 'register' ? 'register' : 'login'
-  )
+  const [authMode, setAuthMode] = useState<AuthMode>(() => {
+    const requestedMode = searchParams.get('mode')
+    if (requestedMode === 'register') return 'register'
+    if (requestedMode === 'forgot') return 'forgot'
+    return initialAuthMode
+  })
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -82,7 +93,7 @@ export function useAuth({
   }, [])
 
   const loadSession = useCallback(async () => {
-    setSessionLoading(true)
+    if (blockSessionCheck) setSessionLoading(true)
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), SESSION_REQUEST_TIMEOUT_MS)
 
@@ -109,9 +120,9 @@ export function useAuth({
       onSessionMissing()
     } finally {
       clearTimeout(timeoutId)
-      setSessionLoading(false)
+      if (blockSessionCheck) setSessionLoading(false)
     }
-  }, [onAuthenticated, onSessionMissing])
+  }, [blockSessionCheck, onAuthenticated, onSessionMissing])
 
   useEffect(() => {
     void loadSession()
@@ -137,9 +148,9 @@ export function useAuth({
     }
 
     if (typeof window !== 'undefined') {
-      window.history.replaceState({}, '', '/app')
+      window.history.replaceState({}, '', historyBasePath)
     }
-  }, [searchParams])
+  }, [historyBasePath, searchParams])
 
   useEffect(() => {
     const authStatus = searchParams.get('auth')
@@ -169,9 +180,9 @@ export function useAuth({
     }
 
     if (typeof window !== 'undefined') {
-      window.history.replaceState({}, '', '/app')
+      window.history.replaceState({}, '', historyBasePath)
     }
-  }, [onAuthenticated, searchParams, setGlobalNotice])
+  }, [historyBasePath, onAuthenticated, searchParams, setGlobalNotice])
 
   const handleGoogleAuthStart = useCallback(() => {
     if (authLoading || googleAuthLoading) return
@@ -181,10 +192,10 @@ export function useAuth({
     setGoogleAuthLoading(true)
 
     if (typeof window !== 'undefined') {
-      const params = new URLSearchParams({ next: '/app' })
+      const params = new URLSearchParams({ next: googleNextPath })
       window.location.href = `/api/auth/google/start?${params.toString()}`
     }
-  }, [authLoading, googleAuthLoading])
+  }, [authLoading, googleAuthLoading, googleNextPath])
 
   const handleAuthSubmit = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {

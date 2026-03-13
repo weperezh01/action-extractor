@@ -59,6 +59,7 @@ import { useKeyboardShortcuts } from '@/lib/hooks/useKeyboardShortcuts'
 import { isSystemExtractionFolderId } from '@/lib/extraction-folders'
 import {
   applyTheme,
+  fetchWithTimeout,
   formatHistoryDate,
   getThemeStorageKey,
   parseSseFrame,
@@ -409,6 +410,10 @@ function ActionExtractor() {
     }
     return null
   })()
+  const batchInitialUrls =
+    detectedSourceType === 'youtube' || detectedSourceType === 'web_url'
+      ? [trimmedUrl]
+      : []
 
   const {
     history,
@@ -429,7 +434,7 @@ function ActionExtractor() {
     setSharedWithMeLoading(true)
 
     try {
-      const res = await fetch('/api/shared-with-me', {
+      const res = await fetchWithTimeout('/api/shared-with-me', {
         cache: 'no-store',
       })
       if (res.status === 401) {
@@ -486,7 +491,7 @@ function ActionExtractor() {
 
   const loadSharedFolders = useCallback(async () => {
     try {
-      const res = await fetch('/api/folders/shared-with-me', {
+      const res = await fetchWithTimeout('/api/folders/shared-with-me', {
         cache: 'no-store',
       })
       if (res.status === 401) {
@@ -789,7 +794,7 @@ function ActionExtractor() {
         data &&
         typeof data.text === 'string' &&
         typeof data.charCount === 'number' &&
-        (data.sourceType === 'pdf' || data.sourceType === 'docx')
+        (data.sourceType === 'pdf' || data.sourceType === 'docx' || data.sourceType === 'text')
       ) {
         setUploadedFile({
           name: file.name,
@@ -2194,6 +2199,73 @@ function ActionExtractor() {
     [handleUnauthorized, loadHistory, result, resultAccessRole]
   )
 
+  const handleAnalyzePlaybookSources = useCallback(
+    async (input: { sourceIds: string[]; targetMode: 'update_current' | 'create_new' }) => {
+      const extractionId = result?.id?.trim()
+      if (!extractionId || resultAccessRole !== 'owner') return false
+
+      setError(null)
+      setNotice(null)
+
+      try {
+        const res = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/sources/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+        })
+
+        if (res.status === 401) {
+          handleUnauthorized()
+          setError(t(lang, 'app.sessionExpired'))
+          return false
+        }
+
+        const data = (await res.json().catch(() => null)) as
+          | {
+              item?: ExtractResult
+              targetMode?: 'update_current' | 'create_new'
+              error?: string
+            }
+          | null
+
+        if (!res.ok || !data?.item) {
+          setError(data?.error ?? t(lang, 'app.sourcesAnalyzeError'))
+          return false
+        }
+
+        const nextResult: ExtractResult = {
+          ...data.item,
+          phases: normalizePlaybookPhases(data.item.phases),
+          mode: normalizeExtractionMode(data.item.mode),
+          shareVisibility: normalizeShareVisibility(data.item.shareVisibility),
+          accessRole: 'owner',
+        }
+
+        setResult(nextResult)
+        setResultAccessRole('owner')
+        setCircleMembers([])
+        setIsResultBookClosed(false)
+        setActivePhasesByPlaybookId({})
+        setStackedResultIds([])
+        setPendingStackedScrollPlaybookId(null)
+        setShareCopied(false)
+        setExtractionMode(normalizeExtractionMode(nextResult.mode))
+        setUrl((nextResult.url ?? url).trim())
+        setNotice(
+          data.targetMode === 'update_current'
+            ? t(lang, 'app.sourcesUpdatedCurrent')
+            : t(lang, 'app.sourcesCreatedNew')
+        )
+        void loadHistory()
+        return true
+      } catch {
+        setError(t(lang, 'app.sourcesAnalyzeError'))
+        return false
+      }
+    },
+    [handleUnauthorized, lang, loadHistory, result, resultAccessRole, url]
+  )
+
   const handleDownloadPdf = async (source?: ExtractResult | HistoryItem) => {
     const exportSource = source ?? result
     if (!exportSource || isExportingPdf) return
@@ -3067,8 +3139,8 @@ function ActionExtractor() {
     void (async () => {
       try {
         const [rlRes, ctRes] = await Promise.all([
-          fetch('/api/account/rate-limit', { cache: 'no-store' }),
-          fetch('/api/account/chat-tokens', { cache: 'no-store' }),
+          fetchWithTimeout('/api/account/rate-limit', { cache: 'no-store' }),
+          fetchWithTimeout('/api/account/chat-tokens', { cache: 'no-store' }),
         ])
         if (!cancelled) {
           if (rlRes.ok) {
@@ -3570,50 +3642,52 @@ function ActionExtractor() {
                       extractionMode={extractionMode}
                       outputLanguage={outputLanguage}
                       folders={folders}
+                      initialUrls={batchInitialUrls}
                       onComplete={() => {
                         void loadHistory()
                       }}
                     />
                   ) : (
-                  <ExtractionForm
-                    url={url}
-                    isProcessing={isProcessing}
-                    urlError={urlError}
-                    onUrlChange={(value) => {
-                      setUrl(value)
-                      if (uploadedFile) setUploadedFile(null)
-                    }}
-                    onExtract={handleExtract}
-                    onScrollToHistory={handleScrollToHistory}
-                    hasHistory={history.length > 0}
-                    uploadedFile={uploadedFile}
-                    isUploading={isUploading}
-                    uploadError={uploadError}
-                    onFileSelect={handleFileSelect}
-                    onClearFile={handleClearFile}
-                  onManualResult={(manualResult) => {
-                    setResult({
-                      ...manualResult,
-                      phases: normalizePlaybookPhases(manualResult.phases),
-                      objective: typeof manualResult.objective === 'string' ? manualResult.objective : '',
-                    })
-                    setStackedResultIds([])
-                    setActivePhasesByPlaybookId({})
-                    setPendingStackedScrollPlaybookId(null)
-                    setResultAccessRole('owner')
-                    setCircleMembers([])
-                    setIsResultBookClosed(false)
-                    setUrl('')
-                    setUploadedFile(null)
-                    setError(null)
-                      setNotice(t(lang, 'app.emptyCreated'))
-                      setShouldScrollToResult(true)
-                      void loadHistory()
-                    }}
-                    onManualToggle={setIsManualFormOpen}
-                    onSearchToggle={setIsSearchFormOpen}
-                    onOpenPublicPlaybook={openPublicPlaybookFromSearch}
-                  />
+                    <ExtractionForm
+                      url={url}
+                      isProcessing={isProcessing}
+                      urlError={urlError}
+                      onUrlChange={(value) => {
+                        setUrl(value)
+                        if (uploadedFile) setUploadedFile(null)
+                      }}
+                      onExtract={handleExtract}
+                      onScrollToHistory={handleScrollToHistory}
+                      hasHistory={history.length > 0}
+                      uploadedFile={uploadedFile}
+                      isUploading={isUploading}
+                      uploadError={uploadError}
+                      onFileSelect={handleFileSelect}
+                      onClearFile={handleClearFile}
+                      onOpenBatchMode={() => setIsBatchMode(true)}
+                      onManualResult={(manualResult) => {
+                        setResult({
+                          ...manualResult,
+                          phases: normalizePlaybookPhases(manualResult.phases),
+                          objective: typeof manualResult.objective === 'string' ? manualResult.objective : '',
+                        })
+                        setStackedResultIds([])
+                        setActivePhasesByPlaybookId({})
+                        setPendingStackedScrollPlaybookId(null)
+                        setResultAccessRole('owner')
+                        setCircleMembers([])
+                        setIsResultBookClosed(false)
+                        setUrl('')
+                        setUploadedFile(null)
+                        setError(null)
+                        setNotice(t(lang, 'app.emptyCreated'))
+                        setShouldScrollToResult(true)
+                        void loadHistory()
+                      }}
+                      onManualToggle={setIsManualFormOpen}
+                      onSearchToggle={setIsSearchFormOpen}
+                      onOpenPublicPlaybook={openPublicPlaybookFromSearch}
+                    />
                   )}
                 </div>
 
@@ -3905,6 +3979,7 @@ function ActionExtractor() {
                       onShareVisibilityChange={handleUpdateShareVisibility}
                       onSavePhases={handleSaveResultPhases}
                       onSaveMeta={handleSaveResultMeta}
+                      onAnalyzeSources={handleAnalyzePlaybookSources}
                       isBookClosed={isResultBookClosed}
                       bookFolderLabel={getFolderLabelById(result.folderId)}
                       onClose={() => setIsResultBookClosed(true)}
@@ -3998,6 +4073,7 @@ function ActionExtractor() {
                             }}
                             onSavePhases={async () => false}
                             onSaveMeta={async () => false}
+                            onAnalyzeSources={async () => false}
                             isBookClosed={false}
                             bookFolderLabel={getFolderLabelById(stackedResult.folderId)}
                             onClose={() => closeDeskPlaybook(item.id)}

@@ -1,6 +1,4 @@
 import type { Metadata } from 'next'
-import { getLocale, getMessages } from 'next-intl/server'
-import { NextIntlClientProvider } from 'next-intl'
 import { AppFooter } from '@/app/components/AppFooter'
 import './globals.css'
 
@@ -27,25 +25,19 @@ const themeBootstrapScript = `
   })();
 `
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
-  const locale = await getLocale()
-  const messages = await getMessages()
-  const isEs = locale.toLowerCase().startsWith('es')
-
   return (
-    <html lang={locale} suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript }} />
       </head>
       <body className="antialiased bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-        <NextIntlClientProvider locale={locale} messages={messages}>
-          {children}
-        </NextIntlClientProvider>
-        <AppFooter isEs={isEs} />
+        {children}
+        <AppFooter />
       </body>
     </html>
   )

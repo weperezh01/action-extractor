@@ -40,6 +40,7 @@ import {
   Presentation,
   Play,
   Plus,
+  RefreshCw,
   Save,
   Share2,
   Star,
@@ -119,6 +120,7 @@ const PresentationView = dynamic(
 )
 import type {
   ExtractionAccessRole,
+  ExtractionAdditionalSource,
   ExtractionMember,
   ExtractResult,
   InteractiveTaskAttachment,
@@ -202,6 +204,7 @@ interface ResultPanelProps {
   onSavePhases: (phases: Phase[]) => Promise<boolean>
   onSaveMeta: (meta: { title: string; thumbnailUrl: string | null; objective: string }) => Promise<boolean>
   onReExtractMode: (mode: ExtractionMode) => void
+  onAnalyzeSources?: (input: { sourceIds: string[]; targetMode: 'update_current' | 'create_new' }) => Promise<boolean>
 
   onExportToNotion: () => void | Promise<void>
   onConnectNotion: () => void | Promise<void>
@@ -250,6 +253,17 @@ interface PlaybookPageTurnSnapshot {
   savedTime: string
   difficulty: string
   modeLabel: string
+}
+
+interface UploadedAdditionalSourceFile {
+  sourceType: 'pdf' | 'docx' | 'text'
+  text: string
+  charCount: number
+  sourceLabel: string
+  sourceFileName: string
+  sourceFileSizeBytes: number | null
+  sourceFileMimeType: string | null
+  sourceFileUrl: string | null
 }
 
 type TaskDetailTab = 'gestion' | 'actividad' | 'evidencias' | 'comunidad'
@@ -1020,6 +1034,7 @@ export function ResultPanel({
   onSavePhases,
   onSaveMeta,
   onReExtractMode,
+  onAnalyzeSources,
 
   onExportToNotion,
   onConnectNotion,
@@ -1152,6 +1167,20 @@ export function ResultPanel({
   const [sourceTextCopied, setSourceTextCopied] = useState(false)
   const [sourceDirectCopyLoading, setSourceDirectCopyLoading] = useState(false)
   const [sourceDirectDownloadLoading, setSourceDirectDownloadLoading] = useState(false)
+  const [additionalSources, setAdditionalSources] = useState<ExtractionAdditionalSource[]>([])
+  const [additionalSourcesLoading, setAdditionalSourcesLoading] = useState(false)
+  const [additionalSourcesError, setAdditionalSourcesError] = useState<string | null>(null)
+  const [isAdditionalSourcesFormOpen, setIsAdditionalSourcesFormOpen] = useState(false)
+  const [additionalSourceLabelDraft, setAdditionalSourceLabelDraft] = useState('')
+  const [additionalSourceUrlDraft, setAdditionalSourceUrlDraft] = useState('')
+  const [additionalSourceUploadedFile, setAdditionalSourceUploadedFile] = useState<UploadedAdditionalSourceFile | null>(null)
+  const [additionalSourceUploading, setAdditionalSourceUploading] = useState(false)
+  const [additionalSourceSaving, setAdditionalSourceSaving] = useState(false)
+  const [additionalSourceDeletingId, setAdditionalSourceDeletingId] = useState<string | null>(null)
+  const [selectedPendingSourceIds, setSelectedPendingSourceIds] = useState<string[]>([])
+  const [analyzingSourcesTarget, setAnalyzingSourcesTarget] = useState<null | 'update_current' | 'create_new'>(null)
+  const [additionalSourcesReloadNonce, setAdditionalSourcesReloadNonce] = useState(0)
+  const additionalSourceFileInputRef = useRef<HTMLInputElement | null>(null)
 
   const handleFetchSourceText = useCallback(async () => {
     if (!result.id) return
@@ -1249,6 +1278,341 @@ export function ResultPanel({
   const hasSourceText = result.hasSourceText === true ||
     (resolvedSourceType === 'youtube' && !!result.videoId) ||
     TEXT_SOURCE_TYPES.includes(resolvedSourceType)
+
+  const primaryPlaybookSource = useMemo<ExtractionAdditionalSource>(() => ({
+    id: `primary:${result.id ?? 'current'}`,
+    kind: 'primary',
+    analysisStatus: 'analyzed',
+    analyzedAt: null,
+    url: sourceUrl || null,
+    sourceType: resolvedSourceType,
+    sourceLabel: result.sourceLabel ?? result.videoTitle ?? null,
+    createdAt: result.createdAt ?? '',
+    sourceFileUrl: result.sourceFileUrl ?? null,
+    sourceFileName: result.sourceFileName ?? null,
+    sourceFileSizeBytes: result.sourceFileSizeBytes ?? null,
+    sourceFileMimeType: result.sourceFileMimeType ?? null,
+    hasSourceText,
+  }), [
+    hasSourceText,
+    resolvedSourceType,
+    result.createdAt,
+    result.id,
+    result.sourceFileMimeType,
+    result.sourceFileName,
+    result.sourceFileSizeBytes,
+    result.sourceFileUrl,
+    result.sourceLabel,
+    result.videoTitle,
+    sourceUrl,
+  ])
+
+  const resetAdditionalSourceForm = useCallback(() => {
+    setAdditionalSourceLabelDraft('')
+    setAdditionalSourceUrlDraft('')
+    setAdditionalSourceUploadedFile(null)
+    setAdditionalSourcesError(null)
+    if (additionalSourceFileInputRef.current) {
+      additionalSourceFileInputRef.current.value = ''
+    }
+  }, [])
+
+  useEffect(() => {
+    const extractionId = result.id?.trim()
+    if (!extractionId) {
+      setAdditionalSources([])
+      setAdditionalSourcesError(null)
+      setAdditionalSourcesLoading(false)
+      setIsAdditionalSourcesFormOpen(false)
+      resetAdditionalSourceForm()
+      setSelectedPendingSourceIds([])
+      return
+    }
+
+    let cancelled = false
+    setAdditionalSourcesLoading(true)
+    setAdditionalSourcesError(null)
+
+    void (async () => {
+      try {
+        const res = await fetch(`/api/extractions/${extractionId}/sources`, {
+          cache: 'no-store',
+        })
+        const payload = (await res.json().catch(() => null)) as
+          | { sources?: ExtractionAdditionalSource[]; error?: string }
+          | null
+
+        if (cancelled) return
+
+        if (!res.ok) {
+          setAdditionalSources([])
+          setAdditionalSourcesError(
+            typeof payload?.error === 'string' && payload.error.trim()
+              ? payload.error
+              : tx('playbook.source.additionalLoadError')
+          )
+          return
+        }
+
+        const fetchedSources = Array.isArray(payload?.sources) ? payload.sources : []
+        const hasPrimary = fetchedSources.some((source) => source.kind === 'primary')
+        setAdditionalSources(hasPrimary ? fetchedSources : [primaryPlaybookSource, ...fetchedSources])
+      } catch {
+        if (!cancelled) {
+          setAdditionalSources([primaryPlaybookSource])
+          setAdditionalSourcesError(tx('playbook.source.additionalLoadError'))
+        }
+      } finally {
+        if (!cancelled) {
+          setAdditionalSourcesLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [additionalSourcesReloadNonce, primaryPlaybookSource, resetAdditionalSourceForm, result.id, tx])
+
+  useEffect(() => {
+    const pendingIds = new Set(
+      additionalSources
+        .filter((source) => source.kind === 'additional' && source.analysisStatus === 'pending')
+        .map((source) => source.id)
+    )
+    setSelectedPendingSourceIds((previous) => previous.filter((sourceId) => pendingIds.has(sourceId)))
+  }, [additionalSources])
+
+  const handleAdditionalSourceFileSelect = useCallback(async (file: File) => {
+    setAdditionalSourcesError(null)
+    setAdditionalSourceUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await fetch('/api/extract/upload', {
+        method: 'POST',
+        body: formData,
+      })
+      const data = (await res.json().catch(() => null)) as
+        | {
+            text?: string
+            charCount?: number
+            sourceLabel?: string
+            sourceType?: string
+            sourceFileName?: string
+            sourceFileSizeBytes?: number
+            sourceFileMimeType?: string
+            sourceFileUrl?: string | null
+            error?: string
+          }
+        | null
+
+      if (!res.ok) {
+        setAdditionalSourcesError(
+          typeof data?.error === 'string' && data.error.trim()
+            ? data.error
+            : tx('playbook.source.additionalSaveError')
+        )
+        return
+      }
+
+      if (
+        !data ||
+        typeof data.text !== 'string' ||
+        typeof data.charCount !== 'number' ||
+        (data.sourceType !== 'pdf' && data.sourceType !== 'docx' && data.sourceType !== 'text')
+      ) {
+        setAdditionalSourcesError(tx('playbook.source.additionalSaveError'))
+        return
+      }
+
+      setAdditionalSourceUploadedFile({
+        sourceType: data.sourceType,
+        text: data.text,
+        charCount: data.charCount,
+        sourceLabel: data.sourceLabel ?? file.name,
+        sourceFileName: data.sourceFileName ?? file.name,
+        sourceFileSizeBytes: data.sourceFileSizeBytes ?? null,
+        sourceFileMimeType: data.sourceFileMimeType ?? null,
+        sourceFileUrl: data.sourceFileUrl ?? null,
+      })
+      setAdditionalSourceLabelDraft((previous) => previous || data.sourceLabel || file.name)
+      setAdditionalSourceUrlDraft('')
+    } catch {
+      setAdditionalSourcesError(tx('playbook.source.additionalSaveError'))
+    } finally {
+      setAdditionalSourceUploading(false)
+    }
+  }, [tx])
+
+  const handleAddAdditionalSource = useCallback(async () => {
+    const extractionId = result.id?.trim()
+    const nextUrl = additionalSourceUrlDraft.trim()
+    const nextLabel = additionalSourceLabelDraft.trim()
+
+    if (!extractionId || additionalSourceSaving) return
+    if (!additionalSourceUploadedFile && !/^https?:\/\//i.test(nextUrl)) {
+      setAdditionalSourcesError(tx('playbook.source.invalidAdditionalUrl'))
+      return
+    }
+
+    setAdditionalSourceSaving(true)
+    setAdditionalSourcesError(null)
+
+    try {
+      const res = await fetch(`/api/extractions/${extractionId}/sources`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceType: additionalSourceUploadedFile?.sourceType ?? undefined,
+          url: additionalSourceUploadedFile ? null : nextUrl,
+          sourceLabel: nextLabel || null,
+          sourceText: additionalSourceUploadedFile?.text ?? null,
+          sourceFileUrl: additionalSourceUploadedFile?.sourceFileUrl ?? null,
+          sourceFileName: additionalSourceUploadedFile?.sourceFileName ?? null,
+          sourceFileSizeBytes: additionalSourceUploadedFile?.sourceFileSizeBytes ?? null,
+          sourceFileMimeType: additionalSourceUploadedFile?.sourceFileMimeType ?? null,
+        }),
+      })
+      const payload = (await res.json().catch(() => null)) as
+        | { source?: ExtractionAdditionalSource; error?: string }
+        | null
+
+      if (!res.ok || !payload?.source) {
+        if (typeof payload?.error === 'string' && payload.error.trim()) {
+          setAdditionalSourcesError(payload.error)
+        } else if (res.status === 409) {
+          setAdditionalSourcesError(tx('playbook.source.duplicateSource'))
+        } else if (res.status === 400) {
+          setAdditionalSourcesError(tx('playbook.source.invalidAdditionalUrl'))
+        } else {
+          setAdditionalSourcesError(tx('playbook.source.additionalSaveError'))
+        }
+        return
+      }
+
+      setAdditionalSources((previous) => [...previous, payload.source as ExtractionAdditionalSource])
+      resetAdditionalSourceForm()
+      setIsAdditionalSourcesFormOpen(false)
+    } catch {
+      setAdditionalSourcesError(tx('playbook.source.additionalSaveError'))
+    } finally {
+      setAdditionalSourceSaving(false)
+    }
+  }, [
+    additionalSourceLabelDraft,
+    additionalSourceSaving,
+    additionalSourceUploadedFile,
+    additionalSourceUrlDraft,
+    resetAdditionalSourceForm,
+    result.id,
+    tx,
+  ])
+
+  const handleDeleteAdditionalSource = useCallback(async (sourceId: string) => {
+    const extractionId = result.id?.trim()
+    if (!extractionId || !sourceId || additionalSourceDeletingId) return
+
+    setAdditionalSourceDeletingId(sourceId)
+    setAdditionalSourcesError(null)
+    try {
+      const res = await fetch(`/api/extractions/${extractionId}/sources/${sourceId}`, {
+        method: 'DELETE',
+      })
+
+      if (!res.ok) {
+        setAdditionalSourcesError(tx('playbook.source.additionalDeleteError'))
+        return
+      }
+
+      setAdditionalSources((previous) => previous.filter((source) => source.id !== sourceId))
+      setSelectedPendingSourceIds((previous) => previous.filter((item) => item !== sourceId))
+    } catch {
+      setAdditionalSourcesError(tx('playbook.source.additionalDeleteError'))
+    } finally {
+      setAdditionalSourceDeletingId(null)
+    }
+  }, [additionalSourceDeletingId, result.id, tx])
+
+  const pendingSources = useMemo(
+    () => additionalSources.filter((source) => source.kind === 'additional' && source.analysisStatus === 'pending'),
+    [additionalSources]
+  )
+
+  const togglePendingSourceSelection = useCallback((sourceId: string) => {
+    setSelectedPendingSourceIds((previous) =>
+      previous.includes(sourceId)
+        ? previous.filter((item) => item !== sourceId)
+        : [...previous, sourceId]
+    )
+  }, [])
+
+  const handleAnalyzeSelectedSources = useCallback(async (targetMode: 'update_current' | 'create_new') => {
+    if (!onAnalyzeSources || selectedPendingSourceIds.length === 0 || analyzingSourcesTarget) return
+
+    setAnalyzingSourcesTarget(targetMode)
+    setAdditionalSourcesError(null)
+    try {
+      const ok = await onAnalyzeSources({
+        sourceIds: selectedPendingSourceIds,
+        targetMode,
+      })
+      if (ok) {
+        setSelectedPendingSourceIds([])
+        setAdditionalSourcesReloadNonce((previous) => previous + 1)
+      }
+    } catch {
+      setAdditionalSourcesError(tx('playbook.source.analyzeSourcesError'))
+    } finally {
+      setAnalyzingSourcesTarget(null)
+    }
+  }, [analyzingSourcesTarget, onAnalyzeSources, selectedPendingSourceIds, tx])
+
+  const getPlaybookSourceHref = useCallback((source: ExtractionAdditionalSource) => {
+    if (source.sourceFileUrl?.trim()) return source.sourceFileUrl
+    if (source.url?.trim()) return source.url
+    return null
+  }, [])
+
+  const getSourceTypeLabel = useCallback((sourceType: SourceType) => {
+    switch (sourceType) {
+      case 'youtube':
+        return tx('playbook.source.sourceVideo')
+      case 'web_url':
+        return tx('playbook.source.webPage')
+      case 'pdf':
+        return tx('playbook.source.pdfDocument')
+      case 'docx':
+        return tx('playbook.source.wordDocument')
+      case 'text':
+        return tx('playbook.source.textAnalysis')
+      case 'manual':
+        return tx('playbook.source.manualExtraction')
+      default:
+        return tx('playbook.source.analyzedContent')
+    }
+  }, [tx])
+
+  const getSourceStatusLabel = useCallback((source: ExtractionAdditionalSource) => {
+    if (source.kind === 'primary') return tx('playbook.source.primarySource')
+    return source.analysisStatus === 'analyzed'
+      ? tx('playbook.source.analyzedBadge')
+      : tx('playbook.source.pendingBadge')
+  }, [tx])
+
+  const formatSourceFileSize = useCallback((sizeBytes?: number | null) => {
+    if (!sizeBytes || sizeBytes <= 0) return null
+    if (sizeBytes >= 1024 * 1024) {
+      return tx('playbook.source.fileSizeMb', { size: (sizeBytes / (1024 * 1024)).toFixed(1) })
+    }
+    if (sizeBytes >= 1024) {
+      return tx('playbook.source.fileSizeKb', { size: (sizeBytes / 1024).toFixed(1) })
+    }
+    return tx('playbook.source.fileSizeBytes', { size: sizeBytes.toLocaleString() })
+  }, [tx])
+
+  const shouldShowAdditionalSourcesPanel =
+    canEditMeta || additionalSources.length > 0 || additionalSourcesLoading || Boolean(additionalSourcesError)
 
   // ── Tags ──────────────────────────────────────────────────────────────────
   const [tagInput, setTagInput] = useState('')
@@ -5066,8 +5430,9 @@ export function ResultPanel({
           </div>
 
           {!isSourceSectionHidden && (
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-            <div className="flex min-w-0 flex-1 flex-col gap-4 md:flex-row">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+              <div className="grid min-w-0 flex-1 gap-4 md:grid-cols-[14rem_minmax(0,1fr)]">
               {/* Thumbnail — edit or display */}
               {isMetaEditing ? (
                 <div className="flex flex-col gap-2 w-full md:w-56 shrink-0">
@@ -5162,12 +5527,16 @@ export function ResultPanel({
                     href={sourceUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className={`break-all text-xs text-indigo-600 underline hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 ${isMetaEditing ? 'mt-2 block' : 'mt-0 block'}`}
+                    className={`break-words text-xs text-indigo-600 underline hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 ${isMetaEditing ? 'mt-2 block' : 'mt-0 block'}`}
+                    style={{ overflowWrap: 'anywhere' }}
                   >
                     {sourceUrl}
                   </a>
                 ) : sourceUrl ? (
-                  <p className={`break-all text-xs text-slate-500 dark:text-slate-400 ${isMetaEditing ? 'mt-2' : 'mt-0'}`}>
+                  <p
+                    className={`break-words text-xs text-slate-500 dark:text-slate-400 ${isMetaEditing ? 'mt-2' : 'mt-0'}`}
+                    style={{ overflowWrap: 'anywhere' }}
+                  >
                     {sourceUrl}
                   </p>
                 ) : null}
@@ -5296,10 +5665,11 @@ export function ResultPanel({
                 )}
 
               </div>
-            </div>
 
-            <div className="w-full lg:w-[22rem] lg:shrink-0">
-              <div ref={rightControlsRef} className="flex flex-col gap-3">
+              </div>
+
+              <div className="w-full lg:w-[22rem] lg:shrink-0">
+                <div ref={rightControlsRef} className="flex flex-col gap-3">
                 {isActionsModalOpen && typeof window !== 'undefined' && createPortal(
                   <div
                     role="dialog"
@@ -5465,6 +5835,357 @@ export function ResultPanel({
                 )}
               </div>
             </div>
+            </div>
+
+            {shouldShowAdditionalSourcesPanel && (
+              <div className="w-full">
+                <div className="overflow-hidden rounded-[1.5rem] border border-slate-200/80 bg-gradient-to-br from-white via-slate-50 to-slate-100/80 shadow-[0_22px_60px_-38px_rgba(15,23,42,0.55)] dark:border-slate-700/80 dark:from-slate-900 dark:via-slate-900 dark:to-slate-950">
+                  <div className="border-b border-slate-200/80 px-4 py-4 dark:border-slate-800 md:px-5">
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <div className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/80 bg-white text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                          <Link2 size={18} />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                              {tx('playbook.source.additionalSources')}
+                            </h3>
+                            <span className="inline-flex min-w-[2.25rem] items-center justify-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                              {additionalSources.length}
+                            </span>
+                            {pendingSources.length > 0 && (
+                              <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-700 dark:border-amber-900/80 dark:bg-amber-950/30 dark:text-amber-300">
+                                <Clock size={10} />
+                                {tx('playbook.source.pendingBadge')}
+                              </span>
+                            )}
+                          </div>
+                          {(pendingSources.length > 0 || additionalSources.length === 0) && (
+                            <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                              {pendingSources.length > 0
+                                ? tx('playbook.source.pendingHelp')
+                                : tx('playbook.source.additionalSourcesEmpty')}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      {canEditMeta && !isMetaEditing && (
+                        <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAdditionalSourcesError(null)
+                              setIsAdditionalSourcesFormOpen((previous) => !previous)
+                            }}
+                            className="inline-flex h-10 items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-900/25 dark:text-violet-300 dark:hover:bg-violet-900/40"
+                          >
+                            <Plus size={14} />
+                            {tx('playbook.source.showAddSourceForm')}
+                          </button>
+                          <input
+                            ref={additionalSourceFileInputRef}
+                            type="file"
+                            accept=".pdf,.docx,.txt,text/plain"
+                            className="hidden"
+                            onChange={(event) => {
+                              const file = event.target.files?.[0]
+                              if (file) {
+                                void handleAdditionalSourceFileSelect(file)
+                              }
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {canEditMeta && !isMetaEditing && isAdditionalSourcesFormOpen && (
+                      <div className="mt-4 rounded-[1.25rem] border border-slate-200/80 bg-white/85 p-4 shadow-sm dark:border-slate-700 dark:bg-slate-950/70">
+                        <div className="grid gap-3 xl:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
+                          <input
+                            type="text"
+                            value={additionalSourceLabelDraft}
+                            onChange={(event) => setAdditionalSourceLabelDraft(event.target.value)}
+                            placeholder={tx('playbook.source.additionalLabelPlaceholder')}
+                            maxLength={200}
+                            className="h-11 rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                          />
+                          <input
+                            type="url"
+                            value={additionalSourceUrlDraft}
+                            onChange={(event) => setAdditionalSourceUrlDraft(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                void handleAddAdditionalSource()
+                              }
+                            }}
+                            placeholder={tx('playbook.source.additionalUrlPlaceholder')}
+                            disabled={Boolean(additionalSourceUploadedFile)}
+                            className="h-11 rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                          />
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => additionalSourceFileInputRef.current?.click()}
+                            disabled={additionalSourceUploading || additionalSourceSaving}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                          >
+                            {additionalSourceUploading
+                              ? <Loader2 size={14} className="animate-spin" />
+                              : <Upload size={14} />}
+                            {tx('playbook.source.uploadFile')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleAddAdditionalSource()}
+                            disabled={
+                              additionalSourceSaving ||
+                              additionalSourceUploading ||
+                              (!additionalSourceUploadedFile && !additionalSourceUrlDraft.trim())
+                            }
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-400 dark:disabled:bg-slate-700"
+                          >
+                            {additionalSourceSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                            {additionalSourceSaving ? tx('common.saving') : tx('common.save')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAdditionalSourcesFormOpen(false)
+                              resetAdditionalSourceForm()
+                            }}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                          >
+                            {tx('common.cancel')}
+                          </button>
+                        </div>
+                        {additionalSourceUploadedFile && (
+                          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-[1rem] border border-slate-200 bg-slate-50/90 px-3 py-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                            <span className="font-semibold text-slate-700 dark:text-slate-100">
+                              {additionalSourceUploadedFile.sourceFileName}
+                            </span>
+                            <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 dark:border-slate-700 dark:bg-slate-950">
+                              {(additionalSourceUploadedFile.charCount / 1000).toFixed(1)}k chars
+                            </span>
+                            <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 uppercase tracking-wide text-[10px] dark:border-slate-700 dark:bg-slate-950">
+                              {getSourceTypeLabel(additionalSourceUploadedFile.sourceType)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAdditionalSourceUploadedFile(null)
+                                if (additionalSourceFileInputRef.current) {
+                                  additionalSourceFileInputRef.current.value = ''
+                                }
+                              }}
+                              className="ml-auto inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-semibold text-slate-600 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800"
+                            >
+                              <X size={11} />
+                              {tx('playbook.source.removeUploadedFile')}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="px-4 py-4 md:px-5">
+                    {additionalSourcesError && (
+                      <div className="rounded-xl border border-rose-200 bg-rose-50/90 px-3 py-2.5 text-sm text-rose-700 dark:border-rose-900/80 dark:bg-rose-950/30 dark:text-rose-300">
+                        {additionalSourcesError}
+                      </div>
+                    )}
+
+                    {additionalSourcesLoading ? (
+                      <div className="mt-1 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                        <Loader2 size={14} className="animate-spin" />
+                        {tx('common.loading')}
+                      </div>
+                    ) : additionalSources.length > 0 ? (
+                      <div className="space-y-4">
+                        {canEditMeta && !isMetaEditing && pendingSources.length > 0 && (
+                          <div className="rounded-[1.25rem] border border-amber-200/80 bg-gradient-to-r from-amber-50 to-orange-50/80 p-4 dark:border-amber-900/80 dark:from-amber-950/30 dark:to-orange-950/20">
+                            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                              <p className="max-w-3xl text-sm leading-6 text-amber-900 dark:text-amber-200">
+                                {tx('playbook.source.pendingHelp')}
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleAnalyzeSelectedSources('update_current')}
+                                  disabled={selectedPendingSourceIds.length === 0 || analyzingSourcesTarget !== null}
+                                  className="inline-flex h-10 items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 text-sm font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-sky-800 dark:bg-sky-950/30 dark:text-sky-300 dark:hover:bg-sky-950/50"
+                                >
+                                  {analyzingSourcesTarget === 'update_current'
+                                    ? <Loader2 size={14} className="animate-spin" />
+                                    : <RefreshCw size={14} />}
+                                  {tx('playbook.source.updateCurrentPlaybook')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleAnalyzeSelectedSources('create_new')}
+                                  disabled={selectedPendingSourceIds.length === 0 || analyzingSourcesTarget !== null}
+                                  className="inline-flex h-10 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300 dark:hover:bg-emerald-950/50"
+                                >
+                                  {analyzingSourcesTarget === 'create_new'
+                                    ? <Loader2 size={14} className="animate-spin" />
+                                    : <Copy size={14} />}
+                                  {tx('playbook.source.createNewPlaybook')}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        <ul className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+                          {additionalSources.map((source) => {
+                            const isYoutubeSource = source.sourceType === 'youtube'
+                            const href = getPlaybookSourceHref(source)
+                            const isPendingSelectable =
+                              source.kind === 'additional' && source.analysisStatus === 'pending' && canEditMeta && !isMetaEditing
+                            const isSelected = selectedPendingSourceIds.includes(source.id)
+                            const sourceTitle =
+                              source.sourceLabel?.trim() || source.sourceFileName || href || tx('playbook.source.analyzedContent')
+                            const sourcePreview = href || source.sourceFileName || null
+                            const formattedFileSize = formatSourceFileSize(source.sourceFileSizeBytes)
+
+                            return (
+                              <li
+                                key={source.id}
+                                className="flex h-full flex-col overflow-hidden rounded-[1.25rem] border border-slate-200/80 bg-white/90 shadow-[0_16px_40px_-34px_rgba(15,23,42,0.65)] dark:border-slate-700/80 dark:bg-slate-950/80"
+                              >
+                                <div className="flex h-full flex-col gap-4 p-4 md:p-5">
+                                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                                          {isYoutubeSource
+                                            ? <Play size={10} className="fill-current" />
+                                            : source.sourceType === 'web_url'
+                                              ? <Globe size={10} />
+                                              : <FileText size={10} />}
+                                          {getSourceTypeLabel(source.sourceType)}
+                                        </span>
+                                        <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                                          source.kind === 'primary'
+                                            ? 'border border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/30 dark:text-indigo-300'
+                                            : source.analysisStatus === 'analyzed'
+                                              ? 'border border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300'
+                                              : 'border border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300'
+                                        }`}>
+                                          {source.analysisStatus === 'analyzed' ? <CheckCircle2 size={10} /> : <Clock size={10} />}
+                                          {getSourceStatusLabel(source)}
+                                        </span>
+                                        {formattedFileSize && (
+                                          <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                                            {formattedFileSize}
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      <div className="mt-3 space-y-1.5">
+                                        <p className="break-words text-sm font-semibold leading-6 text-slate-900 dark:text-slate-100">
+                                          {sourceTitle}
+                                        </p>
+                                        {source.sourceFileName && source.sourceFileName !== sourceTitle && (
+                                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                                            {source.sourceFileName}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-2 lg:max-w-[19rem] lg:justify-end">
+                                      {isPendingSelectable && (
+                                        <label className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs font-semibold transition-colors ${
+                                          isSelected
+                                            ? 'border-amber-300 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200'
+                                            : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300'
+                                        }`}>
+                                          <input
+                                            type="checkbox"
+                                            checked={isSelected}
+                                            onChange={() => togglePendingSourceSelection(source.id)}
+                                            className="h-4 w-4 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                                          />
+                                          {tx('playbook.source.includeInAnalysis')}
+                                        </label>
+                                      )}
+                                      {href && (
+                                        <a
+                                          href={href}
+                                          target={href.startsWith('/api/uploads/') ? undefined : '_blank'}
+                                          rel={href.startsWith('/api/uploads/') ? undefined : 'noopener noreferrer'}
+                                          download={source.sourceFileName ?? undefined}
+                                          className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                                        >
+                                          {source.sourceFileUrl ? <Download size={13} /> : <ExternalLink size={13} />}
+                                          {source.sourceFileUrl ? tx('playbook.source.download') : tx('playbook.source.openInNewTab')}
+                                        </a>
+                                      )}
+                                      {canEditMeta && !isMetaEditing && source.kind === 'additional' && source.analysisStatus !== 'analyzed' && (
+                                        <button
+                                          type="button"
+                                          onClick={() => void handleDeleteAdditionalSource(source.id)}
+                                          disabled={additionalSourceDeletingId === source.id}
+                                          className="inline-flex h-10 items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40"
+                                          aria-label={tx('playbook.source.deleteAdditionalSource')}
+                                        >
+                                          {additionalSourceDeletingId === source.id
+                                            ? <Loader2 size={13} className="animate-spin" />
+                                            : <Trash2 size={13} />}
+                                          {tx('common.delete')}
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {sourcePreview && (
+                                    <div className="rounded-[1rem] border border-slate-200/80 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-900/70">
+                                      <div className="mb-2 flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                                        <span className="inline-flex items-center gap-1">
+                                          {href ? <Link2 size={10} /> : <FileText size={10} />}
+                                          {href ? tx('playbook.source.openSource') : tx('playbook.source.download')}
+                                        </span>
+                                      </div>
+                                      {href ? (
+                                        <a
+                                          href={href}
+                                          target={href.startsWith('/api/uploads/') ? undefined : '_blank'}
+                                          rel={href.startsWith('/api/uploads/') ? undefined : 'noopener noreferrer'}
+                                          className="block max-h-28 overflow-y-auto text-sm leading-6 text-slate-700 transition-colors hover:text-violet-700 dark:text-slate-200 dark:hover:text-violet-300"
+                                          style={{ overflowWrap: 'anywhere' }}
+                                        >
+                                          {href}
+                                        </a>
+                                      ) : (
+                                        <div
+                                          className="max-h-28 overflow-y-auto text-sm leading-6 text-slate-700 dark:text-slate-200"
+                                          style={{ overflowWrap: 'anywhere' }}
+                                        >
+                                          {sourcePreview}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </div>
+                    ) : (
+                      <div className="rounded-[1.25rem] border border-dashed border-slate-300 bg-white/70 px-4 py-6 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-400">
+                        {tx('playbook.source.additionalSourcesEmpty')}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           )}
         </div>
@@ -7524,7 +8245,8 @@ export function ResultPanel({
                                                     type="button"
                                                     onClick={() => {
                                                       setTaskMenuOpenId(null)
-                                                      toggleTaskEvidenceSurface(task.id)
+                                                      focusTask(task.id)
+                                                      setExclusiveTaskPanel(task.id, 'evidencias')
                                                     }}
                                                     className="flex w-full items-center gap-2 px-3 py-2 text-[11px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
                                                   >

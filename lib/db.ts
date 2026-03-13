@@ -51,6 +51,7 @@ export interface DbExtractionTag {
 export interface DbExtraction {
   id: string
   user_id: string
+  parent_extraction_id: string | null
   url: string | null
   video_id: string | null
   video_title: string | null
@@ -75,6 +76,23 @@ export interface DbExtraction {
   source_file_mime_type: string | null
   has_source_text: boolean
   transcript_source: string | null
+}
+
+export interface DbExtractionAdditionalSource {
+  id: string
+  extraction_id: string
+  created_by_user_id: string
+  source_type: 'youtube' | 'web_url' | 'pdf' | 'docx' | 'text'
+  source_label: string | null
+  url: string | null
+  source_text: string | null
+  source_file_url: string | null
+  source_file_name: string | null
+  source_file_size_bytes: number | null
+  source_file_mime_type: string | null
+  analysis_status: 'pending' | 'analyzed'
+  analyzed_at: string | null
+  created_at: string
 }
 
 export interface DbExtractionFolder {
@@ -610,6 +628,7 @@ interface DbSessionWithUserRow {
 interface DbExtractionRow {
   id: string
   user_id: string
+  parent_extraction_id?: string | null
   url: string | null
   video_id: string | null
   video_title: string | null
@@ -634,6 +653,23 @@ interface DbExtractionRow {
   source_file_mime_type?: string | null
   has_source_text?: boolean | null
   transcript_source?: string | null
+}
+
+interface DbExtractionAdditionalSourceRow {
+  id: string
+  extraction_id: string
+  created_by_user_id: string
+  source_type: 'youtube' | 'web_url' | 'pdf' | 'docx' | 'text'
+  source_label: string | null
+  url: string | null
+  source_text: string | null
+  source_file_url: string | null
+  source_file_name: string | null
+  source_file_size_bytes: number | string | null
+  source_file_mime_type: string | null
+  analysis_status: string | null
+  analyzed_at: Date | string | null
+  created_at: Date | string
 }
 
 interface DbExtractionFolderRow {
@@ -1090,6 +1126,7 @@ const INIT_SQL = `
   CREATE TABLE IF NOT EXISTS extractions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    parent_extraction_id TEXT REFERENCES extractions(id) ON DELETE SET NULL,
     url TEXT NOT NULL,
     video_id TEXT,
     video_title TEXT,
@@ -1501,6 +1538,7 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_ai_usage_log_use_type ON ai_usage_log(use_type);
 
   ALTER TABLE extractions ALTER COLUMN url DROP NOT NULL;
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS parent_extraction_id TEXT REFERENCES extractions(id) ON DELETE SET NULL;
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'youtube';
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS source_label TEXT;
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS folder_id TEXT;
@@ -1525,6 +1563,25 @@ const INIT_SQL = `
     CONSTRAINT extraction_members_role_check CHECK (role IN ('editor', 'viewer'))
   );
 
+  CREATE TABLE IF NOT EXISTS extraction_additional_sources (
+    id TEXT PRIMARY KEY,
+    extraction_id TEXT NOT NULL REFERENCES extractions(id) ON DELETE CASCADE,
+    created_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source_type TEXT NOT NULL DEFAULT 'web_url',
+    source_label TEXT,
+    url TEXT,
+    source_text TEXT,
+    source_file_url TEXT,
+    source_file_name TEXT,
+    source_file_size_bytes BIGINT,
+    source_file_mime_type TEXT,
+    analysis_status TEXT NOT NULL DEFAULT 'pending',
+    analyzed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT extraction_additional_sources_type_check CHECK (source_type IN ('youtube', 'web_url', 'pdf', 'docx', 'text')),
+    CONSTRAINT extraction_additional_sources_analysis_status_check CHECK (analysis_status IN ('pending', 'analyzed'))
+  );
+
   CREATE TABLE IF NOT EXISTS extraction_folder_members (
     folder_id TEXT NOT NULL REFERENCES extraction_folders(id) ON DELETE CASCADE,
     owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1543,6 +1600,23 @@ const INIT_SQL = `
   ALTER TABLE extraction_folders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   ALTER TABLE extraction_members ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'viewer';
   ALTER TABLE extraction_members ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE extraction_additional_sources ADD COLUMN IF NOT EXISTS created_by_user_id TEXT;
+  ALTER TABLE extraction_additional_sources ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'web_url';
+  ALTER TABLE extraction_additional_sources ADD COLUMN IF NOT EXISTS source_label TEXT;
+  ALTER TABLE extraction_additional_sources ADD COLUMN IF NOT EXISTS url TEXT;
+  ALTER TABLE extraction_additional_sources ALTER COLUMN url DROP NOT NULL;
+  ALTER TABLE extraction_additional_sources ADD COLUMN IF NOT EXISTS source_text TEXT;
+  ALTER TABLE extraction_additional_sources ADD COLUMN IF NOT EXISTS source_file_url TEXT;
+  ALTER TABLE extraction_additional_sources ADD COLUMN IF NOT EXISTS source_file_name TEXT;
+  ALTER TABLE extraction_additional_sources ADD COLUMN IF NOT EXISTS source_file_size_bytes BIGINT;
+  ALTER TABLE extraction_additional_sources ADD COLUMN IF NOT EXISTS source_file_mime_type TEXT;
+  ALTER TABLE extraction_additional_sources ADD COLUMN IF NOT EXISTS analysis_status TEXT NOT NULL DEFAULT 'pending';
+  ALTER TABLE extraction_additional_sources ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ;
+  ALTER TABLE extraction_additional_sources ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE extraction_additional_sources DROP CONSTRAINT IF EXISTS extraction_additional_sources_type_check;
+  ALTER TABLE extraction_additional_sources ADD CONSTRAINT extraction_additional_sources_type_check CHECK (source_type IN ('youtube', 'web_url', 'pdf', 'docx', 'text'));
+  ALTER TABLE extraction_additional_sources DROP CONSTRAINT IF EXISTS extraction_additional_sources_analysis_status_check;
+  ALTER TABLE extraction_additional_sources ADD CONSTRAINT extraction_additional_sources_analysis_status_check CHECK (analysis_status IN ('pending', 'analyzed'));
   ALTER TABLE extraction_folder_members ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
   ALTER TABLE extraction_folder_members ADD COLUMN IF NOT EXISTS member_user_id TEXT;
   ALTER TABLE extraction_folder_members ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'viewer';
@@ -1551,9 +1625,14 @@ const INIT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_extraction_folders_user_id ON extraction_folders(user_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_folders_parent_id ON extraction_folders(parent_id);
   CREATE INDEX IF NOT EXISTS idx_extractions_folder_id ON extractions(folder_id);
+  CREATE INDEX IF NOT EXISTS idx_extractions_parent_extraction_id ON extractions(parent_extraction_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_members_user_id ON extraction_members(user_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_members_extraction_id ON extraction_members(extraction_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_members_role ON extraction_members(role);
+  CREATE INDEX IF NOT EXISTS idx_extraction_additional_sources_extraction_id ON extraction_additional_sources(extraction_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_additional_sources_created_by_user_id ON extraction_additional_sources(created_by_user_id);
+  CREATE INDEX IF NOT EXISTS idx_extraction_additional_sources_analysis_status ON extraction_additional_sources(analysis_status);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_extraction_additional_sources_unique_url ON extraction_additional_sources(extraction_id, url);
   CREATE INDEX IF NOT EXISTS idx_extraction_folder_members_owner_user_id ON extraction_folder_members(owner_user_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_folder_members_member_user_id ON extraction_folder_members(member_user_id);
   CREATE INDEX IF NOT EXISTS idx_extraction_folder_members_folder_id ON extraction_folder_members(folder_id);
@@ -2039,7 +2118,7 @@ const INIT_SQL = `
   ALTER TABLE user_storage ADD COLUMN IF NOT EXISTS storage_limit_override_bytes BIGINT;
 `
 
-const DB_INIT_SIGNATURE = '2026-03-10-task-numeric-formula-v1'
+const DB_INIT_SIGNATURE = '2026-03-12-playbook-multi-source-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -2277,6 +2356,7 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
   return {
     id: row.id,
     user_id: row.user_id,
+    parent_extraction_id: row.parent_extraction_id ?? null,
     url: row.url ?? null,
     video_id: row.video_id,
     video_title: row.video_title,
@@ -2308,6 +2388,25 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
     source_file_mime_type: row.source_file_mime_type ?? null,
     has_source_text: row.has_source_text === true || !!(row.source_text && row.source_text.length > 0),
     transcript_source: row.transcript_source ?? null,
+  }
+}
+
+function mapExtractionAdditionalSourceRow(row: DbExtractionAdditionalSourceRow): DbExtractionAdditionalSource {
+  return {
+    id: row.id,
+    extraction_id: row.extraction_id,
+    created_by_user_id: row.created_by_user_id,
+    source_type: row.source_type,
+    source_label: row.source_label ?? null,
+    url: row.url ?? null,
+    source_text: row.source_text ?? null,
+    source_file_url: row.source_file_url ?? null,
+    source_file_name: row.source_file_name ?? null,
+    source_file_size_bytes: row.source_file_size_bytes != null ? Number(row.source_file_size_bytes) : null,
+    source_file_mime_type: row.source_file_mime_type ?? null,
+    analysis_status: row.analysis_status === 'analyzed' ? 'analyzed' : 'pending',
+    analyzed_at: row.analyzed_at ? toIso(row.analyzed_at) : null,
+    created_at: toIso(row.created_at),
   }
 }
 
@@ -2941,6 +3040,7 @@ export async function deleteExpiredSessions() {
 export async function createExtraction(input: {
   id?: string
   userId: string
+  parentExtractionId?: string | null
   url: string | null
   videoId: string | null
   videoTitle: string | null
@@ -2958,6 +3058,8 @@ export async function createExtraction(input: {
   sourceFileSizeBytes?: number | null
   sourceFileMimeType?: string | null
   transcriptSource?: string | null
+  folderId?: string | null
+  shareVisibility?: ExtractionShareVisibility
 }) {
   await ensureDbReady()
   await ensureDefaultExtractionFoldersForUser(input.userId)
@@ -2967,11 +3069,14 @@ export async function createExtraction(input: {
     userId: input.userId,
     key: 'general',
   })
+  const resolvedFolderId = input.folderId?.trim() || defaultFolderId
+  const resolvedShareVisibility = input.shareVisibility ?? 'private'
   const { rows } = await pool.query<DbExtractionRow>(
     `
       INSERT INTO extractions (
         id,
         user_id,
+        parent_extraction_id,
         url,
         video_id,
         video_title,
@@ -2981,6 +3086,7 @@ export async function createExtraction(input: {
         phases_json,
         pro_tip,
         metadata_json,
+        share_visibility,
         source_type,
         source_label,
         folder_id,
@@ -2991,10 +3097,11 @@ export async function createExtraction(input: {
         source_file_mime_type,
         transcript_source
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
       RETURNING
         id,
         user_id,
+        parent_extraction_id,
         url,
         video_id,
         video_title,
@@ -3019,6 +3126,7 @@ export async function createExtraction(input: {
     [
       id,
       input.userId,
+      input.parentExtractionId ?? null,
       input.url,
       input.videoId,
       input.videoTitle,
@@ -3028,9 +3136,10 @@ export async function createExtraction(input: {
       input.phasesJson,
       input.proTip,
       input.metadataJson,
+      resolvedShareVisibility,
       sourceType,
       input.sourceLabel ?? null,
-      defaultFolderId,
+      resolvedFolderId,
       input.sourceText ?? null,
       input.sourceFileUrl ?? null,
       input.sourceFileName ?? null,
@@ -3130,6 +3239,224 @@ export async function getExtractionSourceData(input: {
     shareVisibility: normalizeExtractionShareVisibility(row.share_visibility),
     userId: row.user_id,
   }
+}
+
+export async function listExtractionAdditionalSources(input: {
+  extractionId: string
+  requestingUserId: string | null
+}): Promise<DbExtractionAdditionalSource[] | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<
+    DbExtractionAdditionalSourceRow & { has_access: boolean }
+  >(
+    `
+      SELECT
+        s.id,
+        s.extraction_id,
+        s.created_by_user_id,
+        s.source_type,
+        s.source_label,
+        s.url,
+        s.source_text,
+        s.source_file_url,
+        s.source_file_name,
+        s.source_file_size_bytes,
+        s.source_file_mime_type,
+        s.analysis_status,
+        s.analyzed_at,
+        s.created_at,
+        (
+          e.user_id = $2
+          OR e.share_visibility IN ('public', 'unlisted')
+          OR EXISTS (
+            SELECT 1 FROM extraction_members m
+            WHERE m.extraction_id = e.id AND m.user_id = $2
+          )
+        ) AS has_access
+      FROM extraction_additional_sources s
+      INNER JOIN extractions e ON e.id = s.extraction_id
+      WHERE s.extraction_id = $1
+      ORDER BY s.created_at ASC
+    `,
+    [input.extractionId, input.requestingUserId ?? '']
+  )
+
+  if (rows.length === 0) {
+    const accessCheck = await pool.query<{ has_access: boolean }>(
+      `
+        SELECT (
+          e.user_id = $2
+          OR e.share_visibility IN ('public', 'unlisted')
+          OR EXISTS (
+            SELECT 1 FROM extraction_members m
+            WHERE m.extraction_id = e.id AND m.user_id = $2
+          )
+        ) AS has_access
+        FROM extractions e
+        WHERE e.id = $1
+        LIMIT 1
+      `,
+      [input.extractionId, input.requestingUserId ?? '']
+    )
+
+    if (!accessCheck.rows[0]?.has_access) return null
+    return []
+  }
+
+  if (!rows[0].has_access) return null
+  return rows.map(mapExtractionAdditionalSourceRow)
+}
+
+export async function createExtractionAdditionalSourceForUser(input: {
+  extractionId: string
+  userId: string
+  sourceType: 'youtube' | 'web_url' | 'pdf' | 'docx' | 'text'
+  sourceLabel: string | null
+  url: string | null
+  sourceText?: string | null
+  sourceFileUrl?: string | null
+  sourceFileName?: string | null
+  sourceFileSizeBytes?: number | null
+  sourceFileMimeType?: string | null
+  analysisStatus?: 'pending' | 'analyzed'
+  analyzedAt?: string | null
+}): Promise<DbExtractionAdditionalSource | null> {
+  await ensureDbReady()
+  const id = randomUUID()
+  const resolvedAnalysisStatus = input.analysisStatus ?? 'pending'
+  const { rows } = await pool.query<DbExtractionAdditionalSourceRow>(
+    `
+      INSERT INTO extraction_additional_sources (
+        id,
+        extraction_id,
+        created_by_user_id,
+        source_type,
+        source_label,
+        url,
+        source_text,
+        source_file_url,
+        source_file_name,
+        source_file_size_bytes,
+        source_file_mime_type,
+        analysis_status,
+        analyzed_at
+      )
+      SELECT
+        $1,
+        e.id,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12
+      FROM extractions e
+      WHERE e.id = $13 AND e.user_id = $2
+      ON CONFLICT (extraction_id, url) DO NOTHING
+      RETURNING
+        id,
+        extraction_id,
+        created_by_user_id,
+        source_type,
+        source_label,
+        url,
+        source_text,
+        source_file_url,
+        source_file_name,
+        source_file_size_bytes,
+        source_file_mime_type,
+        analysis_status,
+        analyzed_at,
+        created_at
+    `,
+    [
+      id,
+      input.userId,
+      input.sourceType,
+      input.sourceLabel ?? null,
+      input.url ?? null,
+      input.sourceText ?? null,
+      input.sourceFileUrl ?? null,
+      input.sourceFileName ?? null,
+      input.sourceFileSizeBytes ?? null,
+      input.sourceFileMimeType ?? null,
+      resolvedAnalysisStatus,
+      resolvedAnalysisStatus === 'analyzed' ? (input.analyzedAt ?? new Date().toISOString()) : null,
+      input.extractionId,
+    ]
+  )
+
+  return rows[0] ? mapExtractionAdditionalSourceRow(rows[0]) : null
+}
+
+export async function deleteExtractionAdditionalSourceForUser(input: {
+  extractionId: string
+  sourceId: string
+  userId: string
+}): Promise<boolean> {
+  await ensureDbReady()
+  const { rowCount } = await pool.query(
+    `
+      DELETE FROM extraction_additional_sources s
+      USING extractions e
+      WHERE s.id = $1
+        AND s.extraction_id = $2
+        AND e.id = s.extraction_id
+        AND e.user_id = $3
+        AND COALESCE(s.analysis_status, 'pending') <> 'analyzed'
+    `,
+    [input.sourceId, input.extractionId, input.userId]
+  )
+
+  return (rowCount ?? 0) > 0
+}
+
+export async function markExtractionAdditionalSourcesAnalyzedForUser(input: {
+  extractionId: string
+  userId: string
+  sourceIds: string[]
+}) {
+  await ensureDbReady()
+  const normalizedIds = Array.from(new Set(input.sourceIds.map((value) => value.trim()).filter(Boolean)))
+  if (normalizedIds.length === 0) return []
+
+  const { rows } = await pool.query<DbExtractionAdditionalSourceRow>(
+    `
+      UPDATE extraction_additional_sources s
+      SET
+        analysis_status = 'analyzed',
+        analyzed_at = COALESCE(s.analyzed_at, NOW())
+      FROM extractions e
+      WHERE
+        s.extraction_id = $1
+        AND s.id = ANY($2::text[])
+        AND e.id = s.extraction_id
+        AND e.user_id = $3
+      RETURNING
+        s.id,
+        s.extraction_id,
+        s.created_by_user_id,
+        s.source_type,
+        s.source_label,
+        s.url,
+        s.source_text,
+        s.source_file_url,
+        s.source_file_name,
+        s.source_file_size_bytes,
+        s.source_file_mime_type,
+        s.analysis_status,
+        s.analyzed_at,
+        s.created_at
+    `,
+    [input.extractionId, normalizedIds, input.userId]
+  )
+
+  return rows.map(mapExtractionAdditionalSourceRow)
 }
 
 // Returns the full transcript for a YouTube video from the shared cache.
@@ -4198,6 +4525,62 @@ export async function updateExtractionPhasesForUser(input: {
         folder_id
     `,
     [input.phasesJson, input.id, input.userId]
+  )
+
+  return rows[0] ? mapExtractionRow(rows[0]) : null
+}
+
+export async function updateExtractionGeneratedContentForUser(input: {
+  id: string
+  userId: string
+  objective: string
+  phasesJson: string
+  proTip: string
+  metadataJson: string
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionRow>(
+    `
+      UPDATE extractions e
+      SET
+        objective = $1,
+        phases_json = $2,
+        pro_tip = $3,
+        metadata_json = $4
+      WHERE e.id = $5 AND e.user_id = $6
+      RETURNING
+        id,
+        user_id,
+        parent_extraction_id,
+        url,
+        video_id,
+        video_title,
+        thumbnail_url,
+        extraction_mode,
+        objective,
+        phases_json,
+        pro_tip,
+        metadata_json,
+        share_visibility,
+        created_at,
+        source_type,
+        source_label,
+        folder_id,
+        source_text,
+        source_file_url,
+        source_file_name,
+        source_file_size_bytes,
+        source_file_mime_type,
+        transcript_source
+    `,
+    [
+      input.objective,
+      input.phasesJson,
+      input.proTip,
+      input.metadataJson,
+      input.id,
+      input.userId,
+    ]
   )
 
   return rows[0] ? mapExtractionRow(rows[0]) : null
@@ -7959,18 +8342,24 @@ export async function findVideoCacheByVideoId(input: {
   const row = rows[0]
   if (!row) return null
 
-  await pool.query(
-    `
-      UPDATE video_cache
-      SET last_used_at = NOW()
-      WHERE video_id = $1
-    `,
-    [input.videoId]
-  )
+  const touchedAt = new Date().toISOString()
+  void pool
+    .query(
+      `
+        UPDATE video_cache
+        SET last_used_at = NOW()
+        WHERE video_id = $1
+      `,
+      [input.videoId]
+    )
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'unknown video cache touch error'
+      console.error(`[db] Failed to update video cache last_used_at for ${input.videoId}: ${message}`)
+    })
 
   return mapVideoCacheRow({
     ...row,
-    last_used_at: new Date().toISOString(),
+    last_used_at: touchedAt,
   })
 }
 
@@ -8003,18 +8392,24 @@ export async function findAnyVideoCacheByVideoId(videoId: string) {
   const row = rows[0]
   if (!row) return null
 
-  await pool.query(
-    `
-      UPDATE video_cache
-      SET last_used_at = NOW()
-      WHERE video_id = $1
-    `,
-    [videoId]
-  )
+  const touchedAt = new Date().toISOString()
+  void pool
+    .query(
+      `
+        UPDATE video_cache
+        SET last_used_at = NOW()
+        WHERE video_id = $1
+      `,
+      [videoId]
+    )
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'unknown video cache touch error'
+      console.error(`[db] Failed to update video cache last_used_at for ${videoId}: ${message}`)
+    })
 
   return mapVideoCacheRow({
     ...row,
-    last_used_at: new Date().toISOString(),
+    last_used_at: touchedAt,
   })
 }
 

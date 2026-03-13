@@ -4,6 +4,7 @@ import type { AuthMode } from '@/app/home/lib/types'
 import { GoogleIcon } from '@/app/home/components/GoogleIcon'
 
 interface AuthAccessPanelProps {
+  signInHref?: string
   resetTokenFromUrl: string | null
   resetSuccess: boolean
   resetLoading: boolean
@@ -50,6 +51,7 @@ const feedbackBaseClass =
   'rounded-lg border px-3 py-2 text-sm'
 
 export function AuthAccessPanel({
+  signInHref = '/app',
   resetTokenFromUrl,
   resetSuccess,
   resetLoading,
@@ -102,7 +104,7 @@ export function AuthAccessPanel({
               Tu contraseña fue restablecida correctamente.
             </p>
             <a
-              href="/app"
+              href={signInHref}
               className="mt-5 inline-flex rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-[0_34px_78px_-18px_rgba(124,58,237,1)] transition-colors duration-200 hover:bg-violet-700 dark:shadow-[0_26px_56px_-22px_rgba(139,92,246,0.98)]"
             >
               Iniciar sesión

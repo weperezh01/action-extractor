@@ -253,8 +253,8 @@ function StructurePreviewMini({ kind }: { kind: ActionableStructureKey }) {
         </div>
 
         <div className="grid grid-cols-7 gap-1 text-center text-[6px] font-black uppercase tracking-[0.06em] text-slate-400">
-          {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day) => (
-            <span key={day}>{day}</span>
+          {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, index) => (
+            <span key={`${day}-${index}`}>{day}</span>
           ))}
         </div>
 

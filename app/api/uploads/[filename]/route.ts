@@ -27,8 +27,44 @@ export async function GET(
   // Verify the file belongs to this user
   await ensureDbReady()
   const { rows } = await pool.query<{ source_file_mime_type: string | null; source_file_name: string | null }>(
-    `SELECT source_file_mime_type, source_file_name FROM extractions
-     WHERE user_id = $1 AND source_file_url = $2 LIMIT 1`,
+    `
+      SELECT source_file_mime_type, source_file_name
+      FROM (
+        SELECT
+          e.source_file_mime_type,
+          e.source_file_name
+        FROM extractions e
+        WHERE
+          e.source_file_url = $2
+          AND (
+            e.user_id = $1
+            OR e.share_visibility IN ('public', 'unlisted')
+            OR EXISTS (
+              SELECT 1
+              FROM extraction_members m
+              WHERE m.extraction_id = e.id AND m.user_id = $1
+            )
+          )
+        UNION ALL
+        SELECT
+          s.source_file_mime_type,
+          s.source_file_name
+        FROM extraction_additional_sources s
+        INNER JOIN extractions e ON e.id = s.extraction_id
+        WHERE
+          s.source_file_url = $2
+          AND (
+            e.user_id = $1
+            OR e.share_visibility IN ('public', 'unlisted')
+            OR EXISTS (
+              SELECT 1
+              FROM extraction_members m
+              WHERE m.extraction_id = e.id AND m.user_id = $1
+            )
+          )
+      ) AS files
+      LIMIT 1
+    `,
     [user.id, `/api/uploads/${filename}`]
   )
 

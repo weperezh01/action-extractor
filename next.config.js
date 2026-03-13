@@ -68,6 +68,32 @@ const nextConfig = {
       },
     ],
   },
+  async redirects() {
+    return [
+      {
+        source: '/app',
+        has: [{ type: 'query', key: 'mode', value: 'login' }],
+        missing: [
+          { type: 'query', key: 'token' },
+          { type: 'query', key: 'auth' },
+          { type: 'query', key: 'email_verification' },
+        ],
+        destination: '/login',
+        permanent: false,
+      },
+      {
+        source: '/app',
+        has: [{ type: 'query', key: 'mode', value: 'register' }],
+        missing: [
+          { type: 'query', key: 'token' },
+          { type: 'query', key: 'auth' },
+          { type: 'query', key: 'email_verification' },
+        ],
+        destination: '/register',
+        permanent: false,
+      },
+    ]
+  },
   async headers() {
     return [
       {

@@ -55,10 +55,30 @@ export interface BatchExtractPanelProps {
   outputLanguage: ExtractionOutputLanguage
   folders: FolderItem[]
   onComplete: () => void
+  initialUrls?: string[]
 }
 
 function createItemId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function buildInitialItems(initialUrls?: string[], maxItems = MAX_ITEMS_MANUAL): BatchItem[] {
+  const seeded = (initialUrls ?? [])
+    .map((url) => url.trim())
+    .filter(Boolean)
+    .slice(0, maxItems)
+    .map((url) => ({
+      id: createItemId(),
+      url,
+      status: 'idle' as const,
+    }))
+
+  const targetCount = Math.min(maxItems, Math.max(2, seeded.length + (seeded.length < maxItems ? 1 : 0)))
+  while (seeded.length < targetCount) {
+    seeded.push({ id: createItemId(), url: '', status: 'idle' })
+  }
+
+  return seeded
 }
 
 async function runStreamItem(body: Record<string, unknown>): Promise<{
@@ -155,12 +175,10 @@ export function BatchExtractPanel({
   outputLanguage,
   folders,
   onComplete,
+  initialUrls,
 }: BatchExtractPanelProps) {
   // ── batch state ───────────────────────────────────────────────────────────
-  const [items, setItems] = useState<BatchItem[]>([
-    { id: createItemId(), url: '', status: 'idle' },
-    { id: createItemId(), url: '', status: 'idle' },
-  ])
+  const [items, setItems] = useState<BatchItem[]>(() => buildInitialItems(initialUrls))
   const [maxItems, setMaxItems] = useState(MAX_ITEMS_MANUAL)
   const [mode, setMode] = useState<ExtractionMode>(extractionMode)
   const [folderId, setFolderId] = useState<string>('')
@@ -197,10 +215,7 @@ export function BatchExtractPanel({
 
   const reset = () => {
     if (isRunning) return
-    setItems([
-      { id: createItemId(), url: '', status: 'idle' },
-      { id: createItemId(), url: '', status: 'idle' },
-    ])
+    setItems(buildInitialItems(initialUrls))
     setMaxItems(MAX_ITEMS_MANUAL)
     setCompletedCount(0)
   }

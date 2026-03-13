@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
   const token = req.nextUrl.searchParams.get('token')?.trim() ?? ''
-  const redirectUrl = new URL('/', resolvePublicBaseUrl(req))
+  const redirectUrl = new URL('/login', resolvePublicBaseUrl(req))
 
   if (!token) {
     redirectUrl.searchParams.set('email_verification', 'invalid')

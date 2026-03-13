@@ -13,6 +13,7 @@ export const dynamic = 'force-dynamic'
 
 const MAX_PDF_BYTES = 10 * 1024 * 1024  // 10 MB
 const MAX_DOCX_BYTES = 5 * 1024 * 1024  // 5 MB
+const MAX_TXT_BYTES = 2 * 1024 * 1024   // 2 MB
 
 export async function POST(req: NextRequest) {
   const user = await getUserFromRequest(req)
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
   const filename = file.name ?? 'archivo'
   const lower = filename.toLowerCase()
 
-  let sourceType: 'pdf' | 'docx'
+  let sourceType: 'pdf' | 'docx' | 'text'
   let maxBytes: number
   let mimeType: string
 
@@ -47,9 +48,13 @@ export async function POST(req: NextRequest) {
     sourceType = 'docx'
     maxBytes = MAX_DOCX_BYTES
     mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  } else if (lower.endsWith('.txt')) {
+    sourceType = 'text'
+    maxBytes = MAX_TXT_BYTES
+    mimeType = 'text/plain'
   } else {
     return NextResponse.json(
-      { error: 'Formato no soportado. Solo se aceptan archivos .pdf y .docx.' },
+      { error: 'Formato no soportado. Solo se aceptan archivos .pdf, .docx y .txt.' },
       { status: 400 }
     )
   }
@@ -70,8 +75,15 @@ export async function POST(req: NextRequest) {
   try {
     if (sourceType === 'pdf') {
       extracted = await extractPdfContent(buffer, filename)
-    } else {
+    } else if (sourceType === 'docx') {
       extracted = await extractDocxContent(buffer, filename)
+    } else {
+      const text = new TextDecoder('utf-8', { fatal: false }).decode(buffer)
+      extracted = {
+        text,
+        title: filename,
+        charCount: text.length,
+      }
     }
   } catch (err: unknown) {
     console.error('[upload] extraction error:', err)
@@ -102,7 +114,7 @@ export async function POST(req: NextRequest) {
   if (!sourceFileUrl) {
     try {
       fs.mkdirSync(UPLOADS_DIR, { recursive: true })
-      const ext = lower.endsWith('.pdf') ? 'pdf' : 'docx'
+      const ext = lower.endsWith('.pdf') ? 'pdf' : lower.endsWith('.docx') ? 'docx' : 'txt'
       const storedName = `${randomUUID()}.${ext}`
       fs.writeFileSync(path.join(UPLOADS_DIR, storedName), buffer)
       sourceFileUrl = `/api/uploads/${storedName}`

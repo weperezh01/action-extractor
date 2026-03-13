@@ -40,7 +40,7 @@ export async function POST(req: Request) {
       await createPasswordResetToken({ userId: user.id, tokenHash, expiresAt })
 
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://notesaide.com'
-      const resetUrl = `${appUrl}/?token=${token}`
+      const resetUrl = `${appUrl}/login?token=${token}`
 
       const resendKey = process.env.RESEND_API_KEY?.trim()
       const resendFrom =

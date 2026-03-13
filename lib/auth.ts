@@ -20,6 +20,11 @@ const PASSWORD_KEY_LENGTH = 64
 const RESET_TOKEN_EXPIRY_HOURS = 1
 const EMAIL_VERIFICATION_TOKEN_EXPIRY_HOURS = 24
 const DEFAULT_ADMIN_EMAILS = ['support@notesaide.com']
+const SESSION_CLEANUP_PROBABILITY = 0.01
+const SESSION_CLEANUP_MIN_INTERVAL_MS = 5 * 60 * 1000
+
+let lastExpiredSessionCleanupAt = 0
+let expiredSessionCleanupPromise: Promise<void> | null = null
 
 interface SessionUser {
   id: string
@@ -130,11 +135,28 @@ export function getSessionTokenFromRequest(req: NextRequest) {
   return req.cookies.get(SESSION_COOKIE_NAME)?.value ?? null
 }
 
-export async function getUserFromRequest(req: NextRequest): Promise<SessionUser | null> {
-  await deleteExpiredSessions()
+function maybeDeleteExpiredSessionsInBackground() {
+  if (Math.random() >= SESSION_CLEANUP_PROBABILITY) return
 
+  const now = Date.now()
+  if (expiredSessionCleanupPromise || now - lastExpiredSessionCleanupAt < SESSION_CLEANUP_MIN_INTERVAL_MS) return
+
+  lastExpiredSessionCleanupAt = now
+  expiredSessionCleanupPromise = deleteExpiredSessions()
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'unknown session cleanup error'
+      console.error(`[auth] Failed to delete expired sessions: ${message}`)
+    })
+    .finally(() => {
+      expiredSessionCleanupPromise = null
+    })
+}
+
+export async function getUserFromRequest(req: NextRequest): Promise<SessionUser | null> {
   const token = getSessionTokenFromRequest(req)
   if (!token) return null
+
+  maybeDeleteExpiredSessionsInBackground()
 
   const tokenHash = hashSessionToken(token)
   const session = await findSessionWithUserByTokenHash(tokenHash)

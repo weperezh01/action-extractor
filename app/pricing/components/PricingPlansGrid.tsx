@@ -190,7 +190,7 @@ export function PricingPlansGrid({
               )
             ) : (
               <Link
-                href={plan.name === 'free' ? '/app?mode=register' : '/pricing'}
+                href={plan.name === 'free' ? '/register' : '/pricing'}
                 className={`block w-full rounded-lg py-2.5 text-center text-xs font-semibold transition-colors ${
                   plan.name === 'free'
                     ? 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'

@@ -397,14 +397,14 @@ export default function LandingPage() {
             </button>
 
             <Link
-              href="/app?mode=login"
+              href="/login"
               className="hidden text-sm font-semibold text-zinc-600 transition-colors hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100 md:inline"
             >
               {t(lang, 'nav.signin')}
             </Link>
 
             <Link
-              href="/app?mode=register"
+              href="/register"
               className="inline-flex items-center gap-1.5 rounded-xl bg-zinc-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200 dark:focus-visible:ring-zinc-300 dark:focus-visible:ring-offset-zinc-950"
             >
               {t(lang, 'landing.hero.cta')}
@@ -438,7 +438,7 @@ export default function LandingPage() {
                 </p>
 
                 <div className="mt-7 flex self-center flex-col items-center gap-3 sm:flex-row sm:flex-wrap sm:justify-center xl:gap-4">
-                  <Link href="/app?mode=register" className={heroPrimaryButtonClass}>
+                  <Link href="/register" className={heroPrimaryButtonClass}>
                     {t(lang, 'landing.hero.cta')}
                     <ArrowRight size={16} />
                   </Link>
@@ -452,7 +452,7 @@ export default function LandingPage() {
                 <p className="mt-4 self-center text-center text-sm text-zinc-500 dark:text-zinc-400">
                   {t(lang, 'landing.hero.signin')}{' '}
                   <Link
-                    href="/app?mode=login"
+                    href="/login"
                     className="font-medium text-cyan-700 underline-offset-4 hover:text-cyan-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:text-cyan-300 dark:hover:text-cyan-200 dark:focus-visible:ring-offset-zinc-950"
                   >
                     {t(lang, 'landing.hero.signinLink')}
@@ -672,7 +672,7 @@ export default function LandingPage() {
               {t(lang, 'landing.finalcta.sub')}
             </p>
             <Link
-              href="/app?mode=register"
+              href="/register"
               className={`${primaryButtonClass} mt-9 px-8 py-4 text-base`}
             >
               {t(lang, 'landing.finalcta.button')}

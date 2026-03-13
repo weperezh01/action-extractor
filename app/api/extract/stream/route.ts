@@ -10,7 +10,7 @@ import {
   getPromptOverride,
   upsertVideoCache,
 } from '@/lib/db'
-import { logAiUsageSafely, type AiUsageLogInput } from '@/lib/ai-usage-log'
+import { persistAiUsageLogsInBackground, type PendingAiUsageLogInput } from '@/lib/ai-usage-log'
 import { classifyModelError, classifyTranscriptError, retryWithBackoff } from '@/lib/extract-resilience'
 import {
   buildExtractionUserPrompt,
@@ -190,7 +190,7 @@ async function parseExtractionWithRepair(params: {
   onRepair?: () => void
   userId?: string | null
   sourceType?: string | null
-  onUsage?: (usage: Omit<AiUsageLogInput, 'extractionId'>) => Promise<void> | void
+  onUsage?: (usage: PendingAiUsageLogInput) => Promise<void> | void
 }) {
   const {
     modelText,
@@ -425,7 +425,7 @@ export async function POST(req: NextRequest) {
       }
 
       try {
-        const pendingAiUsageLogs: Array<Omit<AiUsageLogInput, 'extractionId'>> = []
+        const pendingAiUsageLogs: PendingAiUsageLogInput[] = []
 
         if (sourceType === 'youtube') {
           send('status', {
@@ -844,12 +844,7 @@ export async function POST(req: NextRequest) {
             transcriptSource,
           })
 
-          for (const usage of pendingAiUsageLogs) {
-            await logAiUsageSafely({
-              ...usage,
-              extractionId: saved.id,
-            })
-          }
+          persistAiUsageLogsInBackground(pendingAiUsageLogs, saved.id)
 
           const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
 
@@ -877,12 +872,7 @@ export async function POST(req: NextRequest) {
             hasSourceText: !!sourceTextToStore,
           })
         } else {
-          for (const usage of pendingAiUsageLogs) {
-            await logAiUsageSafely({
-              ...usage,
-              extractionId: null,
-            })
-          }
+          persistAiUsageLogsInBackground(pendingAiUsageLogs, null)
 
           send('result', {
             ...responsePayload,

@@ -12,16 +12,19 @@ import {
   Paperclip,
   PenLine,
   Play,
+  Plus,
   Search,
   X,
 } from 'lucide-react'
 import { detectSourceType } from '@/lib/source-detector'
 import { EXTRACTION_MODE_OPTIONS, normalizeExtractionMode, type ExtractionMode } from '@/lib/extraction-modes'
 import type { ExtractResult, SourceType } from '@/app/home/lib/types'
+import { useLang } from '@/app/home/hooks/useLang'
+import { t } from '@/app/home/lib/i18n'
 
 export interface UploadedFileState {
   name: string
-  sourceType: 'pdf' | 'docx'
+  sourceType: 'pdf' | 'docx' | 'text'
   text: string
   charCount: number
   sourceLabel: string
@@ -51,6 +54,7 @@ interface ExtractionFormProps {
   onSearchToggle?: (open: boolean) => void
   // Public playbook search
   onOpenPublicPlaybook?: (extractionId: string) => Promise<void> | void
+  onOpenBatchMode?: () => void
 }
 
 type EntryMode = 'manual' | 'ia' | 'search'
@@ -85,6 +89,7 @@ function SourceIcon({ sourceType, size = 17 }: { sourceType: SourceType; size?: 
       return <Globe size={size} />
     case 'pdf':
     case 'docx':
+    case 'text':
       return <FileText size={size} />
     default:
       return <AlignLeft size={size} />
@@ -99,7 +104,7 @@ function getPlaceholder(sourceType: SourceType, hasFile: boolean): string {
     case 'web_url':
       return 'URL de la página web...'
     default:
-      return 'Link de YouTube, web, texto o archivo (.pdf, .docx)...'
+      return 'Link de YouTube, web, texto o archivo (.pdf, .docx, .txt)...'
   }
 }
 
@@ -134,7 +139,9 @@ export function ExtractionForm({
   onManualToggle,
   onSearchToggle,
   onOpenPublicPlaybook,
+  onOpenBatchMode,
 }: ExtractionFormProps) {
+  const { lang } = useLang()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const thumbInputRef = useRef<HTMLInputElement>(null)
 
@@ -378,6 +385,7 @@ export function ExtractionForm({
   const isDisabled = isProcessing || isUploading || (!uploadedFile && !url.trim()) || Boolean(urlError)
   const isSearchActionDisabled =
     isProcessing || publicSearchLoading || url.trim().length < 2
+  const canAddMoreSources = !showManualForm && !isSearchMode && !uploadedFile && Boolean(onOpenBatchMode)
   const primaryActionDisabled = isSearchMode ? isSearchActionDisabled : isDisabled
 
   const handlePrimaryAction = useCallback(() => {
@@ -589,8 +597,8 @@ export function ExtractionForm({
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isProcessing || isUploading}
                   className="shrink-0 rounded-full p-2 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                  title="Subir PDF o DOCX"
-                  aria-label="Subir archivo PDF o DOCX"
+                  title="Subir PDF, DOCX o TXT"
+                  aria-label="Subir archivo PDF, DOCX o TXT"
                 >
                   {isUploading ? (
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-600" />
@@ -602,7 +610,7 @@ export function ExtractionForm({
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".pdf,.docx"
+                  accept=".pdf,.docx,.txt,text/plain"
                   className="hidden"
                   onChange={(event) => {
                     const file = event.target.files?.[0]
@@ -661,6 +669,20 @@ export function ExtractionForm({
         <p className="mt-2 px-3 text-sm text-red-600 dark:text-red-400" role="alert">
           {uploadError}
         </p>
+      )}
+
+      {canAddMoreSources && (
+        <div className="mt-2 flex justify-end px-2">
+          <button
+            type="button"
+            onClick={onOpenBatchMode}
+            disabled={isProcessing || isUploading}
+            className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-600 transition-colors hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-violet-700 dark:hover:bg-violet-950/30 dark:hover:text-violet-300"
+          >
+            <Plus size={13} />
+            {t(lang, 'app.addMoreSources')}
+          </button>
+        </div>
       )}
 
       <div

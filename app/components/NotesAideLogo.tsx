@@ -5,6 +5,7 @@ type NotesAideLogoProps = {
   title?: string
   variant?: 'full' | 'mark'
   withTagline?: boolean
+  priority?: boolean
 }
 
 export function NotesAideLogo({
@@ -12,6 +13,7 @@ export function NotesAideLogo({
   title = 'Notes Aide',
   variant = 'full',
   withTagline = false,
+  priority = false,
 }: NotesAideLogoProps) {
   if (variant === 'mark') {
     return (
@@ -22,7 +24,7 @@ export function NotesAideLogo({
           fill
           sizes="32px"
           className="object-contain object-center scale-[1.14]"
-          priority
+          priority={priority}
         />
       </div>
     )
@@ -37,7 +39,7 @@ export function NotesAideLogo({
           fill
           sizes="48px"
           className="object-contain object-center scale-[1.08]"
-          priority
+          priority={priority}
         />
       </div>
 

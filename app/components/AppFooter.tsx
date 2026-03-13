@@ -1,10 +1,9 @@
+'use client'
+
 import Link from 'next/link'
 import { Github, Linkedin, Twitter } from 'lucide-react'
 import { NotesAideLogo } from '@/app/components/NotesAideLogo'
-
-type AppFooterProps = {
-  isEs: boolean
-}
+import { useLang } from '@/app/home/hooks/useLang'
 
 type FooterLinkItem = {
   label: string
@@ -34,7 +33,9 @@ function FooterLink({ item }: { item: FooterLinkItem }) {
   )
 }
 
-export function AppFooter({ isEs }: AppFooterProps) {
+export function AppFooter() {
+  const { lang } = useLang()
+  const isEs = lang === 'es'
   const copy = isEs
     ? {
         tagline: 'Convierte contenido en planes de ejecución claros en segundos.',

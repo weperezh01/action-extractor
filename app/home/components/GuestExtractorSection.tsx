@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 import Link from 'next/link'
+import { NextIntlClientProvider } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import { AlertCircle, ArrowRight, UserPlus } from 'lucide-react'
 import { ExtractionForm } from '@/app/home/components/ExtractionForm'
@@ -25,6 +26,8 @@ import { parseSseFrame } from '@/app/home/lib/utils'
 import type { ExtractResult, Phase, SourceType } from '@/app/home/lib/types'
 import type { UploadedFileState } from '@/app/home/components/ExtractionForm'
 import { t, type Lang } from '@/app/home/lib/i18n'
+import messagesEn from '@/messages/en.json'
+import messagesEs from '@/messages/es.json'
 
 const GUEST_ID_KEY = 'ae-guest-id'
 export const PENDING_EXTRACTIONS_KEY = 'ae-pending-extractions'
@@ -87,6 +90,7 @@ const MODE_PILL_LABELS: Record<string, { en: string; es: string }> = {
 
 export function GuestExtractorSection({ lang }: { lang: Lang }) {
   const router = useRouter()
+  const intlMessages = lang === 'es' ? messagesEs : messagesEn
 
   // ── Form state ─────────────────────────────────────────────────────────
   const [url, setUrl] = useState('')
@@ -184,7 +188,7 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
   const handleGoRegister = useCallback(
     (currentExtractions: StoredExtraction[]) => {
       savePendingExtractions(currentExtractions)
-      router.push('/app?mode=register')
+      router.push('/register')
     },
     [router]
   )
@@ -591,62 +595,64 @@ export function GuestExtractorSection({ lang }: { lang: Lang }) {
           {displayExtraction && (
             <>
               <div className="scroll-mt-24">
-                <ResultPanel
-                  result={displayExtraction.result}
-                  url={displayExtraction.url}
-                  extractionMode={displayExtraction.mode}
-                  isProcessing={isProcessing}
-                  activePhase={activePhase}
-                  onTogglePhase={(id) => setActivePhase(activePhase === id ? null : id)}
-                  isExportingPdf={false}
-                  shareLoading={false}
-                  shareCopied={displayExtraction.shareCopied}
-                  shareVisibility="private"
-                  shareVisibilityLoading={false}
-                  notionConfigured={false}
-                  notionConnected={false}
-                  notionWorkspaceName={null}
-                  notionLoading={false}
-                  notionExportLoading={false}
-                  trelloConfigured={false}
-                  trelloConnected={false}
-                  trelloUsername={null}
-                  trelloLoading={false}
-                  trelloExportLoading={false}
-                  todoistConfigured={false}
-                  todoistConnected={false}
-                  todoistUserLabel={null}
-                  todoistLoading={false}
-                  todoistExportLoading={false}
-                  googleDocsConfigured={false}
-                  googleDocsConnected={false}
-                  googleDocsUserEmail={null}
-                  googleDocsLoading={false}
-                  googleDocsExportLoading={false}
-                  onDownloadPdf={NOOP_ASYNC}
-                  onCopyShareLink={NOOP_ASYNC}
-                  onCopyMarkdown={handleCopyMarkdown}
-                  onShareVisibilityChange={NOOP}
-                  onSavePhases={NOOP_SAVE as (phases: Phase[]) => Promise<boolean>}
-                  onSaveMeta={NOOP_SAVE as (meta: { title: string; thumbnailUrl: string | null; objective: string }) => Promise<boolean>}
-                  isBookClosed={isPlaybookClosed}
-                  bookFolderLabel={guestPlaybookFolderLabel}
-                  onClose={() => setIsPlaybookClosed(true)}
-                  onExportToNotion={NOOP_ASYNC}
-                  onConnectNotion={NOOP}
-                  onExportToTrello={NOOP_ASYNC}
-                  onConnectTrello={NOOP}
-                  onExportToTodoist={NOOP_ASYNC}
-                  onConnectTodoist={NOOP}
-                  onExportToGoogleDocs={NOOP_ASYNC}
-                  onConnectGoogleDocs={NOOP}
-                  onReExtractMode={(mode) => {
-                    void handleExtract({
-                      url: (displayExtraction.result.url ?? displayExtraction.url).trim(),
-                      mode,
-                    })
-                  }}
-                />
+                <NextIntlClientProvider locale={lang} messages={intlMessages}>
+                  <ResultPanel
+                    result={displayExtraction.result}
+                    url={displayExtraction.url}
+                    extractionMode={displayExtraction.mode}
+                    isProcessing={isProcessing}
+                    activePhase={activePhase}
+                    onTogglePhase={(id) => setActivePhase(activePhase === id ? null : id)}
+                    isExportingPdf={false}
+                    shareLoading={false}
+                    shareCopied={displayExtraction.shareCopied}
+                    shareVisibility="private"
+                    shareVisibilityLoading={false}
+                    notionConfigured={false}
+                    notionConnected={false}
+                    notionWorkspaceName={null}
+                    notionLoading={false}
+                    notionExportLoading={false}
+                    trelloConfigured={false}
+                    trelloConnected={false}
+                    trelloUsername={null}
+                    trelloLoading={false}
+                    trelloExportLoading={false}
+                    todoistConfigured={false}
+                    todoistConnected={false}
+                    todoistUserLabel={null}
+                    todoistLoading={false}
+                    todoistExportLoading={false}
+                    googleDocsConfigured={false}
+                    googleDocsConnected={false}
+                    googleDocsUserEmail={null}
+                    googleDocsLoading={false}
+                    googleDocsExportLoading={false}
+                    onDownloadPdf={NOOP_ASYNC}
+                    onCopyShareLink={NOOP_ASYNC}
+                    onCopyMarkdown={handleCopyMarkdown}
+                    onShareVisibilityChange={NOOP}
+                    onSavePhases={NOOP_SAVE as (phases: Phase[]) => Promise<boolean>}
+                    onSaveMeta={NOOP_SAVE as (meta: { title: string; thumbnailUrl: string | null; objective: string }) => Promise<boolean>}
+                    isBookClosed={isPlaybookClosed}
+                    bookFolderLabel={guestPlaybookFolderLabel}
+                    onClose={() => setIsPlaybookClosed(true)}
+                    onExportToNotion={NOOP_ASYNC}
+                    onConnectNotion={NOOP}
+                    onExportToTrello={NOOP_ASYNC}
+                    onConnectTrello={NOOP}
+                    onExportToTodoist={NOOP_ASYNC}
+                    onConnectTodoist={NOOP}
+                    onExportToGoogleDocs={NOOP_ASYNC}
+                    onConnectGoogleDocs={NOOP}
+                    onReExtractMode={(mode) => {
+                      void handleExtract({
+                        url: (displayExtraction.result.url ?? displayExtraction.url).trim(),
+                        mode,
+                      })
+                    }}
+                  />
+                </NextIntlClientProvider>
               </div>
 
               {/* CTA / limit banner below result */}

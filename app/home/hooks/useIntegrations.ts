@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { SessionUser } from '@/app/home/lib/types'
+import { fetchWithTimeout } from '@/app/home/lib/utils'
 
 interface UseIntegrationsParams {
   user: SessionUser | null
@@ -78,7 +79,7 @@ export function useIntegrations({ user, onUnauthorized, setError, setNotice }: U
     }
 
     try {
-      const res = await fetch('/api/notion/status', { cache: 'no-store' })
+      const res = await fetchWithTimeout('/api/notion/status', { cache: 'no-store' })
       if (res.status === 401) {
         setNotionConfigured(false)
         setNotionConnected(false)
@@ -125,7 +126,7 @@ export function useIntegrations({ user, onUnauthorized, setError, setNotice }: U
     }
 
     try {
-      const res = await fetch('/api/trello/status', { cache: 'no-store' })
+      const res = await fetchWithTimeout('/api/trello/status', { cache: 'no-store' })
       if (res.status === 401) {
         setTrelloConfigured(false)
         setTrelloConnected(false)
@@ -172,7 +173,7 @@ export function useIntegrations({ user, onUnauthorized, setError, setNotice }: U
     }
 
     try {
-      const res = await fetch('/api/todoist/status', { cache: 'no-store' })
+      const res = await fetchWithTimeout('/api/todoist/status', { cache: 'no-store' })
       if (res.status === 401) {
         setTodoistConfigured(false)
         setTodoistConnected(false)
@@ -225,7 +226,7 @@ export function useIntegrations({ user, onUnauthorized, setError, setNotice }: U
     }
 
     try {
-      const res = await fetch('/api/google-docs/status', { cache: 'no-store' })
+      const res = await fetchWithTimeout('/api/google-docs/status', { cache: 'no-store' })
       if (res.status === 401) {
         setGoogleDocsConfigured(false)
         setGoogleDocsConnected(false)

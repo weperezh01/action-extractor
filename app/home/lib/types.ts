@@ -40,6 +40,22 @@ export interface ExtractionTag {
   color: string
 }
 
+export interface ExtractionAdditionalSource {
+  id: string
+  kind: 'primary' | 'additional'
+  analysisStatus: 'analyzed' | 'pending'
+  analyzedAt?: string | null
+  url?: string | null
+  sourceType: SourceType
+  sourceLabel?: string | null
+  createdAt: string
+  sourceFileUrl?: string | null
+  sourceFileName?: string | null
+  sourceFileSizeBytes?: number | null
+  sourceFileMimeType?: string | null
+  hasSourceText?: boolean
+}
+
 export interface ExtractResult {
   id?: string
   orderNumber?: number
@@ -69,6 +85,7 @@ export interface ExtractResult {
   sourceFileSizeBytes?: number | null
   sourceFileMimeType?: string | null
   hasSourceText?: boolean
+  parentExtractionId?: string | null
 }
 
 export interface HistoryItem extends ExtractResult {

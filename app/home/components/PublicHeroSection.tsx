@@ -53,14 +53,14 @@ export function PublicHeroSection({ lang }: PublicHeroSectionProps) {
 
           <div className="mt-7 flex flex-wrap gap-3">
             <Link
-              href="/app?mode=register"
+              href="/register"
               className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-[0_34px_78px_-18px_rgba(124,58,237,1)] transition-colors duration-200 hover:bg-violet-700 dark:shadow-[0_26px_56px_-22px_rgba(139,92,246,0.98)]"
             >
               {t(lang, 'hero.cta.register')}
               <ArrowRight size={15} />
             </Link>
             <Link
-              href="/app?mode=login"
+              href="/login"
               className="rounded-xl border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-700 shadow-[0_30px_66px_-22px_rgba(148,163,184,0.9)] transition-colors duration-200 hover:bg-zinc-100 dark:border-white/10 dark:text-zinc-200 dark:hover:bg-white/5 dark:shadow-[0_24px_48px_-24px_rgba(148,163,184,0.75)]"
             >
               {t(lang, 'hero.cta.login')}
