@@ -5,6 +5,7 @@ import type { BuiltInTaskStatus } from '@/lib/task-statuses'
 
 export type ShareVisibility = 'private' | 'circle' | 'unlisted' | 'public'
 export type ExtractionAccessRole = 'owner' | 'editor' | 'viewer'
+export type ExtractionClonePermission = 'disabled' | 'template_only' | 'full'
 
 export type SourceType = 'youtube' | 'web_url' | 'pdf' | 'docx' | 'text' | 'manual'
 
@@ -60,6 +61,7 @@ export interface ExtractResult {
   id?: string
   orderNumber?: number
   shareVisibility?: ShareVisibility
+  clonePermission?: ExtractionClonePermission
   accessRole?: ExtractionAccessRole
   ownerName?: string | null
   ownerEmail?: string | null
@@ -97,6 +99,7 @@ export interface HistoryItem extends ExtractResult {
   sourceType?: SourceType
   sourceLabel?: string | null
   folderId?: string | null
+  clonePermission?: ExtractionClonePermission
 }
 
 export interface ExtractionMember {
@@ -117,6 +120,38 @@ export interface SharedExtractionItem extends HistoryItem {
     rootFolderId: string | null
     rootFolderName: string | null
   } | null
+}
+
+export interface PlaybookLineageNode {
+  depth: number
+  isCurrent: boolean
+  isOriginal: boolean
+  accessible: boolean
+  title: string | null
+  ownerName: string | null
+  ownerEmail: string | null
+  createdAt: string | null
+}
+
+export interface PlaybookLineageRecentCopy {
+  depth: number
+  title: string
+  copiedByName: string | null
+  copiedByEmail: string | null
+  createdAt: string
+  copiedFromTitle: string | null
+}
+
+export interface PlaybookLineageData {
+  generation: number
+  nodes: PlaybookLineageNode[]
+  copies:
+    | {
+        directCount: number
+        totalCount: number
+        recent: PlaybookLineageRecentCopy[]
+      }
+    | null
 }
 
 export type InteractiveTaskStatus = BuiltInTaskStatus | (string & {})

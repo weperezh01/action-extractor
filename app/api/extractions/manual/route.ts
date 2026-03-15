@@ -87,6 +87,7 @@ export async function POST(req: NextRequest) {
       id: row.id,
       orderNumber,
       shareVisibility: row.share_visibility ?? 'private',
+      clonePermission: row.clone_permission ?? 'disabled',
       createdAt: row.created_at,
       cached: false,
       url: null,

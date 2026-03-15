@@ -1,5 +1,7 @@
 import type { Metadata } from 'next'
+import { cookies } from 'next/headers'
 import { AppFooter } from '@/app/components/AppFooter'
+import { LangProvider } from '@/app/home/hooks/useLang'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -30,14 +32,19 @@ export default function RootLayout({
 }: {
   children: React.ReactNode
 }) {
+  const cookieStore = cookies()
+  const lang = cookieStore.get('roi-lang')?.value === 'es' ? 'es' : 'en'
+
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang={lang} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript }} />
       </head>
       <body className="antialiased bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-        {children}
-        <AppFooter />
+        <LangProvider initialLang={lang}>
+          {children}
+          <AppFooter lang={lang} />
+        </LangProvider>
       </body>
     </html>
   )

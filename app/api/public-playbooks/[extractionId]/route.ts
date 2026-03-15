@@ -60,7 +60,8 @@ export async function GET(
       item: {
         id: extraction.id,
         shareVisibility: extraction.share_visibility ?? 'public',
-        accessRole: 'viewer',
+        clonePermission: extraction.clone_permission ?? 'disabled',
+        accessRole: extraction.user_id === user.id ? 'owner' : 'viewer',
         ownerName: row.owner_name,
         ownerEmail: row.owner_email,
         createdAt: extraction.created_at,
@@ -77,7 +78,7 @@ export async function GET(
         metadata,
         sourceType: extraction.source_type ?? 'youtube',
         sourceLabel: extraction.source_label ?? null,
-        folderId: null,
+        folderId: extraction.user_id === user.id ? extraction.folder_id ?? null : null,
       },
     })
   } catch (error: unknown) {

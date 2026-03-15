@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Plus, RefreshCw, Trash2, Workflow, X, Zap } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import type { DecisionSelection, EdgeType, FlowNodeType, InteractiveTask, TaskEdge } from '../lib/types'
+import { useLang } from '@/app/home/hooks/useLang'
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 const PW = 164   // process node width
@@ -28,10 +29,69 @@ const EDGE_DASH: Record<EdgeType, string> = {
   xor: '6 3',
   loop: '3 5',
 }
-const EDGE_LABEL: Record<EdgeType, string> = {
-  and: 'Secuencial',
-  xor: 'Decisión (XOR)',
-  loop: 'Bucle',
+const FLOWCHART_COPY = {
+  en: {
+    projectDuration: 'Project duration',
+    criticalTasks: 'Tasks on the critical path',
+    slackTasks: 'With slack',
+    xorWarning: 'There are decision nodes (XOR) without a selected branch. Use the node editor to choose the branch for the CPM scenario.',
+    noCriticalPath: 'No critical path identified. Add sequential (AND) edges to begin.',
+    criticalPath: 'Critical path',
+    noTasks: 'No tasks to display.',
+    processSummary: (tasks: number, edges: number) => `Process · ${tasks} nodes · ${edges} edges`,
+    durationSummary: (duration: number, critical: number) =>
+      `Duration: ${duration}d · ${critical} critical ${critical === 1 ? 'task' : 'tasks'}`,
+    resetView: 'Reset view',
+    reset: 'Reiniciar',
+    type: 'Type:',
+    editNode: 'Edit node',
+    nodeType: 'Node type',
+    outgoingEdges: (count: number) => `Outgoing edges (${count})`,
+    noEdges: 'No edges. Add one below.',
+    useForCpm: 'Use this branch for the CPM calculation',
+    addOutgoingEdge: '+ Add outgoing edge',
+    labelOptional: 'Label (optional)',
+    expectedExtraDays: 'Expected extra days (loop)',
+    searchTargetTask: 'Search target task...',
+    process: 'Process',
+    decision: 'Decision',
+    sequential: 'Sequential',
+    loop: 'Loop',
+  },
+  es: {
+    projectDuration: 'Duración del proyecto',
+    criticalTasks: 'Tareas en ruta crítica',
+    slackTasks: 'Con holgura',
+    xorWarning: 'Hay nodos de decisión (XOR) sin rama seleccionada. Usa el editor de nodo para elegir la rama del escenario CPM.',
+    noCriticalPath: 'Sin ruta crítica identificada. Agrega aristas secuenciales (AND) para comenzar.',
+    criticalPath: 'Ruta crítica',
+    noTasks: 'Sin tareas para mostrar.',
+    processSummary: (tasks: number, edges: number) => `Proceso · ${tasks} nodos · ${edges} aristas`,
+    durationSummary: (duration: number, critical: number) =>
+      `Duración: ${duration}d · ${critical} crítica${critical !== 1 ? 's' : ''}`,
+    resetView: 'Restablecer vista',
+    reset: 'Reset',
+    type: 'Tipo:',
+    editNode: 'Editar nodo',
+    nodeType: 'Tipo de nodo',
+    outgoingEdges: (count: number) => `Aristas salientes (${count})`,
+    noEdges: 'Sin aristas. Agrega una abajo.',
+    useForCpm: 'Usar esta rama para el cálculo CPM',
+    addOutgoingEdge: '+ Agregar arista saliente',
+    labelOptional: 'Etiqueta (opcional)',
+    expectedExtraDays: 'Días extra esperados (bucle)',
+    searchTargetTask: 'Buscar tarea destino...',
+    process: 'Proceso',
+    decision: 'Decisión',
+    sequential: 'Secuencial',
+    loop: 'Bucle',
+  },
+} as const
+
+function getEdgeTypeLabel(edgeType: EdgeType, lang: 'en' | 'es') {
+  if (edgeType === 'and') return FLOWCHART_COPY[lang].sequential
+  if (edgeType === 'xor') return `${FLOWCHART_COPY[lang].decision} (XOR)`
+  return FLOWCHART_COPY[lang].loop
 }
 
 // ── VNode: a positioned node in canvas-space (0,0 = canvas center) ────────────
@@ -266,6 +326,8 @@ interface CpmViewProps {
 }
 
 export function CpmView({ tasks, cpmMap, criticalIds, projectDuration, hasUnselectedDecisions }: CpmViewProps) {
+  const { lang } = useLang()
+  const ui = FLOWCHART_COPY[lang]
   const criticalTasks = tasks.filter((t) => criticalIds.has(t.id))
 
   return (
@@ -274,32 +336,32 @@ export function CpmView({ tasks, cpmMap, criticalIds, projectDuration, hasUnsele
       <div className="mb-3 flex flex-wrap gap-6">
         <div>
           <div className="text-xl font-bold text-slate-800 dark:text-slate-100">{projectDuration}d</div>
-          <div className="text-[11px] text-slate-500">Duración del proyecto</div>
+          <div className="text-[11px] text-slate-500">{ui.projectDuration}</div>
         </div>
         <div>
           <div className="text-xl font-bold text-rose-600">{criticalIds.size}</div>
-          <div className="text-[11px] text-slate-500">Tareas en ruta crítica</div>
+          <div className="text-[11px] text-slate-500">{ui.criticalTasks}</div>
         </div>
         <div>
           <div className="text-xl font-bold text-slate-400">{tasks.length - criticalIds.size}</div>
-          <div className="text-[11px] text-slate-500">Con holgura</div>
+          <div className="text-[11px] text-slate-500">{ui.slackTasks}</div>
         </div>
       </div>
 
       {hasUnselectedDecisions && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-400">
-          ⚠ Hay nodos de decisión (XOR) sin rama seleccionada. Usa el editor de nodo para elegir la rama del escenario CPM.
+          ⚠ {ui.xorWarning}
         </div>
       )}
 
       {/* Critical path tasks */}
       {criticalTasks.length === 0 ? (
         <p className="text-[11px] italic text-slate-400">
-          Sin ruta crítica identificada. Agrega aristas secuenciales (AND) para comenzar.
+          {ui.noCriticalPath}
         </p>
       ) : (
         <div className="space-y-1">
-          <p className="mb-1.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400">Ruta crítica</p>
+          <p className="mb-1.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400">{ui.criticalPath}</p>
           {criticalTasks.map((t) => {
             const cpm = cpmMap.get(t.id)!
             return (
@@ -352,6 +414,8 @@ interface NodeDragState {
 interface ConnDragState { fromTaskId: string; fromPortX: number; fromPortY: number }
 
 export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelectTask, onOpenTaskMobile }: Props) {
+  const { lang } = useLang()
+  const ui = FLOWCHART_COPY[lang]
   const [edges, setEdges] = useState<TaskEdge[]>([])
   const [selections, setSelections] = useState<DecisionSelection[]>([])
   const [loading, setLoading] = useState(true)
@@ -760,7 +824,7 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
   if (tasks.length === 0) {
     return (
       <div className="flex h-80 items-center justify-center text-sm text-slate-400">
-        Sin tareas para mostrar.
+        {ui.noTasks}
       </div>
     )
   }
@@ -784,7 +848,7 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
         <div className="flex items-center gap-2">
           <Workflow size={14} className="text-indigo-500" />
           <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
-            Proceso · {tasks.length} nodos · {edges.length} aristas
+            {ui.processSummary(tasks.length, edges.length)}
           </span>
         </div>
 
@@ -792,7 +856,7 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
           <div className="flex items-center gap-1.5 rounded-lg bg-rose-50 px-2.5 py-1 dark:bg-rose-900/20">
             <Zap size={11} className="text-rose-500" />
             <span className="text-[11px] font-semibold text-rose-600 dark:text-rose-400">
-              Duración: {projectDuration}d · {criticalIds.size} crítica{criticalIds.size !== 1 ? 's' : ''}
+              {ui.durationSummary(projectDuration, criticalIds.size)}
             </span>
           </div>
         )}
@@ -814,10 +878,10 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
           type="button"
           onClick={() => setVs(INIT_PAN)}
           className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1.5 text-[11px] text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-          title="Restablecer vista"
+          title={ui.resetView}
         >
           <RefreshCw size={10} />
-          Reset
+          {ui.reset}
         </button>
       </div>
 
@@ -837,18 +901,18 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
               />
               <polygon points="20,2 24,5 20,8" fill={EDGE_COLOR[et]} />
             </svg>
-            <span className="text-[10px] text-slate-400">{EDGE_LABEL[et]}</span>
+            <span className="text-[10px] text-slate-400">{getEdgeTypeLabel(et, lang)}</span>
           </div>
         ))}
         <div className="flex items-center gap-1.5">
           <div className="h-3 w-5 rounded border border-slate-300 dark:border-slate-600" />
-          <span className="text-[10px] text-slate-400">Proceso</span>
+          <span className="text-[10px] text-slate-400">{ui.process}</span>
         </div>
         <div className="flex items-center gap-1.5">
           <svg width="14" height="14">
             <polygon points="7,0 14,7 7,14 0,7" fill="none" stroke={EDGE_COLOR.xor} strokeWidth="1.5" />
           </svg>
-          <span className="text-[10px] text-slate-400">Decisión</span>
+          <span className="text-[10px] text-slate-400">{ui.decision}</span>
         </div>
       </div>
 
@@ -1341,7 +1405,7 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2 py-2 shadow-xl dark:border-slate-700 dark:bg-slate-900">
-              <span className="mr-1 text-[10px] text-slate-400">Tipo:</span>
+              <span className="mr-1 text-[10px] text-slate-400">{ui.type}</span>
               {(['and', 'xor', 'loop'] as EdgeType[]).map((et) => (
                 <button
                   key={et}
@@ -1350,7 +1414,7 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
                   style={{ background: EDGE_COLOR[et], color: '#fff' }}
                   onClick={() => createEdgeDirect(pendingEdge.fromTaskId, pendingEdge.toTaskId, et)}
                 >
-                  {et === 'and' ? 'Secuencial' : et === 'xor' ? 'Decisión' : 'Bucle'}
+                  {et === 'and' ? ui.sequential : et === 'xor' ? ui.decision : ui.loop}
                 </button>
               ))}
               <button
@@ -1380,7 +1444,7 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-indigo-500">
-                    Editar nodo
+                    {ui.editNode}
                   </p>
                   <p className="text-sm font-semibold text-slate-800 line-clamp-2 dark:text-slate-100">
                     {editTask.itemText}
@@ -1398,7 +1462,7 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
               {/* Node type toggle */}
               <div>
                 <label className="mb-1.5 block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                  Tipo de nodo
+                  {ui.nodeType}
                 </label>
                 <div className="flex gap-2">
                   {(['process', 'decision'] as FlowNodeType[]).map((ft) => (
@@ -1412,7 +1476,7 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
                           : 'border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-400'
                       }`}
                     >
-                      {ft === 'process' ? '▭ Proceso' : '◇ Decisión'}
+                      {ft === 'process' ? `▭ ${ui.process}` : `◇ ${ui.decision}`}
                     </button>
                   ))}
                 </div>
@@ -1421,10 +1485,10 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
               {/* Existing outgoing edges */}
               <div>
                 <label className="mb-1.5 block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                  Aristas salientes ({editEdges.length})
+                  {ui.outgoingEdges(editEdges.length)}
                 </label>
                 {editEdges.length === 0 ? (
-                  <p className="text-[11px] italic text-slate-400">Sin aristas. Agrega una abajo.</p>
+                  <p className="text-[11px] italic text-slate-400">{ui.noEdges}</p>
                 ) : (
                   <div className="space-y-1">
                     {editEdges.map((edge) => {
@@ -1456,7 +1520,7 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
                             <button
                               type="button"
                               onClick={() => selectBranch(editTask.id, edge.toTaskId)}
-                              title="Usar esta rama para el cálculo CPM"
+                              title={ui.useForCpm}
                               className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${
                                 isSel
                                   ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
@@ -1484,7 +1548,7 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
               {/* Add edge */}
               <div className="space-y-2 rounded-xl border border-dashed border-slate-300 p-3 dark:border-slate-600">
                 <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                  + Agregar arista saliente
+                  {ui.addOutgoingEdge}
                 </p>
 
                 <div className="flex gap-2">
@@ -1507,7 +1571,7 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
 
                 <input
                   type="text"
-                  placeholder="Etiqueta (opcional)"
+                  placeholder={ui.labelOptional}
                   value={addEdgeLabel}
                   onChange={(e) => setAddEdgeLabel(e.target.value)}
                   className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
@@ -1517,7 +1581,7 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
                   <input
                     type="number"
                     min={0}
-                    placeholder="Días extra esperados (bucle)"
+                    placeholder={ui.expectedExtraDays}
                     value={addEdgeExtraDays}
                     onChange={(e) =>
                       setAddEdgeExtraDays(e.target.value !== '' ? Number(e.target.value) : '')
@@ -1528,7 +1592,7 @@ export function FlowchartView({ interactiveTasks, extractionId, canEdit, onSelec
 
                 <input
                   type="text"
-                  placeholder="Buscar tarea destino..."
+                  placeholder={ui.searchTargetTask}
                   value={editSearch}
                   onChange={(e) => setEditSearch(e.target.value)}
                   className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"

@@ -6,6 +6,10 @@ import {
 } from '@/lib/task-statuses'
 import { flattenPlaybookPhases, normalizePlaybookPhases } from '@/lib/playbook-tree'
 import {
+  parseTaskNumericFormulaJson,
+  serializeTaskNumericFormula,
+} from '@/lib/task-numeric-formulas'
+import {
   calculateGrossMarginPct,
   calculateMaxVariableCostAllowed,
   calculateMonthlyRunRate,
@@ -62,6 +66,7 @@ export interface DbExtraction {
   pro_tip: string
   metadata_json: string
   share_visibility: ExtractionShareVisibility
+  clone_permission: ExtractionClonePermission
   order_number?: number
   created_at: string
   source_type: string
@@ -277,6 +282,7 @@ export interface DbWorkspaceInvitation {
 }
 
 export type ExtractionShareVisibility = 'private' | 'circle' | 'unlisted' | 'public'
+export type ExtractionClonePermission = 'disabled' | 'template_only' | 'full'
 export type ExtractionMemberRole = 'editor' | 'viewer'
 export type ExtractionFolderMemberRole = 'viewer'
 export type ExtractionAccessRole = 'owner' | ExtractionMemberRole
@@ -639,6 +645,7 @@ interface DbExtractionRow {
   pro_tip: string
   metadata_json: string
   share_visibility?: string | null
+  clone_permission?: string | null
   order_number?: number | string
   created_at: Date | string
   source_type?: string | null
@@ -730,6 +737,38 @@ interface DbSharedExtractionFolderRow extends DbExtractionFolderRow {
 
 interface DbExtractionAccessRow extends DbExtractionRow {
   access_role: string | null
+}
+
+interface DbExtractionLineageRow {
+  id: string
+  user_id: string
+  parent_extraction_id: string | null
+  video_title: string | null
+  source_label: string | null
+  objective: string
+  created_at: Date | string
+  owner_name: string | null
+  owner_email: string | null
+}
+
+interface DbExtractionCountRow {
+  count: number | string
+}
+
+interface DbExtractionRecentCloneRow {
+  id: string
+  parent_extraction_id: string | null
+  user_id: string
+  video_title: string | null
+  source_label: string | null
+  objective: string
+  created_at: Date | string
+  depth: number | string
+  owner_name: string | null
+  owner_email: string | null
+  parent_video_title: string | null
+  parent_source_label: string | null
+  parent_objective: string | null
 }
 
 interface DbVideoCacheRow {
@@ -1136,6 +1175,7 @@ const INIT_SQL = `
     phases_json TEXT NOT NULL,
     pro_tip TEXT NOT NULL,
     metadata_json TEXT NOT NULL,
+    clone_permission TEXT NOT NULL DEFAULT 'disabled',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
@@ -1446,6 +1486,9 @@ const INIT_SQL = `
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS extraction_mode TEXT NOT NULL DEFAULT 'action_plan';
   ALTER TABLE extractions ADD COLUMN IF NOT EXISTS share_visibility TEXT NOT NULL DEFAULT 'private';
+  ALTER TABLE extractions ADD COLUMN IF NOT EXISTS clone_permission TEXT NOT NULL DEFAULT 'disabled';
+  ALTER TABLE extractions DROP CONSTRAINT IF EXISTS extractions_clone_permission_check;
+  ALTER TABLE extractions ADD CONSTRAINT extractions_clone_permission_check CHECK (clone_permission IN ('disabled', 'template_only', 'full'));
   ALTER TABLE video_cache ADD COLUMN IF NOT EXISTS video_title TEXT;
   ALTER TABLE video_cache ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
   ALTER TABLE video_cache ADD COLUMN IF NOT EXISTS transcript_text TEXT;
@@ -2118,7 +2161,7 @@ const INIT_SQL = `
   ALTER TABLE user_storage ADD COLUMN IF NOT EXISTS storage_limit_override_bytes BIGINT;
 `
 
-const DB_INIT_SIGNATURE = '2026-03-12-playbook-multi-source-v1'
+const DB_INIT_SIGNATURE = '2026-03-14-playbook-clone-permission-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -2282,6 +2325,12 @@ function normalizeExtractionShareVisibility(value: unknown): ExtractionShareVisi
   return 'private'
 }
 
+function normalizeExtractionClonePermission(value: unknown): ExtractionClonePermission {
+  if (value === 'template_only') return 'template_only'
+  if (value === 'full') return 'full'
+  return 'disabled'
+}
+
 function normalizeCommunityPostVisibility(value: unknown): CommunityPostVisibility {
   if (value === 'private') return 'private'
   if (value === 'circle') return 'circle'
@@ -2352,6 +2401,7 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
       ? undefined
       : parseDbInteger(row.order_number)
   const shareVisibility = normalizeExtractionShareVisibility(row.share_visibility)
+  const clonePermission = normalizeExtractionClonePermission(row.clone_permission)
 
   return {
     id: row.id,
@@ -2367,6 +2417,7 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
     pro_tip: row.pro_tip,
     metadata_json: row.metadata_json,
     share_visibility: shareVisibility,
+    clone_permission: clonePermission,
     order_number: orderNumber,
     created_at: toIso(row.created_at),
     source_type: row.source_type ?? 'youtube',
@@ -2389,6 +2440,26 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
     has_source_text: row.has_source_text === true || !!(row.source_text && row.source_text.length > 0),
     transcript_source: row.transcript_source ?? null,
   }
+}
+
+function resolveDbExtractionDisplayTitle(input: {
+  id: string
+  video_title: string | null
+  source_label: string | null
+  objective: string | null
+}) {
+  const videoTitle = input.video_title?.trim()
+  if (videoTitle) return videoTitle
+
+  const sourceLabel = input.source_label?.trim()
+  if (sourceLabel) return sourceLabel
+
+  const objective = input.objective?.trim() ?? ''
+  if (objective) {
+    return objective.length > 96 ? `${objective.slice(0, 96)}...` : objective
+  }
+
+  return `Playbook ${input.id.slice(0, 8)}`
 }
 
 function mapExtractionAdditionalSourceRow(row: DbExtractionAdditionalSourceRow): DbExtractionAdditionalSource {
@@ -3060,6 +3131,7 @@ export async function createExtraction(input: {
   transcriptSource?: string | null
   folderId?: string | null
   shareVisibility?: ExtractionShareVisibility
+  clonePermission?: ExtractionClonePermission
 }) {
   await ensureDbReady()
   await ensureDefaultExtractionFoldersForUser(input.userId)
@@ -3071,6 +3143,7 @@ export async function createExtraction(input: {
   })
   const resolvedFolderId = input.folderId?.trim() || defaultFolderId
   const resolvedShareVisibility = input.shareVisibility ?? 'private'
+  const resolvedClonePermission = input.clonePermission ?? 'disabled'
   const { rows } = await pool.query<DbExtractionRow>(
     `
       INSERT INTO extractions (
@@ -3087,6 +3160,7 @@ export async function createExtraction(input: {
         pro_tip,
         metadata_json,
         share_visibility,
+        clone_permission,
         source_type,
         source_label,
         folder_id,
@@ -3097,7 +3171,7 @@ export async function createExtraction(input: {
         source_file_mime_type,
         transcript_source
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
       RETURNING
         id,
         user_id,
@@ -3112,6 +3186,7 @@ export async function createExtraction(input: {
         pro_tip,
         metadata_json,
         share_visibility,
+        clone_permission,
         created_at,
         source_type,
         source_label,
@@ -3137,6 +3212,7 @@ export async function createExtraction(input: {
       input.proTip,
       input.metadataJson,
       resolvedShareVisibility,
+      resolvedClonePermission,
       sourceType,
       input.sourceLabel ?? null,
       resolvedFolderId,
@@ -3486,6 +3562,7 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
         ranked.pro_tip,
         ranked.metadata_json,
         ranked.share_visibility,
+        ranked.clone_permission,
         ranked.created_at,
         ranked.source_type,
         ranked.transcript_source,
@@ -3519,6 +3596,7 @@ export async function listExtractionsByUser(userId: string, limit = 30) {
           pro_tip,
           metadata_json,
           share_visibility,
+          clone_permission,
           created_at,
           source_type,
           transcript_source,
@@ -3702,6 +3780,7 @@ export async function listCircleExtractionsForMember(userId: string, limit = 30)
         e.pro_tip,
         e.metadata_json,
         e.share_visibility,
+        e.clone_permission,
         e.created_at,
         e.source_type,
         e.source_label,
@@ -3780,6 +3859,7 @@ export async function listExtractionsSharedViaFoldersForMember(userId: string, l
           e.pro_tip,
           e.metadata_json,
           e.share_visibility,
+          e.clone_permission,
           e.created_at,
           e.source_type,
           e.source_label,
@@ -3811,6 +3891,7 @@ export async function listExtractionsSharedViaFoldersForMember(userId: string, l
           ve.pro_tip,
           ve.metadata_json,
           ve.share_visibility,
+          ve.clone_permission,
           ve.created_at,
           ve.source_type,
           ve.source_label,
@@ -3837,6 +3918,7 @@ export async function listExtractionsSharedViaFoldersForMember(userId: string, l
         d.pro_tip,
         d.metadata_json,
         d.share_visibility,
+        d.clone_permission,
         d.created_at,
         d.source_type,
         d.source_label,
@@ -3944,6 +4026,7 @@ export async function findExtractionById(id: string) {
         pro_tip,
         metadata_json,
         share_visibility,
+        clone_permission,
         created_at
       FROM extractions
       WHERE id = $1
@@ -3971,6 +4054,7 @@ export async function findPublicExtractionById(id: string) {
         e.pro_tip,
         e.metadata_json,
         e.share_visibility,
+        e.clone_permission,
         e.created_at,
         e.source_type,
         e.source_label,
@@ -4019,6 +4103,7 @@ export async function listPublicExtractionsForSearch(input: { query: string; lim
         e.pro_tip,
         e.metadata_json,
         e.share_visibility,
+        e.clone_permission,
         e.created_at,
         e.source_type,
         e.source_label,
@@ -4129,6 +4214,303 @@ export async function findExtractionAccessForUser(input: { id: string; userId: s
   }
 }
 
+export async function findCloneableExtractionAccessForUser(input: { id: string; userId: string }) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionAccessRow>(
+    `
+      SELECT
+        e.id,
+        e.user_id,
+        e.parent_extraction_id,
+        e.url,
+        e.video_id,
+        e.video_title,
+        e.thumbnail_url,
+        e.extraction_mode,
+        e.objective,
+        e.phases_json,
+        e.pro_tip,
+        e.metadata_json,
+        e.share_visibility,
+        e.clone_permission,
+        e.created_at,
+        e.source_type,
+        e.source_label,
+        e.folder_id,
+        e.source_text,
+        e.source_file_url,
+        e.source_file_name,
+        e.source_file_size_bytes,
+        e.source_file_mime_type,
+        e.transcript_source,
+        CASE
+          WHEN e.user_id = $2 THEN 'owner'
+          WHEN EXISTS (
+            WITH RECURSIVE folder_ancestors AS (
+              SELECT f.id, f.parent_id
+              FROM extraction_folders f
+              WHERE
+                e.folder_id IS NOT NULL
+                AND f.id = e.folder_id
+                AND f.user_id = e.user_id
+              UNION ALL
+              SELECT parent.id, parent.parent_id
+              FROM extraction_folders parent
+              INNER JOIN folder_ancestors fa
+                ON fa.parent_id = parent.id
+              WHERE parent.user_id = e.user_id
+            )
+            SELECT 1
+            FROM extraction_folder_members fm
+            WHERE
+              fm.member_user_id = $2
+              AND fm.owner_user_id = e.user_id
+              AND fm.folder_id IN (SELECT id FROM folder_ancestors)
+            LIMIT 1
+          ) THEN 'viewer'
+          WHEN e.share_visibility = 'circle' AND m.role IS NOT NULL THEN m.role
+          WHEN e.share_visibility IN ('public', 'unlisted') THEN 'viewer'
+          ELSE NULL
+        END AS access_role
+      FROM extractions e
+      LEFT JOIN extraction_members m
+        ON m.extraction_id = e.id
+        AND m.user_id = $2
+      WHERE e.id = $1
+      LIMIT 1
+    `,
+    [input.id, input.userId]
+  )
+
+  if (!rows[0]) {
+    return { extraction: null, role: null as ExtractionAccessRole | null }
+  }
+
+  return {
+    extraction: mapExtractionRow(rows[0]),
+    role: normalizeExtractionAccessRole(rows[0].access_role),
+  }
+}
+
+export interface DbPlaybookLineageNode {
+  depth: number
+  isCurrent: boolean
+  isOriginal: boolean
+  accessible: boolean
+  title: string | null
+  ownerName: string | null
+  ownerEmail: string | null
+  createdAt: string | null
+}
+
+export interface DbPlaybookRecentCopy {
+  depth: number
+  title: string
+  copiedByName: string | null
+  copiedByEmail: string | null
+  createdAt: string
+  copiedFromTitle: string | null
+}
+
+export interface DbPlaybookLineageData {
+  generation: number
+  nodes: DbPlaybookLineageNode[]
+  copies:
+    | {
+        directCount: number
+        totalCount: number
+        recent: DbPlaybookRecentCopy[]
+      }
+    | null
+}
+
+async function readExtractionLineageRowById(id: string) {
+  const { rows } = await pool.query<DbExtractionLineageRow>(
+    `
+      SELECT
+        e.id,
+        e.user_id,
+        e.parent_extraction_id,
+        e.video_title,
+        e.source_label,
+        e.objective,
+        e.created_at,
+        owner.name AS owner_name,
+        owner.email AS owner_email
+      FROM extractions e
+      INNER JOIN users owner
+        ON owner.id = e.user_id
+      WHERE e.id = $1
+      LIMIT 1
+    `,
+    [id]
+  )
+
+  return rows[0] ?? null
+}
+
+export async function buildExtractionLineageForUser(input: {
+  extractionId: string
+  userId: string
+  includeCopyStats: boolean
+}) {
+  await ensureDbReady()
+
+  const nodes: DbPlaybookLineageNode[] = []
+  const seen = new Set<string>()
+  let currentId = input.extractionId.trim()
+  let depth = 0
+
+  while (currentId && depth < 24 && !seen.has(currentId)) {
+    seen.add(currentId)
+
+    const row = await readExtractionLineageRowById(currentId)
+    if (!row) break
+
+    const access = await findCloneableExtractionAccessForUser({
+      id: currentId,
+      userId: input.userId,
+    })
+    const accessible = Boolean(access.role)
+
+    nodes.push({
+      depth,
+      isCurrent: depth === 0,
+      isOriginal: !row.parent_extraction_id,
+      accessible,
+      title: accessible
+        ? resolveDbExtractionDisplayTitle({
+            id: row.id,
+            video_title: row.video_title,
+            source_label: row.source_label,
+            objective: row.objective,
+          })
+        : null,
+      ownerName: accessible ? row.owner_name : null,
+      ownerEmail: accessible ? row.owner_email : null,
+      createdAt: accessible ? toIso(row.created_at) : null,
+    })
+
+    currentId = row.parent_extraction_id ?? ''
+    depth += 1
+  }
+
+  let copies: DbPlaybookLineageData['copies'] = null
+
+  if (input.includeCopyStats) {
+    const directCountResult = await pool.query<DbExtractionCountRow>(
+      `
+        SELECT COUNT(*) AS count
+        FROM extractions
+        WHERE parent_extraction_id = $1
+      `,
+      [input.extractionId]
+    )
+
+    const totalCountResult = await pool.query<DbExtractionCountRow>(
+      `
+        WITH RECURSIVE descendants AS (
+          SELECT id
+          FROM extractions
+          WHERE parent_extraction_id = $1
+          UNION ALL
+          SELECT child.id
+          FROM extractions child
+          INNER JOIN descendants d
+            ON child.parent_extraction_id = d.id
+        )
+        SELECT COUNT(*) AS count
+        FROM descendants
+      `,
+      [input.extractionId]
+    )
+
+    const recentCopiesResult = await pool.query<DbExtractionRecentCloneRow>(
+      `
+        WITH RECURSIVE descendants AS (
+          SELECT
+            e.id,
+            e.parent_extraction_id,
+            e.user_id,
+            e.video_title,
+            e.source_label,
+            e.objective,
+            e.created_at,
+            1::int AS depth
+          FROM extractions e
+          WHERE e.parent_extraction_id = $1
+          UNION ALL
+          SELECT
+            child.id,
+            child.parent_extraction_id,
+            child.user_id,
+            child.video_title,
+            child.source_label,
+            child.objective,
+            child.created_at,
+            d.depth + 1
+          FROM extractions child
+          INNER JOIN descendants d
+            ON child.parent_extraction_id = d.id
+        )
+        SELECT
+          d.id,
+          d.parent_extraction_id,
+          d.user_id,
+          d.video_title,
+          d.source_label,
+          d.objective,
+          d.created_at,
+          d.depth,
+          owner.name AS owner_name,
+          owner.email AS owner_email,
+          parent.video_title AS parent_video_title,
+          parent.source_label AS parent_source_label,
+          parent.objective AS parent_objective
+        FROM descendants d
+        INNER JOIN users owner
+          ON owner.id = d.user_id
+        LEFT JOIN extractions parent
+          ON parent.id = d.parent_extraction_id
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT 10
+      `,
+      [input.extractionId]
+    )
+
+    copies = {
+      directCount: directCountResult.rows[0] ? parseDbInteger(directCountResult.rows[0].count) : 0,
+      totalCount: totalCountResult.rows[0] ? parseDbInteger(totalCountResult.rows[0].count) : 0,
+      recent: recentCopiesResult.rows.map((row) => ({
+        depth: parseDbInteger(row.depth),
+        title: resolveDbExtractionDisplayTitle({
+          id: row.id,
+          video_title: row.video_title,
+          source_label: row.source_label,
+          objective: row.objective,
+        }),
+        copiedByName: row.owner_name,
+        copiedByEmail: row.owner_email,
+        createdAt: toIso(row.created_at),
+        copiedFromTitle: row.parent_extraction_id
+          ? resolveDbExtractionDisplayTitle({
+              id: row.parent_extraction_id,
+              video_title: row.parent_video_title,
+              source_label: row.parent_source_label,
+              objective: row.parent_objective,
+            })
+          : null,
+      })),
+    }
+  }
+
+  return {
+    generation: Math.max(0, nodes.length - 1),
+    nodes,
+    copies,
+  } satisfies DbPlaybookLineageData
+}
+
 export async function findExtractionByIdForUser(input: { id: string; userId: string }) {
   await ensureDbReady()
   const { rows } = await pool.query<DbExtractionRow>(
@@ -4136,6 +4518,7 @@ export async function findExtractionByIdForUser(input: { id: string; userId: str
       SELECT
         id,
         user_id,
+        parent_extraction_id,
         url,
         video_id,
         video_title,
@@ -4146,7 +4529,28 @@ export async function findExtractionByIdForUser(input: { id: string; userId: str
         pro_tip,
         metadata_json,
         share_visibility,
-        created_at
+        created_at,
+        clone_permission,
+        source_type,
+        source_label,
+        folder_id,
+        is_starred,
+        source_text,
+        source_file_url,
+        source_file_name,
+        source_file_size_bytes,
+        source_file_mime_type,
+        (source_text IS NOT NULL AND source_text <> '') AS has_source_text,
+        transcript_source,
+        (
+          SELECT COALESCE(
+            jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'color', t.color) ORDER BY t.name),
+            '[]'::jsonb
+          )
+          FROM extraction_tag_assignments eta
+          JOIN extraction_tags t ON t.id = eta.tag_id
+          WHERE eta.extraction_id = extractions.id
+        )::text AS tags_json
       FROM extractions
       WHERE id = $1 AND user_id = $2
       LIMIT 1
@@ -4472,9 +4876,43 @@ export async function updateExtractionShareVisibilityForUser(input: {
         pro_tip,
         metadata_json,
         share_visibility,
+        clone_permission,
         created_at
     `,
     [input.shareVisibility, input.id, input.userId]
+  )
+
+  return rows[0] ? mapExtractionRow(rows[0]) : null
+}
+
+export async function updateExtractionClonePermissionForUser(input: {
+  id: string
+  userId: string
+  clonePermission: ExtractionClonePermission
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionRow>(
+    `
+      UPDATE extractions
+      SET clone_permission = $1
+      WHERE id = $2 AND user_id = $3
+      RETURNING
+        id,
+        user_id,
+        url,
+        video_id,
+        video_title,
+        thumbnail_url,
+        extraction_mode,
+        objective,
+        phases_json,
+        pro_tip,
+        metadata_json,
+        share_visibility,
+        clone_permission,
+        created_at
+    `,
+    [input.clonePermission, input.id, input.userId]
   )
 
   return rows[0] ? mapExtractionRow(rows[0]) : null
@@ -4519,6 +4957,7 @@ export async function updateExtractionPhasesForUser(input: {
         pro_tip,
         metadata_json,
         share_visibility,
+        clone_permission,
         created_at,
         source_type,
         source_label,
@@ -4562,6 +5001,7 @@ export async function updateExtractionGeneratedContentForUser(input: {
         pro_tip,
         metadata_json,
         share_visibility,
+        clone_permission,
         created_at,
         source_type,
         source_label,
@@ -4606,6 +5046,859 @@ export async function updateExtractionMetaForUser(input: {
     [input.videoTitle, input.sourceLabel, input.thumbnailUrl, input.objective, input.id, input.userId]
   )
   return rows[0] ? mapExtractionRow(rows[0]) : null
+}
+
+type ExtractionCloneMode = 'full' | 'template'
+
+interface DbExtractionDependencyRow {
+  task_id: string
+  predecessor_task_id: string
+}
+
+interface CloneTaskSeed {
+  sourceTaskId: string
+  phaseId: number
+  phaseTitle: string
+  itemIndex: number
+  itemText: string
+  nodeId: string
+  parentNodeId: string | null
+  depth: number
+  positionPath: string
+  checked: boolean
+  status: ExtractionTaskStatus
+  numericValue: number | null
+  numericFormulaJson: string
+  dueAt: string | null
+  completedAt: string | null
+  scheduledStartAt: string | null
+  scheduledEndAt: string | null
+  durationDays: number
+  flowNodeType: 'process' | 'decision'
+  createdAt: string
+  updatedAt: string
+}
+
+function remapTaskNumericFormulaJson(
+  raw: string,
+  taskIdMap: Map<string, string>
+) {
+  const parsed = parseTaskNumericFormulaJson(raw)
+  if (!parsed) return '{}'
+
+  const remappedSourceTaskIds = parsed.sourceTaskIds
+    .map((sourceTaskId) => taskIdMap.get(sourceTaskId) ?? null)
+    .filter((value): value is string => Boolean(value))
+
+  if (remappedSourceTaskIds.length === 0) return '{}'
+  return serializeTaskNumericFormula({
+    operation: parsed.operation,
+    sourceTaskIds: remappedSourceTaskIds,
+  })
+}
+
+function buildCloneTaskSeeds(
+  sourcePhasesJson: string
+): CloneTaskSeed[] {
+  const nowIso = new Date().toISOString()
+
+  try {
+    return flattenPlaybookPhases(normalizePlaybookPhases(JSON.parse(sourcePhasesJson))).map((task) => ({
+      sourceTaskId: `generated:${task.nodeId}`,
+      phaseId: task.phaseId,
+      phaseTitle: task.phaseTitle,
+      itemIndex: task.itemIndex,
+      itemText: task.itemText,
+      nodeId: task.nodeId,
+      parentNodeId: task.parentNodeId ?? null,
+      depth: task.depth,
+      positionPath: task.positionPath,
+      checked: false,
+      status: 'pending',
+      numericValue: null,
+      numericFormulaJson: '{}',
+      dueAt: null,
+      completedAt: null,
+      scheduledStartAt: null,
+      scheduledEndAt: null,
+      durationDays: 1,
+      flowNodeType: 'process',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    }))
+  } catch {
+    return []
+  }
+}
+
+export async function cloneExtractionForUser(input: {
+  sourceExtractionId: string
+  targetUserId: string
+  folderId?: string | null
+  mode: ExtractionCloneMode
+  name: string
+}) {
+  await ensureDbReady()
+  await ensureDefaultExtractionFoldersForUser(input.targetUserId)
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const generalFolderId = buildSystemExtractionFolderIdForUser({
+      userId: input.targetUserId,
+      key: 'general',
+    })
+    const resolvedFolderId = input.folderId?.trim() || generalFolderId
+
+    const sourceExtractionRows = await client.query<DbExtractionRow>(
+      `
+        SELECT
+          id,
+          user_id,
+          parent_extraction_id,
+          url,
+          video_id,
+          video_title,
+          thumbnail_url,
+          extraction_mode,
+          objective,
+          phases_json,
+          pro_tip,
+          metadata_json,
+          share_visibility,
+          clone_permission,
+          created_at,
+          source_type,
+          source_label,
+          folder_id,
+          source_text,
+          source_file_url,
+          source_file_name,
+          source_file_size_bytes,
+          source_file_mime_type,
+          transcript_source
+        FROM extractions
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [input.sourceExtractionId]
+    )
+
+    if (!sourceExtractionRows.rows[0]) {
+      throw new Error('No se encontró el playbook origen.')
+    }
+
+    const sourceExtraction = mapExtractionRow(sourceExtractionRows.rows[0])
+    const clonedTitle =
+      input.name.trim().slice(0, 300) ||
+      sourceExtraction.video_title?.trim() ||
+      sourceExtraction.source_label?.trim() ||
+      sourceExtraction.objective.trim() ||
+      'Copia'
+
+    const newExtractionId = randomUUID()
+    const insertedExtractionRows = await client.query<DbExtractionRow>(
+      `
+        INSERT INTO extractions (
+          id,
+          user_id,
+          parent_extraction_id,
+          url,
+          video_id,
+          video_title,
+          thumbnail_url,
+          extraction_mode,
+          objective,
+          phases_json,
+          pro_tip,
+          metadata_json,
+          share_visibility,
+          clone_permission,
+          source_type,
+          source_label,
+          folder_id,
+          source_text,
+          source_file_url,
+          source_file_name,
+          source_file_size_bytes,
+          source_file_mime_type,
+          transcript_source
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'private', 'disabled',
+          $13, $14, $15, $16, $17, $18, $19, $20, $21
+        )
+        RETURNING
+          id,
+          user_id,
+          parent_extraction_id,
+          url,
+          video_id,
+          video_title,
+          thumbnail_url,
+          extraction_mode,
+          objective,
+          phases_json,
+          pro_tip,
+          metadata_json,
+          share_visibility,
+          clone_permission,
+          created_at,
+          source_type,
+          source_label,
+          folder_id,
+          source_text,
+          source_file_url,
+          source_file_name,
+          source_file_size_bytes,
+          source_file_mime_type,
+          transcript_source
+      `,
+      [
+        newExtractionId,
+        input.targetUserId,
+        sourceExtraction.id,
+        sourceExtraction.url,
+        sourceExtraction.video_id,
+        clonedTitle,
+        sourceExtraction.thumbnail_url,
+        sourceExtraction.extraction_mode,
+        sourceExtraction.objective,
+        sourceExtraction.phases_json,
+        sourceExtraction.pro_tip,
+        sourceExtraction.metadata_json,
+        sourceExtraction.source_type,
+        clonedTitle,
+        resolvedFolderId,
+        sourceExtraction.source_text,
+        sourceExtraction.source_file_url,
+        sourceExtraction.source_file_name,
+        sourceExtraction.source_file_size_bytes,
+        sourceExtraction.source_file_mime_type,
+        sourceExtraction.transcript_source,
+      ]
+    )
+
+    const sourceAdditionalSources = await client.query<DbExtractionAdditionalSourceRow>(
+      `
+        SELECT
+          id,
+          extraction_id,
+          created_by_user_id,
+          source_type,
+          source_label,
+          url,
+          source_text,
+          source_file_url,
+          source_file_name,
+          source_file_size_bytes,
+          source_file_mime_type,
+          analysis_status,
+          analyzed_at,
+          created_at
+        FROM extraction_additional_sources
+        WHERE extraction_id = $1
+        ORDER BY created_at ASC, id ASC
+      `,
+      [sourceExtraction.id]
+    )
+
+    for (const source of sourceAdditionalSources.rows) {
+      await client.query(
+        `
+          INSERT INTO extraction_additional_sources (
+            id,
+            extraction_id,
+            created_by_user_id,
+            source_type,
+            source_label,
+            url,
+            source_text,
+            source_file_url,
+            source_file_name,
+            source_file_size_bytes,
+            source_file_mime_type,
+            analysis_status,
+            analyzed_at,
+            created_at
+          )
+          VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+          )
+        `,
+        [
+          randomUUID(),
+          newExtractionId,
+          input.targetUserId,
+          source.source_type,
+          source.source_label,
+          source.url,
+          source.source_text,
+          source.source_file_url,
+          source.source_file_name,
+          source.source_file_size_bytes,
+          source.source_file_mime_type,
+          source.analysis_status === 'analyzed' ? 'analyzed' : 'pending',
+          source.analyzed_at ? toIso(source.analyzed_at) : null,
+          toIso(source.created_at),
+        ]
+      )
+    }
+
+    const sourceTags = await client.query<{ name: string; color: string }>(
+      `
+        SELECT t.name, t.color
+        FROM extraction_tag_assignments eta
+        INNER JOIN extraction_tags t ON t.id = eta.tag_id
+        WHERE eta.extraction_id = $1
+        ORDER BY t.name ASC
+      `,
+      [sourceExtraction.id]
+    )
+
+    for (const tag of sourceTags.rows) {
+      const tagRows = await client.query<{ id: string }>(
+        `
+          INSERT INTO extraction_tags (id, user_id, name, color)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (user_id, name) DO UPDATE SET color = EXCLUDED.color
+          RETURNING id
+        `,
+        [randomUUID(), input.targetUserId, tag.name, tag.color]
+      )
+
+      const nextTagId = tagRows.rows[0]?.id
+      if (!nextTagId) continue
+
+      await client.query(
+        `
+          INSERT INTO extraction_tag_assignments (extraction_id, tag_id)
+          VALUES ($1, $2)
+          ON CONFLICT DO NOTHING
+        `,
+        [newExtractionId, nextTagId]
+      )
+    }
+
+    const sourceTaskRows = await client.query<DbExtractionTaskRow>(
+      `
+        SELECT
+          id,
+          extraction_id,
+          user_id,
+          phase_id,
+          phase_title,
+          item_index,
+          item_text,
+          node_id,
+          parent_node_id,
+          depth,
+          position_path,
+          checked,
+          status,
+          numeric_value,
+          numeric_formula_json,
+          due_at,
+          completed_at,
+          scheduled_start_at,
+          scheduled_end_at,
+          duration_days,
+          flow_node_type,
+          created_at,
+          updated_at
+        FROM extraction_tasks
+        WHERE extraction_id = $1
+        ORDER BY phase_id ASC, string_to_array(position_path, '.')::int[] ASC, item_index ASC, created_at ASC
+      `,
+      [sourceExtraction.id]
+    )
+
+    const sourceTaskSeeds = sourceTaskRows.rows.length > 0
+      ? sourceTaskRows.rows.map((row) => {
+          const task = mapExtractionTaskRow(row)
+          return {
+            sourceTaskId: task.id,
+            phaseId: task.phase_id,
+            phaseTitle: task.phase_title,
+            itemIndex: task.item_index,
+            itemText: task.item_text,
+            nodeId: task.node_id,
+            parentNodeId: task.parent_node_id,
+            depth: task.depth,
+            positionPath: task.position_path,
+            checked: task.checked,
+            status: task.status,
+            numericValue: task.numeric_value,
+            numericFormulaJson: task.numeric_formula_json,
+            dueAt: task.due_at,
+            completedAt: task.completed_at,
+            scheduledStartAt: task.scheduled_start_at,
+            scheduledEndAt: task.scheduled_end_at,
+            durationDays: task.duration_days,
+            flowNodeType: task.flow_node_type === 'decision' ? 'decision' : 'process',
+            createdAt: task.created_at,
+            updatedAt: task.updated_at,
+          } satisfies CloneTaskSeed
+        })
+      : buildCloneTaskSeeds(sourceExtraction.phases_json)
+
+    const taskIdMap = new Map<string, string>()
+    for (const task of sourceTaskSeeds) {
+      taskIdMap.set(task.sourceTaskId, randomUUID())
+    }
+
+    for (const task of sourceTaskSeeds) {
+      const clonedTaskId = taskIdMap.get(task.sourceTaskId)
+      if (!clonedTaskId) continue
+
+      const isFullClone = input.mode === 'full' && sourceTaskRows.rows.length > 0
+      await client.query(
+        `
+          INSERT INTO extraction_tasks (
+            id,
+            extraction_id,
+            user_id,
+            phase_id,
+            phase_title,
+            item_index,
+            item_text,
+            node_id,
+            parent_node_id,
+            depth,
+            position_path,
+            checked,
+            status,
+            numeric_value,
+            numeric_formula_json,
+            due_at,
+            completed_at,
+            scheduled_start_at,
+            scheduled_end_at,
+            duration_days,
+            flow_node_type,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16, $17, $18,
+            $19, $20, $21, $22, $23
+          )
+        `,
+        [
+          clonedTaskId,
+          newExtractionId,
+          input.targetUserId,
+          task.phaseId,
+          task.phaseTitle,
+          task.itemIndex,
+          task.itemText,
+          task.nodeId,
+          task.parentNodeId,
+          task.depth,
+          task.positionPath,
+          isFullClone ? task.checked : false,
+          isFullClone ? task.status : 'pending',
+          isFullClone ? task.numericValue : null,
+          isFullClone ? remapTaskNumericFormulaJson(task.numericFormulaJson, taskIdMap) : '{}',
+          isFullClone ? task.dueAt : null,
+          isFullClone ? task.completedAt : null,
+          isFullClone ? task.scheduledStartAt : null,
+          isFullClone ? task.scheduledEndAt : null,
+          isFullClone ? Math.max(1, task.durationDays) : 1,
+          isFullClone ? task.flowNodeType : 'process',
+          isFullClone ? task.createdAt : new Date().toISOString(),
+          isFullClone ? task.updatedAt : new Date().toISOString(),
+        ]
+      )
+    }
+
+    if (input.mode === 'full' && sourceTaskRows.rows.length > 0) {
+      const dependencies = await client.query<DbExtractionDependencyRow>(
+        `
+          SELECT task_id, predecessor_task_id
+          FROM extraction_task_dependencies
+          WHERE extraction_id = $1
+        `,
+        [sourceExtraction.id]
+      )
+
+      for (const dependency of dependencies.rows) {
+        const nextTaskId = taskIdMap.get(dependency.task_id)
+        const nextPredecessorId = taskIdMap.get(dependency.predecessor_task_id)
+        if (!nextTaskId || !nextPredecessorId) continue
+
+        await client.query(
+          `
+            INSERT INTO extraction_task_dependencies (
+              extraction_id,
+              task_id,
+              predecessor_task_id
+            )
+            VALUES ($1, $2, $3)
+          `,
+          [newExtractionId, nextTaskId, nextPredecessorId]
+        )
+      }
+
+      const events = await client.query<{
+        id: string
+        task_id: string
+        user_id: string
+        event_type: ExtractionTaskEventType
+        content: string
+        metadata_json: string
+        created_at: Date | string
+      }>(
+        `
+          SELECT
+            id,
+            task_id,
+            user_id,
+            event_type,
+            content,
+            metadata_json,
+            created_at
+          FROM extraction_task_events
+          WHERE task_id = ANY($1::text[])
+          ORDER BY created_at ASC, id ASC
+        `,
+        [sourceTaskRows.rows.map((task) => task.id)]
+      )
+
+      for (const event of events.rows) {
+        const nextTaskId = taskIdMap.get(event.task_id)
+        if (!nextTaskId) continue
+
+        await client.query(
+          `
+            INSERT INTO extraction_task_events (
+              id,
+              task_id,
+              user_id,
+              event_type,
+              content,
+              metadata_json,
+              created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+          `,
+          [
+            randomUUID(),
+            nextTaskId,
+            event.user_id,
+            event.event_type,
+            event.content,
+            event.metadata_json,
+            toIso(event.created_at),
+          ]
+        )
+      }
+
+      const attachments = await client.query<DbExtractionTaskAttachmentRow>(
+        `
+          SELECT
+            id,
+            task_id,
+            extraction_id,
+            user_id,
+            attachment_type,
+            storage_provider,
+            url,
+            thumbnail_url,
+            title,
+            mime_type,
+            size_bytes,
+            metadata_json,
+            created_at,
+            updated_at,
+            NULL::text AS user_name,
+            NULL::text AS user_email
+          FROM extraction_task_attachments
+          WHERE extraction_id = $1
+          ORDER BY created_at ASC, id ASC
+        `,
+        [sourceExtraction.id]
+      )
+
+      for (const attachment of attachments.rows) {
+        const nextTaskId = taskIdMap.get(attachment.task_id)
+        if (!nextTaskId) continue
+
+        await client.query(
+          `
+            INSERT INTO extraction_task_attachments (
+              id,
+              task_id,
+              extraction_id,
+              user_id,
+              attachment_type,
+              storage_provider,
+              url,
+              thumbnail_url,
+              title,
+              mime_type,
+              size_bytes,
+              metadata_json,
+              created_at,
+              updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          `,
+          [
+            randomUUID(),
+            nextTaskId,
+            newExtractionId,
+            attachment.user_id,
+            attachment.attachment_type,
+            attachment.storage_provider,
+            attachment.url,
+            attachment.thumbnail_url,
+            attachment.title,
+            attachment.mime_type,
+            attachment.size_bytes != null ? Number(attachment.size_bytes) : null,
+            attachment.metadata_json,
+            toIso(attachment.created_at),
+            toIso(attachment.updated_at),
+          ]
+        )
+      }
+
+      const comments = await client.query<DbExtractionTaskCommentRow>(
+        `
+          SELECT
+            id,
+            task_id,
+            extraction_id,
+            user_id,
+            parent_comment_id,
+            is_hidden,
+            content,
+            created_at,
+            updated_at,
+            NULL::text AS user_name,
+            NULL::text AS user_email
+          FROM extraction_task_comments
+          WHERE extraction_id = $1
+          ORDER BY created_at ASC, id ASC
+        `,
+        [sourceExtraction.id]
+      )
+
+      const commentIdMap = new Map<string, string>()
+      for (const comment of comments.rows) {
+        commentIdMap.set(comment.id, randomUUID())
+      }
+
+      for (const comment of comments.rows) {
+        const nextTaskId = taskIdMap.get(comment.task_id)
+        const nextCommentId = commentIdMap.get(comment.id)
+        if (!nextTaskId || !nextCommentId) continue
+
+        await client.query(
+          `
+            INSERT INTO extraction_task_comments (
+              id,
+              task_id,
+              extraction_id,
+              user_id,
+              parent_comment_id,
+              is_hidden,
+              content,
+              created_at,
+              updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          `,
+          [
+            nextCommentId,
+            nextTaskId,
+            newExtractionId,
+            comment.user_id,
+            comment.parent_comment_id ? commentIdMap.get(comment.parent_comment_id) ?? null : null,
+            comment.is_hidden,
+            comment.content,
+            toIso(comment.created_at),
+            toIso(comment.updated_at),
+          ]
+        )
+      }
+
+      const edges = await client.query<DbExtractionTaskEdgeRow>(
+        `
+          SELECT
+            id,
+            extraction_id,
+            from_task_id,
+            to_task_id,
+            edge_type,
+            label,
+            expected_extra_days,
+            sort_order,
+            created_at,
+            updated_at
+          FROM extraction_task_edges
+          WHERE extraction_id = $1
+          ORDER BY sort_order ASC, created_at ASC
+        `,
+        [sourceExtraction.id]
+      )
+
+      for (const edge of edges.rows) {
+        const nextFromTaskId = taskIdMap.get(edge.from_task_id)
+        const nextToTaskId = taskIdMap.get(edge.to_task_id)
+        if (!nextFromTaskId || !nextToTaskId) continue
+
+        await client.query(
+          `
+            INSERT INTO extraction_task_edges (
+              id,
+              extraction_id,
+              from_task_id,
+              to_task_id,
+              edge_type,
+              label,
+              expected_extra_days,
+              sort_order,
+              created_at,
+              updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          `,
+          [
+            randomUUID(),
+            newExtractionId,
+            nextFromTaskId,
+            nextToTaskId,
+            edge.edge_type,
+            edge.label,
+            edge.expected_extra_days != null ? Number(edge.expected_extra_days) : null,
+            typeof edge.sort_order === 'number' ? edge.sort_order : Number.parseInt(String(edge.sort_order), 10) || 0,
+            toIso(edge.created_at),
+            toIso(edge.updated_at),
+          ]
+        )
+      }
+
+      const selections = await client.query<DbDecisionSelectionRow>(
+        `
+          SELECT
+            extraction_id,
+            decision_task_id,
+            selected_to_task_id,
+            created_at,
+            updated_at
+          FROM extraction_task_decision_selection
+          WHERE extraction_id = $1
+        `,
+        [sourceExtraction.id]
+      )
+
+      for (const selection of selections.rows) {
+        const nextDecisionTaskId = taskIdMap.get(selection.decision_task_id)
+        const nextSelectedToTaskId = taskIdMap.get(selection.selected_to_task_id)
+        if (!nextDecisionTaskId || !nextSelectedToTaskId) continue
+
+        await client.query(
+          `
+            INSERT INTO extraction_task_decision_selection (
+              extraction_id,
+              decision_task_id,
+              selected_to_task_id,
+              created_at,
+              updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5)
+          `,
+          [
+            newExtractionId,
+            nextDecisionTaskId,
+            nextSelectedToTaskId,
+            toIso(selection.created_at),
+            toIso(selection.updated_at),
+          ]
+        )
+      }
+
+      const positions = await client.query<{
+        task_id: string
+        cx: number | string
+        cy: number | string
+        updated_at: Date | string
+      }>(
+        `
+          SELECT task_id, cx, cy, updated_at
+          FROM flow_node_positions
+          WHERE extraction_id = $1
+        `,
+        [sourceExtraction.id]
+      )
+
+      for (const position of positions.rows) {
+        const nextTaskId = taskIdMap.get(position.task_id)
+        if (!nextTaskId) continue
+
+        await client.query(
+          `
+            INSERT INTO flow_node_positions (
+              task_id,
+              extraction_id,
+              cx,
+              cy,
+              updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5)
+          `,
+          [
+            nextTaskId,
+            newExtractionId,
+            Number(position.cx),
+            Number(position.cy),
+            toIso(position.updated_at),
+          ]
+        )
+      }
+
+      const decks = await client.query<{ deck_json: string; created_at: Date | string; updated_at: Date | string }>(
+        `
+          SELECT deck_json, created_at, updated_at
+          FROM extraction_presentations
+          WHERE extraction_id = $1
+          LIMIT 1
+        `,
+        [sourceExtraction.id]
+      )
+
+      if (decks.rows[0]) {
+        await client.query(
+          `
+            INSERT INTO extraction_presentations (
+              extraction_id,
+              deck_json,
+              created_at,
+              updated_at
+            )
+            VALUES ($1, $2, $3, $4)
+          `,
+          [
+            newExtractionId,
+            decks.rows[0].deck_json,
+            toIso(decks.rows[0].created_at),
+            toIso(decks.rows[0].updated_at),
+          ]
+        )
+      }
+    }
+
+    await client.query('COMMIT')
+    return mapExtractionRow(insertedExtractionRows.rows[0])
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 export async function listExtractionFoldersByUser(userId: string) {

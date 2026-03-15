@@ -27,10 +27,6 @@ export function LandingPricingTable({ lang }: LandingPricingTableProps) {
       .finally(() => setLoadingPlans(false))
   }, [])
 
-  const note =
-    lang === 'es'
-      ? 'Los planes y precios se cargan desde la misma configuración que usa la página completa de precios.'
-      : 'Plans and pricing are loaded from the same configuration used by the full pricing page.'
   const noteCta = lang === 'es' ? 'Ver precios completos' : 'View full pricing'
 
   return (
@@ -44,7 +40,6 @@ export function LandingPricingTable({ lang }: LandingPricingTableProps) {
       )}
 
       <div className="mt-6 text-center text-sm text-zinc-500 dark:text-zinc-400">
-        {note}{' '}
         <Link
           href="/pricing"
           className="font-semibold text-cyan-700 underline decoration-cyan-300 underline-offset-4 transition-colors hover:text-cyan-800 dark:text-cyan-300 dark:decoration-cyan-500/50 dark:hover:text-cyan-200"

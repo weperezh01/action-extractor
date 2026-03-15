@@ -44,7 +44,8 @@ import {
 } from '@/lib/rate-limit'
 import { resolveVideoPreview } from '@/lib/video-preview'
 import { detectSourceType } from '@/lib/source-detector'
-import { extractWebContent, truncateForAi } from '@/lib/content-extractor'
+import { extractWebContent } from '@/lib/content-extractor'
+import { prepareContentForExtraction } from '@/lib/long-content-preparation'
 import { flattenItemsAsText, normalizePlaybookPhases } from '@/lib/playbook-tree'
 import { resolveYoutubeTranscriptWithFallback } from '@/lib/youtube-transcript-fallback'
 
@@ -513,6 +514,7 @@ export async function POST(req: NextRequest) {
               id: saved.id,
               orderNumber: orderNumber ?? undefined,
               shareVisibility: saved.share_visibility,
+              clonePermission: saved.clone_permission,
               createdAt: saved.created_at,
               cached: true,
               sourceType,
@@ -689,14 +691,18 @@ export async function POST(req: NextRequest) {
           return
         }
 
-        const { finalText: finalTranscript, truncated } = truncateForAi(contentText)
-
-        if (truncated) {
-          send('status', {
-            step: 'transcript-truncated',
-            message: 'Contenido largo detectado. Se procesará una versión resumida.',
-          })
-        }
+        const preparedContent = await prepareContentForExtraction({
+          text: contentText,
+          provider: EXTRACTION_PROVIDER,
+          model: EXTRACTION_MODEL,
+          userId: user?.id ?? null,
+          sourceType,
+          onUsage: (usage) => {
+            pendingAiUsageLogs.push(usage)
+          },
+          onProgress: (progress) => send('status', progress),
+        })
+        const finalTranscript = preparedContent.finalText
 
         const wordCount = contentText.split(/\s+/).length
         const { originalTime, savedTime } = estimateTime(wordCount)
@@ -859,6 +865,7 @@ export async function POST(req: NextRequest) {
             id: saved.id,
             orderNumber: orderNumber ?? undefined,
             shareVisibility: saved.share_visibility,
+            clonePermission: saved.clone_permission,
             createdAt: saved.created_at,
             cached: false,
             sourceType,

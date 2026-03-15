@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
         id: string
         orderNumber: number
         shareVisibility: string
+        clonePermission: string
         url: string | null
         videoId: string | null
         videoTitle: string | null
@@ -81,6 +82,7 @@ export async function GET(req: NextRequest) {
           id: extraction.id,
           orderNumber: extraction.order_number ?? 0,
           shareVisibility: extraction.share_visibility ?? 'private',
+          clonePermission: extraction.clone_permission ?? 'disabled',
           url: extraction.url,
           videoId: extraction.video_id,
           videoTitle: extraction.video_title,

@@ -1,6 +1,6 @@
 'use client'
 
-import { type MouseEvent as ReactMouseEvent, type ReactNode, useEffect, useState } from 'react'
+import { type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import Link from 'next/link'
 import {
   ArrowRight,
@@ -11,22 +11,19 @@ import {
   Lightbulb,
   Link2,
   ListChecks,
-  Moon,
+  Network,
   PlayCircle,
   Quote,
   ShieldCheck,
   Sparkles,
-  Sun,
 } from 'lucide-react'
+import { MarketingHeader } from '@/app/components/MarketingHeader'
 import { HeroWorkflowPreview } from '@/app/home/components/landing/HeroWorkflowPreview'
 import { LandingPricingTable } from '@/app/home/components/landing/LandingPricingTable'
 import { UseCasesTabs } from '@/app/home/components/landing/UseCasesTabs'
 import { ViewsExplorer } from '@/app/home/components/landing/ViewsExplorer'
-import { NotesAideLogo } from '@/app/components/NotesAideLogo'
 import { useLang } from '@/app/home/hooks/useLang'
-import { applyTheme, getThemeStorageKey, resolveInitialTheme } from '@/app/home/lib/utils'
 import { t } from '@/app/home/lib/i18n'
-import type { Theme } from '@/app/home/lib/types'
 import { GuestExtractorSection } from '@/app/home/components/GuestExtractorSection'
 
 const containerClass = 'mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8'
@@ -125,25 +122,6 @@ function FaqItem({ question, answer }: { question: string; answer: string }) {
 
 export default function LandingPage() {
   const { lang, toggle: toggleLang } = useLang()
-  const [theme, setTheme] = useState<Theme>('light')
-  const themeStorageKey = getThemeStorageKey()
-
-  useEffect(() => {
-    const initial = resolveInitialTheme()
-    setTheme(initial)
-    applyTheme(initial)
-  }, [])
-
-  const toggleTheme = () => {
-    const next: Theme = theme === 'dark' ? 'light' : 'dark'
-    setTheme(next)
-    applyTheme(next)
-    try {
-      localStorage.setItem(themeStorageKey, next)
-    } catch {
-      // noop
-    }
-  }
 
   const steps = [
     {
@@ -198,28 +176,14 @@ export default function LandingPage() {
       iconTone: 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300',
       hoverTone: 'hover:border-amber-300 dark:hover:border-amber-500/40',
     },
+    {
+      icon: <Network size={18} />,
+      title: t(lang, 'landing.mode5.title'),
+      desc: t(lang, 'landing.mode5.desc'),
+      iconTone: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300',
+      hoverTone: 'hover:border-indigo-300 dark:hover:border-indigo-500/40',
+    },
   ]
-
-  const sectionLinks =
-    lang === 'es'
-      ? [
-          { href: '#how-it-works', label: 'Cómo funciona' },
-          { href: '#extraction-modes', label: 'Formatos' },
-          { href: '#views', label: 'Vistas' },
-          { href: '#use-cases', label: 'Casos de uso' },
-          { href: '#integrations', label: 'Integraciones' },
-          { href: '#pricing', label: 'Pricing' },
-          { href: '#faq', label: 'FAQ' },
-        ]
-      : [
-          { href: '#how-it-works', label: 'How it works' },
-          { href: '#extraction-modes', label: 'Formats' },
-          { href: '#views', label: 'Views' },
-          { href: '#use-cases', label: 'Use cases' },
-          { href: '#integrations', label: 'Integrations' },
-          { href: '#pricing', label: 'Pricing' },
-          { href: '#faq', label: 'FAQ' },
-        ]
 
   const trustTools = ['Notion', 'Trello', 'Todoist', 'Google Docs']
   const heroStats = [
@@ -240,7 +204,7 @@ export default function LandingPage() {
           {
             question: '¿Qué obtengo como resultado?',
             answer:
-              'Puedes elegir entre Plan de Acción, Resumen Ejecutivo, Ideas de Negocio o Frases Clave.',
+              'Puedes elegir entre Plan de Acción, Resumen Ejecutivo, Ideas de Negocio, Mapa Conceptual o Frases Clave.',
           },
           {
             question: '¿Puedo exportar el resultado?',
@@ -271,7 +235,7 @@ export default function LandingPage() {
           {
             question: 'What outputs do I get?',
             answer:
-              'You can choose Action Plan, Executive Summary, Business Ideas, or Key Quotes.',
+              'You can choose Action Plan, Executive Summary, Business Ideas, Concept Map, or Key Quotes.',
           },
           {
             question: 'Can I export the result?',
@@ -350,68 +314,11 @@ export default function LandingPage() {
         <div className="absolute bottom-[6rem] left-[-8rem] h-80 w-80 rounded-full bg-amber-300/25 blur-3xl dark:bg-amber-600/15" />
       </div>
 
-      <nav className="sticky top-0 z-20 border-b border-white/60 bg-white/75 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/75">
-        <div className={`${containerClass} flex items-center justify-between py-3`}>
-          <div className="flex items-center">
-            <NotesAideLogo
-              className="h-10 w-[172px] text-zinc-900 sm:h-11 sm:w-[210px] md:h-12 md:w-[244px] dark:text-zinc-100"
-              title="Notes Aide"
-            />
-          </div>
-
-          <div className="flex items-center gap-2 md:gap-3">
-            <div className="hidden items-center gap-5 text-xs font-semibold text-zinc-500 lg:flex dark:text-zinc-400">
-              {sectionLinks.map((item) => (
-                <a
-                  key={item.href}
-                  href={item.href}
-                  onClick={(event) => handleNavAnchorClick(event, item.href)}
-                  className="transition-colors hover:text-zinc-900 dark:hover:text-zinc-100"
-                >
-                  {item.label}
-                </a>
-              ))}
-            </div>
-            <div className="hidden items-center gap-4 text-xs font-medium text-zinc-500 md:flex lg:hidden dark:text-zinc-400">
-              <Link className="transition-colors hover:text-zinc-900 dark:hover:text-zinc-100" href="/privacy-policy">
-                {t(lang, 'nav.privacy')}
-              </Link>
-              <Link className="transition-colors hover:text-zinc-900 dark:hover:text-zinc-100" href="/terms-of-use">
-                {t(lang, 'nav.terms')}
-              </Link>
-            </div>
-
-            <button
-              onClick={toggleLang}
-              className="inline-flex h-9 items-center rounded-lg border border-zinc-200 bg-white px-3 text-xs font-semibold text-zinc-700 transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-white/15 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:focus-visible:ring-zinc-500 dark:focus-visible:ring-offset-zinc-950"
-            >
-              {t(lang, 'nav.langToggle')}
-            </button>
-
-            <button
-              onClick={toggleTheme}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-700 transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-white/15 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:focus-visible:ring-zinc-500 dark:focus-visible:ring-offset-zinc-950"
-              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            >
-              {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
-            </button>
-
-            <Link
-              href="/login"
-              className="hidden text-sm font-semibold text-zinc-600 transition-colors hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100 md:inline"
-            >
-              {t(lang, 'nav.signin')}
-            </Link>
-
-            <Link
-              href="/register"
-              className="inline-flex items-center gap-1.5 rounded-xl bg-zinc-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200 dark:focus-visible:ring-zinc-300 dark:focus-visible:ring-offset-zinc-950"
-            >
-              {t(lang, 'landing.hero.cta')}
-            </Link>
-          </div>
-        </div>
-      </nav>
+      <MarketingHeader
+        lang={lang}
+        onToggleLang={toggleLang}
+        onSectionAnchorClick={handleNavAnchorClick}
+      />
 
       <main>
         <section className="relative flex min-h-[calc(100svh-4.5rem)] items-center py-10 md:py-12 lg:py-16">
@@ -544,7 +451,7 @@ export default function LandingPage() {
               align="center"
             />
 
-            <div className="mt-10 grid gap-5 sm:grid-cols-2 md:mt-12">
+            <div className="mt-10 grid gap-5 sm:grid-cols-2 md:mt-12 lg:grid-cols-3 xl:grid-cols-5">
               {modes.map((mode) => (
                 <article
                   key={mode.title}
@@ -568,8 +475,8 @@ export default function LandingPage() {
               kicker={lang === 'es' ? 'Vistas' : 'Views'}
               title={
                 lang === 'es'
-                  ? 'Nueve maneras de ver la misma extracción'
-                  : 'Nine ways to see the same extraction'
+                  ? 'Diez maneras de ver la misma extracción'
+                  : 'Ten ways to see the same extraction'
               }
               description={
                 lang === 'es'

@@ -5,6 +5,7 @@ import { X } from 'lucide-react'
 import type { Phase, InteractiveTask } from '@/app/home/lib/types'
 import type { PlaybookNode } from '@/lib/playbook-tree'
 import { getTaskStatusChipClassName } from '@/lib/task-statuses'
+import { useLang } from '@/app/home/hooks/useLang'
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 const LEVEL_X_GAP = 224  // horizontal gap per depth level
@@ -25,11 +26,11 @@ const PHASE_PALETTE = [
   { node: 'bg-orange-500 text-white',  edge: '#fb923c' },
 ]
 
-function getStatusLabel(status: InteractiveTask['status']) {
-  if (status === 'completed') return 'Completada'
-  if (status === 'in_progress') return 'En progreso'
-  if (status === 'blocked') return 'Bloqueada'
-  if (status === 'pending') return 'Pendiente'
+function getStatusLabel(status: InteractiveTask['status'], lang: 'en' | 'es') {
+  if (status === 'completed') return lang === 'en' ? 'Completed' : 'Completada'
+  if (status === 'in_progress') return lang === 'en' ? 'In progress' : 'En progreso'
+  if (status === 'blocked') return lang === 'en' ? 'Blocked' : 'Bloqueada'
+  if (status === 'pending') return lang === 'en' ? 'Pending' : 'Pendiente'
   return status
 }
 
@@ -216,6 +217,7 @@ export function MindMapView({
   onSelectTask,
   onOpenTaskMobile,
 }: MindMapViewProps) {
+  const { lang } = useLang()
   const containerRef = useRef<HTMLDivElement>(null)
   const isDragging = useRef(false)
   const lastMouse = useRef({ x: 0, y: 0 })
@@ -513,7 +515,7 @@ export function MindMapView({
                         <span
                           className={`rounded border px-1 py-0.5 text-[9px] font-semibold ${getTaskStatusChipClassName(node.task.status)}`}
                         >
-                          {getStatusLabel(node.task.status)}
+                          {getStatusLabel(node.task.status, lang)}
                         </span>
                         {node.task.scheduledStartAt && node.task.scheduledEndAt && (
                           <span className="text-[9px] text-slate-400 dark:text-slate-500">
@@ -557,11 +559,11 @@ export function MindMapView({
             <span
               className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${getTaskStatusChipClassName(popoverNode.task.status)}`}
             >
-              {getStatusLabel(popoverNode.task.status)}
+              {getStatusLabel(popoverNode.task.status, lang)}
             </span>
             {popoverNode.task.checked && (
               <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-300">
-                ✓ Completada
+                {lang === 'en' ? '✓ Completed' : '✓ Completada'}
               </span>
             )}
           </div>
@@ -571,19 +573,19 @@ export function MindMapView({
             <div className="mt-2 space-y-0.5">
               {popoverNode.task.scheduledStartAt && (
                 <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  <span className="font-medium text-slate-700 dark:text-slate-200">Inicio: </span>
+                  <span className="font-medium text-slate-700 dark:text-slate-200">{lang === 'en' ? 'Start: ' : 'Inicio: '}</span>
                   {fmtDate(popoverNode.task.scheduledStartAt)}
                 </p>
               )}
               {popoverNode.task.scheduledEndAt && (
                 <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  <span className="font-medium text-slate-700 dark:text-slate-200">Fin: </span>
+                  <span className="font-medium text-slate-700 dark:text-slate-200">{lang === 'en' ? 'End: ' : 'Fin: '}</span>
                   {fmtDate(popoverNode.task.scheduledEndAt)}
                 </p>
               )}
               {!popoverNode.task.scheduledEndAt && popoverNode.task.dueAt && (
                 <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  <span className="font-medium text-slate-700 dark:text-slate-200">Vence: </span>
+                  <span className="font-medium text-slate-700 dark:text-slate-200">{lang === 'en' ? 'Due: ' : 'Vence: '}</span>
                   {fmtDate(popoverNode.task.dueAt)}
                 </p>
               )}

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import type { LucideIcon } from 'lucide-react'
-import { Briefcase, GraduationCap, Kanban, Mic2 } from 'lucide-react'
+import { BookOpen, Briefcase, GraduationCap, Kanban, Mic2 } from 'lucide-react'
 import type { Lang } from '@/app/home/lib/i18n'
 
 type UseCasesTabsProps = {
@@ -34,7 +34,7 @@ export function UseCasesTabs({ lang }: UseCasesTabsProps) {
         ? [
             {
               id: 'consultants',
-              label: 'Consultants',
+              label: 'Consultores',
               eyebrow: 'Entrega más rápido',
               icon: Briefcase,
               problem:
@@ -44,7 +44,7 @@ export function UseCasesTabs({ lang }: UseCasesTabsProps) {
             },
             {
               id: 'professors',
-              label: 'Professors',
+              label: 'Profesores',
               eyebrow: 'Material más digerible',
               icon: GraduationCap,
               problem:
@@ -53,8 +53,18 @@ export function UseCasesTabs({ lang }: UseCasesTabsProps) {
                 'Genera resúmenes ejecutivos, ideas clave y citas destacadas para preparar clases, guías de estudio y seguimiento académico con menos esfuerzo.',
             },
             {
+              id: 'students',
+              label: 'Estudiantes',
+              eyebrow: 'Estudia con más claridad',
+              icon: BookOpen,
+              problem:
+                'Entre clases grabadas, PDFs y videos, terminas con demasiada información dispersa y poco tiempo para convertirla en tareas concretas de estudio.',
+              solution:
+                'Notes Aide organiza el contenido en resúmenes, conceptos clave y planes accionables para estudiar mejor, preparar entregas y repasar sin perderte.',
+            },
+            {
               id: 'content-creators',
-              label: 'Content Creators',
+              label: 'Creadores de Contenido',
               eyebrow: 'Recicla mejor tu contenido',
               icon: Mic2,
               problem:
@@ -64,7 +74,7 @@ export function UseCasesTabs({ lang }: UseCasesTabsProps) {
             },
             {
               id: 'project-managers',
-              label: 'Project Managers',
+              label: 'Gerentes de Proyecto',
               eyebrow: 'De insights a ejecución',
               icon: Kanban,
               problem:
@@ -93,6 +103,16 @@ export function UseCasesTabs({ lang }: UseCasesTabsProps) {
                 'Recorded lectures and long readings create too much friction when you need to highlight concepts, assignments, and key conclusions.',
               solution:
                 'Generate executive summaries, key ideas, and memorable quotes for lesson prep, study guides, and academic follow-up in less time.',
+            },
+            {
+              id: 'students',
+              label: 'Students',
+              eyebrow: 'Study with more clarity',
+              icon: BookOpen,
+              problem:
+                'Between recorded classes, PDFs, and videos, you end up with too much scattered information and not enough time to turn it into concrete study tasks.',
+              solution:
+                'Notes Aide organizes the material into summaries, key concepts, and actionable study plans so you can review faster, prepare assignments, and retain more.',
             },
             {
               id: 'content-creators',
@@ -146,7 +166,7 @@ export function UseCasesTabs({ lang }: UseCasesTabsProps) {
 
   return (
     <div className="mt-10 md:mt-12">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {items.map((item) => {
           const Icon = item.icon
           const isActive = item.id === activeItem.id

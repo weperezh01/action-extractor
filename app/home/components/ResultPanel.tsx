@@ -74,53 +74,67 @@ import {
 } from '@/lib/playbook-tree'
 import dynamic from 'next/dynamic'
 
+function DynamicViewLoading({
+  kind,
+}: {
+  kind: 'diagram' | 'mindMap' | 'hierarchy' | 'presentation'
+}) {
+  const locale = useLocale()
+  const lang = locale === 'es' ? 'es' : 'en'
+  const labels = {
+    en: {
+      diagram: 'Loading diagram...',
+      mindMap: 'Loading mind map...',
+      hierarchy: 'Loading hierarchy...',
+      presentation: 'Loading presentation...',
+    },
+    es: {
+      diagram: 'Cargando diagrama...',
+      mindMap: 'Cargando mapa mental...',
+      hierarchy: 'Cargando jerarquía...',
+      presentation: 'Cargando presentación...',
+    },
+  } as const
+
+  return (
+    <div className="flex items-center justify-center h-64 text-gray-400">
+      {labels[lang][kind]}
+    </div>
+  )
+}
+
 const FlowchartView = dynamic(
   () => import('./FlowchartView').then((m) => ({ default: m.FlowchartView })),
   {
     ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center h-64 text-gray-400">
-        Cargando diagrama...
-      </div>
-    ),
+    loading: () => <DynamicViewLoading kind="diagram" />,
   }
 )
 const MindMapView = dynamic(
   () => import('./MindMapView').then((m) => ({ default: m.MindMapView })),
   {
     ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center h-64 text-gray-400">
-        Cargando mapa mental...
-      </div>
-    ),
+    loading: () => <DynamicViewLoading kind="mindMap" />,
   }
 )
 const HierarchyChartView = dynamic(
   () => import('./HierarchyChartView').then((m) => ({ default: m.HierarchyChartView })),
   {
     ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center h-64 text-gray-400">
-        Cargando jerarquía...
-      </div>
-    ),
+    loading: () => <DynamicViewLoading kind="hierarchy" />,
   }
 )
 const PresentationView = dynamic(
   () => import('./PresentationView').then((m) => ({ default: m.PresentationView })),
   {
     ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center h-64 text-gray-400">
-        Cargando presentación...
-      </div>
-    ),
+    loading: () => <DynamicViewLoading kind="presentation" />,
   }
 )
 import type {
   ExtractionAccessRole,
   ExtractionAdditionalSource,
+  ExtractionClonePermission,
   ExtractionMember,
   ExtractResult,
   InteractiveTaskAttachment,
@@ -130,6 +144,7 @@ import type {
   InteractiveTaskEventType,
   InteractiveTaskStatus,
   Phase,
+  PlaybookLineageData,
   ShareVisibility,
   SourceType,
 } from '@/app/home/lib/types'
@@ -233,6 +248,16 @@ interface ResultPanelProps {
   onOpenPlaybookReference?: (playbookIdentifier: string) => void
   onFocusItemForChat?: (context: { path: string; text: string; phaseTitle: string }) => void
   onStarResult?: (starred: boolean) => void
+  cloneAccessRole?: ExtractionAccessRole
+  clonePermissionLoading?: boolean
+  onClonePermissionChange?: (permission: ExtractionClonePermission) => void | Promise<void>
+  onCloneResult?: (input: {
+    extractionId: string
+    folderId: string | null
+    name: string
+    mode: 'full' | 'template'
+  }) => Promise<boolean> | boolean
+  onLoadLineage?: (extractionId: string) => Promise<PlaybookLineageData>
   allTags?: import('@/app/home/lib/types').ExtractionTag[]
   onAddTag?: (name: string, color: string) => Promise<void>
   onRemoveTag?: (tagId: string) => Promise<void>
@@ -1062,6 +1087,11 @@ export function ResultPanel({
   onOpenPlaybookReference,
   onFocusItemForChat,
   onStarResult,
+  cloneAccessRole = accessRole,
+  clonePermissionLoading = false,
+  onClonePermissionChange,
+  onCloneResult,
+  onLoadLineage,
   allTags = [],
   onAddTag,
   onRemoveTag,
@@ -1113,6 +1143,19 @@ export function ResultPanel({
       hour12: true,
     }).format(parsed)
   }, [localeTag, result.createdAt])
+  const formatLineageDateTime = useCallback((rawValue: string | null | undefined) => {
+    const rawCreatedAt = typeof rawValue === 'string' ? rawValue.trim() : ''
+    if (!rawCreatedAt) return null
+
+    const parsed = new Date(rawCreatedAt)
+    if (Number.isNaN(parsed.getTime())) return null
+
+    return new Intl.DateTimeFormat(localeTag, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      hour12: true,
+    }).format(parsed)
+  }, [localeTag])
   const coverFolderLabel =
     typeof bookFolderLabel === 'string' && bookFolderLabel.trim().length > 0
       ? bookFolderLabel.trim()
@@ -1132,6 +1175,17 @@ export function ResultPanel({
   const canManageFolder = isOwnerAccess
   const canManageVisibility = isOwnerAccess
   const canManageMembers = isOwnerAccess
+  const effectiveCloneAccessRole = cloneAccessRole ?? result.accessRole ?? accessRole
+  const clonePermission = result.clonePermission ?? 'disabled'
+  const canManageClonePermission =
+    isOwnerAccess && effectiveCloneAccessRole === 'owner' && Boolean(result.id) && Boolean(onClonePermissionChange)
+  const canCloneTemplate =
+    effectiveCloneAccessRole === 'owner' ||
+    clonePermission === 'template_only' ||
+    clonePermission === 'full'
+  const canCloneFull = effectiveCloneAccessRole === 'owner' || clonePermission === 'full'
+  const canClonePlaybook = Boolean(result.id && onCloneResult && canCloneTemplate)
+  const canViewLineage = Boolean(result.id && onLoadLineage)
   const isGuestExtraction = (result.id?.trim() ?? '').startsWith('g-')
   const currentPageTurnSnapshot = useMemo<PlaybookPageTurnSnapshot>(
     () => ({
@@ -1679,6 +1733,19 @@ export function ResultPanel({
   const [isActionsModalOpen, setIsActionsModalOpen] = useState(false)
   const [isIntegrationsModalOpen, setIsIntegrationsModalOpen] = useState(false)
   const [isShareMenuOpen, setIsShareMenuOpen] = useState(false)
+  const [isLineageModalOpen, setIsLineageModalOpen] = useState(false)
+  const [lineageLoading, setLineageLoading] = useState(false)
+  const [lineageData, setLineageData] = useState<PlaybookLineageData | null>(null)
+  const [lineageError, setLineageError] = useState<string | null>(null)
+  const lineageCopies = lineageData?.copies ?? null
+  const lineageIndirectCopies = lineageCopies
+    ? Math.max(0, lineageCopies.totalCount - lineageCopies.directCount)
+    : 0
+  const [isCloneModalOpen, setIsCloneModalOpen] = useState(false)
+  const [cloneNameDraft, setCloneNameDraft] = useState('')
+  const [cloneFolderIdDraft, setCloneFolderIdDraft] = useState('')
+  const [cloneModeDraft, setCloneModeDraft] = useState<'full' | 'template'>('full')
+  const [cloneSubmitting, setCloneSubmitting] = useState(false)
   const [collapseAfterAsyncAction, setCollapseAfterAsyncAction] = useState(false)
   const asyncActionLoadingRef = useRef(false)
   const [isReextractExpanded, setIsReextractExpanded] = useState(false)
@@ -1744,6 +1811,30 @@ export function ResultPanel({
     isBookClosed ? 'closing' : 'opening'
   )
   const closeTimersRef = useRef<number[]>([])
+  const defaultCloneName = useMemo(() => {
+    const baseTitle = sourceDisplayTitle.trim() || tx('playbook.untitled')
+    return `${tx('playbook.clone.namePrefix')} ${baseTitle}`.trim()
+  }, [sourceDisplayTitle, tx])
+  const defaultCloneFolderId = useMemo(() => {
+    const currentFolderId = result.folderId?.trim() ?? ''
+    if (currentFolderId && folders.some((folder) => folder.id === currentFolderId)) {
+      return currentFolderId
+    }
+    return folders[0]?.id ?? ''
+  }, [folders, result.folderId])
+
+  useEffect(() => {
+    if (!isCloneModalOpen) return
+    if (cloneModeDraft === 'full' && !canCloneFull) {
+      setCloneModeDraft('template')
+    }
+  }, [canCloneFull, cloneModeDraft, isCloneModalOpen])
+  useEffect(() => {
+    setIsLineageModalOpen(false)
+    setLineageLoading(false)
+    setLineageData(null)
+    setLineageError(null)
+  }, [result.id])
   const [pageTurnStage, setPageTurnStage] = useState<PlaybookPageTurnStage>('idle')
   const [pageTurnSnapshot, setPageTurnSnapshot] = useState<PlaybookPageTurnSnapshot | null>(null)
   const pageTurnTimersRef = useRef<number[]>([])
@@ -4256,6 +4347,70 @@ export function ResultPanel({
     setIsShareMenuOpen((previous) => !previous)
   }
 
+  const handleOpenLineageModal = useCallback(async () => {
+    const extractionId = result.id?.trim()
+    if (!extractionId || !onLoadLineage || lineageLoading) return
+
+    setIsLineageModalOpen(true)
+    setLineageError(null)
+
+    if (lineageData) return
+
+    setLineageLoading(true)
+    try {
+      const data = await onLoadLineage(extractionId)
+      setLineageData(data)
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : tx('playbook.lineage.loadError')
+      setLineageError(message)
+    } finally {
+      setLineageLoading(false)
+    }
+  }, [lineageData, lineageLoading, onLoadLineage, result.id, tx])
+
+  const handleOpenCloneModal = useCallback(() => {
+    if (!canClonePlaybook) return
+    setCloneNameDraft(defaultCloneName)
+    setCloneFolderIdDraft(defaultCloneFolderId)
+    setCloneModeDraft(canCloneFull ? 'full' : 'template')
+    setIsCloneModalOpen(true)
+  }, [canCloneFull, canClonePlaybook, defaultCloneFolderId, defaultCloneName])
+
+  const handleConfirmClone = useCallback(async () => {
+    const extractionId = result.id?.trim()
+    if (!extractionId || !onCloneResult || cloneSubmitting || !canClonePlaybook) return
+
+    setCloneSubmitting(true)
+    try {
+      const ok = await Promise.resolve(
+        onCloneResult({
+          extractionId,
+          folderId: cloneFolderIdDraft || null,
+          name: cloneNameDraft.trim() || defaultCloneName,
+          mode: cloneModeDraft,
+        })
+      )
+
+      if (ok !== false) {
+        setIsCloneModalOpen(false)
+      }
+    } finally {
+      setCloneSubmitting(false)
+    }
+  }, [
+    canClonePlaybook,
+    cloneFolderIdDraft,
+    cloneModeDraft,
+    cloneNameDraft,
+    cloneSubmitting,
+    defaultCloneName,
+    onCloneResult,
+    result.id,
+  ])
+
   const triggerShareMenuAction = (action: () => void | Promise<void>) => {
     return action()
   }
@@ -4791,7 +4946,7 @@ export function ResultPanel({
                             onChange={(event) =>
                               handleTaskReplyDraftChange(input.task.id, event.target.value)
                             }
-                            placeholder="Escribe tu respuesta..."
+                            placeholder={locale === 'es' ? 'Escribe tu respuesta...' : 'Write your reply...'}
                             disabled={input.isCommunityMutating}
                             className={`min-w-0 flex-1 rounded-lg border border-indigo-300 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-slate-950 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/60 ${
                               input.compact ? 'h-10' : 'h-9'
@@ -4806,7 +4961,7 @@ export function ResultPanel({
                                 input.compact ? 'h-10' : 'h-9'
                               }`}
                             >
-                              Responder
+                              {tx('playbook.reply')}
                             </button>
                             <button
                               type="button"
@@ -5042,7 +5197,7 @@ export function ResultPanel({
                         onKeyDown={(e) => void handleTagKeyDown(e)}
                         onFocus={() => setShowTagDropdown(true)}
                         onBlur={() => setTimeout(() => setShowTagDropdown(false), 150)}
-                        placeholder="+ tag"
+                        placeholder={locale === 'es' ? '+ etiqueta' : '+ tag'}
                         disabled={tagLoading}
                         className="h-6 w-20 rounded-full border border-dashed border-slate-300 bg-transparent px-2 text-[11px] text-slate-500 outline-none placeholder:text-slate-300 focus:border-indigo-400 focus:text-slate-700 disabled:opacity-50 dark:border-slate-600 dark:text-slate-400 dark:focus:border-indigo-500"
                       />
@@ -5073,6 +5228,26 @@ export function ResultPanel({
                 </p>
               )}
               <div className="flex flex-wrap items-center justify-end gap-2">
+                {result.id && onCloneResult && (
+                  <button
+                    type="button"
+                    onClick={handleOpenCloneModal}
+                    disabled={!canClonePlaybook}
+                    aria-label={tx('playbook.clone.button')}
+                    title={
+                      canClonePlaybook
+                        ? tx('playbook.clone.button')
+                        : tx('playbook.clone.notAllowed')
+                    }
+                    className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-colors ${
+                      canClonePlaybook
+                        ? 'border-sky-200 bg-sky-50 text-sky-700 hover:border-sky-300 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/25 dark:text-sky-300 dark:hover:bg-sky-900/40'
+                        : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-600'
+                    }`}
+                  >
+                    <Copy size={13} />
+                  </button>
+                )}
                 {result.id && onStarResult && (
                   <button
                     type="button"
@@ -5181,9 +5356,23 @@ export function ResultPanel({
             </div>
           </div>
           <div className="relative mx-auto mt-10 mb-3 flex w-full max-w-3xl items-start justify-center gap-2">
-            <p className="text-center text-xl font-bold leading-tight text-slate-700 dark:text-slate-100">
-              {sourceDisplayTitle}
-            </p>
+            <div className="min-w-0 flex flex-col items-center gap-2">
+              <p className="text-center text-xl font-bold leading-tight text-slate-700 dark:text-slate-100">
+                {sourceDisplayTitle}
+              </p>
+              {canViewLineage && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleOpenLineageModal()
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                >
+                  <GitBranch size={12} />
+                  {tx('playbook.lineage.button')}
+                </button>
+              )}
+            </div>
             {result.id && (
               <button
                 ref={shareMenuButtonRef}
@@ -5283,6 +5472,61 @@ export function ResultPanel({
                     </span>
                   )}
 
+                  {canManageClonePermission && (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-700 dark:bg-slate-950/40">
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                        {tx('playbook.clonePermission.label')}
+                      </p>
+                      <div className="mt-2 inline-flex min-h-8 flex-wrap items-center overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-950">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!onClonePermissionChange) return
+                            void triggerShareMenuAction(() => onClonePermissionChange('disabled'))
+                          }}
+                          disabled={clonePermissionLoading || !onClonePermissionChange}
+                          className={`min-h-8 px-3 text-[11px] font-semibold transition-colors ${
+                            clonePermission === 'disabled'
+                              ? 'bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900'
+                              : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {tx('playbook.clonePermission.disabled')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!onClonePermissionChange) return
+                            void triggerShareMenuAction(() => onClonePermissionChange('template_only'))
+                          }}
+                          disabled={clonePermissionLoading || !onClonePermissionChange}
+                          className={`min-h-8 px-3 text-[11px] font-semibold transition-colors ${
+                            clonePermission === 'template_only'
+                              ? 'bg-amber-500 text-white dark:bg-amber-400 dark:text-amber-950'
+                              : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {tx('playbook.clonePermission.templateOnly')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!onClonePermissionChange) return
+                            void triggerShareMenuAction(() => onClonePermissionChange('full'))
+                          }}
+                          disabled={clonePermissionLoading || !onClonePermissionChange}
+                          className={`min-h-8 px-3 text-[11px] font-semibold transition-colors ${
+                            clonePermission === 'full'
+                              ? 'bg-sky-600 text-white dark:bg-sky-500 dark:text-sky-950'
+                              : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {tx('playbook.clonePermission.full')}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
@@ -5339,8 +5583,8 @@ export function ResultPanel({
                           disabled={memberMutationLoading}
                           className="h-8 rounded-md border border-sky-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none dark:border-sky-800 dark:bg-slate-900 dark:text-slate-200"
                         >
-                          <option value="viewer">Viewer</option>
-                          <option value="editor">Editor</option>
+                          <option value="viewer">{locale === 'es' ? 'Lector' : 'Viewer'}</option>
+                          <option value="editor">{locale === 'es' ? 'Editor' : 'Editor'}</option>
                         </select>
                         <button
                           type="button"
@@ -5756,6 +6000,327 @@ export function ResultPanel({
                   document.body
                 )}
 
+                {isLineageModalOpen && typeof window !== 'undefined' && createPortal(
+                  <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={tx('playbook.lineage.title')}
+                    className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/25 backdrop-blur-[1px]"
+                    onClick={() => {
+                      if (lineageLoading) return
+                      setIsLineageModalOpen(false)
+                    }}
+                  >
+                    <div
+                      onClick={(event) => event.stopPropagation()}
+                      className="mx-4 max-h-[82vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+                    >
+                      <div className="mb-4 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                            {tx('playbook.lineage.title')}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            {lineageData
+                              ? lineageData.generation === 0
+                                ? tx('playbook.lineage.originalLabel')
+                                : tx('playbook.lineage.generationLabel', { count: lineageData.generation })
+                              : tx('playbook.lineage.subtitle')}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setIsLineageModalOpen(false)}
+                          disabled={lineageLoading}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                        >
+                          <X size={15} />
+                        </button>
+                      </div>
+
+                      {lineageLoading && (
+                        <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
+                          <Loader2 size={15} className="animate-spin" />
+                          {tx('playbook.lineage.loading')}
+                        </div>
+                      )}
+
+                      {!lineageLoading && lineageError && (
+                        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-300">
+                          {lineageError}
+                        </div>
+                      )}
+
+                      {!lineageLoading && !lineageError && lineageData && (
+                        <div className="space-y-5">
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-950/40">
+                            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                              {tx('playbook.lineage.chainTitle')}
+                            </p>
+                            <div className="mt-3 space-y-3">
+                              {lineageData.nodes.length === 0 ? (
+                                <p className="text-sm text-slate-500 dark:text-slate-400">
+                                  {tx('playbook.lineage.empty')}
+                                </p>
+                              ) : (
+                                lineageData.nodes.map((node) => {
+                                  const ownerLabel = node.ownerName?.trim() || node.ownerEmail || tx('playbook.ownerFallback')
+                                  const createdAtLabel = formatLineageDateTime(node.createdAt)
+                                  return (
+                                    <div
+                                      key={`lineage-node-${node.depth}`}
+                                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-900"
+                                    >
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                          {node.isCurrent
+                                            ? tx('playbook.lineage.currentNode')
+                                            : node.isOriginal
+                                              ? tx('playbook.lineage.rootNode')
+                                              : tx('playbook.lineage.ancestorNode')}
+                                        </span>
+                                        {!node.isCurrent && (
+                                          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                                            {tx('playbook.lineage.generationStep', { count: node.depth })}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="mt-2 text-sm font-semibold text-slate-800 dark:text-slate-100">
+                                        {node.accessible ? node.title : tx('playbook.lineage.privateNode')}
+                                      </p>
+                                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                        {node.accessible
+                                          ? [ownerLabel, createdAtLabel].filter(Boolean).join(' · ')
+                                          : tx('playbook.lineage.privateHint')}
+                                      </p>
+                                    </div>
+                                  )
+                                })
+                              )}
+                            </div>
+                          </div>
+
+                          {lineageCopies && (
+                            <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 dark:border-sky-800 dark:bg-sky-950/20">
+                              <p className="text-[11px] font-bold uppercase tracking-wider text-sky-700 dark:text-sky-300">
+                                {tx('playbook.lineage.copiesTitle')}
+                              </p>
+                              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                                <div className="rounded-xl border border-white/70 bg-white/80 px-3 py-3 dark:border-sky-900 dark:bg-slate-900/70">
+                                  <p className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                                    {tx('playbook.lineage.directCopies')}
+                                  </p>
+                                  <p className="mt-1 text-lg font-bold text-slate-800 dark:text-slate-100">
+                                    {lineageCopies.directCount}
+                                  </p>
+                                </div>
+                                <div className="rounded-xl border border-white/70 bg-white/80 px-3 py-3 dark:border-sky-900 dark:bg-slate-900/70">
+                                  <p className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                                    {tx('playbook.lineage.indirectCopies')}
+                                  </p>
+                                  <p className="mt-1 text-lg font-bold text-slate-800 dark:text-slate-100">
+                                    {lineageIndirectCopies}
+                                  </p>
+                                </div>
+                                <div className="rounded-xl border border-white/70 bg-white/80 px-3 py-3 dark:border-sky-900 dark:bg-slate-900/70">
+                                  <p className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                                    {tx('playbook.lineage.totalCopies')}
+                                  </p>
+                                  <p className="mt-1 text-lg font-bold text-slate-800 dark:text-slate-100">
+                                    {lineageCopies.totalCount}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="mt-4">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-300">
+                                  {tx('playbook.lineage.recentCopies')}
+                                </p>
+                                {lineageCopies.recent.length === 0 ? (
+                                  <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                                    {tx('playbook.lineage.noCopies')}
+                                  </p>
+                                ) : (
+                                  <div className="mt-3 space-y-2">
+                                    {lineageCopies.recent.map((copy, index) => {
+                                      const copiedByLabel =
+                                        copy.copiedByName?.trim() ||
+                                        copy.copiedByEmail ||
+                                        tx('playbook.ownerFallback')
+                                      const createdAtLabel = formatLineageDateTime(copy.createdAt)
+                                      return (
+                                        <div
+                                          key={`lineage-copy-${copy.createdAt}-${index}`}
+                                          className="rounded-xl border border-white/70 bg-white/80 px-4 py-3 dark:border-sky-900 dark:bg-slate-900/70"
+                                        >
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <span className="inline-flex rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700 dark:bg-sky-900/60 dark:text-sky-200">
+                                              {tx('playbook.lineage.copyDepthLabel', { count: copy.depth })}
+                                            </span>
+                                            {copy.copiedFromTitle && (
+                                              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                                                {tx('playbook.lineage.copiedFromPrefix')} {copy.copiedFromTitle}
+                                              </span>
+                                            )}
+                                          </div>
+                                          <p className="mt-2 text-sm font-semibold text-slate-800 dark:text-slate-100">
+                                            {copy.title}
+                                          </p>
+                                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                            {[`${tx('playbook.lineage.copiedByPrefix')} ${copiedByLabel}`, createdAtLabel]
+                                              .filter(Boolean)
+                                              .join(' · ')}
+                                          </p>
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>,
+                  document.body
+                )}
+
+                {isCloneModalOpen && typeof window !== 'undefined' && createPortal(
+                  <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={tx('playbook.clone.title')}
+                    className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/25 backdrop-blur-[1px]"
+                    onClick={() => {
+                      if (cloneSubmitting) return
+                      setIsCloneModalOpen(false)
+                    }}
+                  >
+                    <div
+                      onClick={(event) => event.stopPropagation()}
+                      className="mx-4 w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+                    >
+                      <div className="mb-4 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                            {tx('playbook.clone.button')}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            {tx('playbook.clone.title')}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setIsCloneModalOpen(false)}
+                          disabled={cloneSubmitting}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                        >
+                          <X size={15} />
+                        </button>
+                      </div>
+
+                      <div className="space-y-4">
+                        <label className="block">
+                          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                            {tx('playbook.clone.nameLabel')}
+                          </span>
+                          <input
+                            type="text"
+                            value={cloneNameDraft}
+                            onChange={(event) => setCloneNameDraft(event.target.value)}
+                            maxLength={300}
+                            disabled={cloneSubmitting}
+                            className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500/30 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                          />
+                        </label>
+
+                        <label className="block">
+                          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                            {tx('playbook.clone.folderLabel')}
+                          </span>
+                          <select
+                            value={cloneFolderIdDraft}
+                            onChange={(event) => setCloneFolderIdDraft(event.target.value)}
+                            disabled={cloneSubmitting}
+                            className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500/30 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                          >
+                            {folders.length === 0 ? (
+                              <option value="">{tx('playbook.folder.general')}</option>
+                            ) : (
+                              folders.map((folder) => (
+                                <option key={folder.id} value={folder.id}>
+                                  {folder.name}
+                                </option>
+                              ))
+                            )}
+                          </select>
+                        </label>
+
+                        <div>
+                          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                            {tx('playbook.clone.modeLabel')}
+                          </p>
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <button
+                              type="button"
+                              onClick={() => setCloneModeDraft('full')}
+                              disabled={cloneSubmitting || !canCloneFull}
+                              className={`rounded-xl border px-3 py-3 text-left transition-colors ${
+                                cloneModeDraft === 'full'
+                                  ? 'border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300'
+                                  : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
+                              } ${!canCloneFull ? 'cursor-not-allowed opacity-50' : ''}`}
+                            >
+                              <p className="text-sm font-semibold">{tx('playbook.clone.modeFull')}</p>
+                              <p className="mt-1 text-xs opacity-80">{tx('playbook.clone.modeFullHint')}</p>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCloneModeDraft('template')}
+                              disabled={cloneSubmitting || !canCloneTemplate}
+                              className={`rounded-xl border px-3 py-3 text-left transition-colors ${
+                                cloneModeDraft === 'template'
+                                  ? 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300'
+                                  : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
+                              } ${!canCloneTemplate ? 'cursor-not-allowed opacity-50' : ''}`}
+                            >
+                              <p className="text-sm font-semibold">{tx('playbook.clone.modeTemplate')}</p>
+                              <p className="mt-1 text-xs opacity-80">{tx('playbook.clone.modeTemplateHint')}</p>
+                            </button>
+                          </div>
+                          {!canCloneFull && (
+                            <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                              {tx('playbook.clone.templateOnlyNotice')}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setIsCloneModalOpen(false)}
+                            disabled={cloneSubmitting}
+                            className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800"
+                          >
+                            {tx('common.cancel')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleConfirmClone()}
+                            disabled={cloneSubmitting || !(cloneNameDraft.trim() || defaultCloneName.trim())}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-wait disabled:bg-slate-400"
+                          >
+                            {cloneSubmitting ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
+                            {cloneSubmitting ? tx('playbook.clone.submitting') : tx('playbook.clone.confirm')}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>,
+                  document.body
+                )}
+
                 {sourceUrl && (
                   <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 dark:border-indigo-900/60 dark:bg-indigo-950/20">
                     <button
@@ -6040,7 +6605,7 @@ export function ResultPanel({
                           </div>
                         )}
 
-                        <ul className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+                        <ul className="overflow-hidden rounded-[1.25rem] border border-slate-200/80 bg-white/70 divide-y divide-slate-200/80 dark:border-slate-700/80 dark:divide-slate-800 dark:bg-slate-950/40">
                           {additionalSources.map((source) => {
                             const isYoutubeSource = source.sourceType === 'youtube'
                             const href = getPlaybookSourceHref(source)
@@ -6055,10 +6620,10 @@ export function ResultPanel({
                             return (
                               <li
                                 key={source.id}
-                                className="flex h-full flex-col overflow-hidden rounded-[1.25rem] border border-slate-200/80 bg-white/90 shadow-[0_16px_40px_-34px_rgba(15,23,42,0.65)] dark:border-slate-700/80 dark:bg-slate-950/80"
+                                className="w-full bg-white/65 px-4 py-4 dark:bg-slate-950/35 md:px-5"
                               >
-                                <div className="flex h-full flex-col gap-4 p-4 md:p-5">
-                                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                <div className="flex flex-col gap-4">
+                                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
                                     <div className="min-w-0 flex-1">
                                       <div className="flex flex-wrap items-center gap-2">
                                         <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
@@ -6086,8 +6651,8 @@ export function ResultPanel({
                                         )}
                                       </div>
 
-                                      <div className="mt-3 space-y-1.5">
-                                        <p className="break-words text-sm font-semibold leading-6 text-slate-900 dark:text-slate-100">
+                                      <div className="mt-3 space-y-2">
+                                        <p className="break-words text-base font-semibold leading-7 text-slate-900 dark:text-slate-100">
                                           {sourceTitle}
                                         </p>
                                         {source.sourceFileName && source.sourceFileName !== sourceTitle && (
@@ -6098,7 +6663,7 @@ export function ResultPanel({
                                       </div>
                                     </div>
 
-                                    <div className="flex flex-wrap items-center gap-2 lg:max-w-[19rem] lg:justify-end">
+                                    <div className="flex flex-wrap items-center gap-2 xl:justify-end">
                                       {isPendingSelectable && (
                                         <label className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-xs font-semibold transition-colors ${
                                           isSelected
@@ -6144,7 +6709,7 @@ export function ResultPanel({
                                   </div>
 
                                   {sourcePreview && (
-                                    <div className="rounded-[1rem] border border-slate-200/80 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-900/70">
+                                    <div className="rounded-[1rem] border border-slate-200/80 bg-slate-50/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-900/70">
                                       <div className="mb-2 flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                                         <span className="inline-flex items-center gap-1">
                                           {href ? <Link2 size={10} /> : <FileText size={10} />}
@@ -8142,7 +8707,7 @@ export function ResultPanel({
                                         {/* ── Right: activity · evidence · status ── */}
                                         <div className="flex items-center gap-1.5 flex-shrink-0">
                                           {task && taskActivityCount > 0 && (
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title="Actividad">
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 dark:text-slate-500" title={locale === 'es' ? 'Actividad' : 'Activity'}>
                                               <Zap size={10} />
                                               {taskActivityCount}
                                             </span>
@@ -8186,8 +8751,8 @@ export function ResultPanel({
                                                 })
                                               }}
                                               className="flex h-6 w-6 items-center justify-center rounded-full transition-all hover:scale-110 hover:shadow-md"
-                                              aria-label="Preguntar al asistente sobre este ítem"
-                                              title="Preguntar al asistente IA"
+                                              aria-label={locale === 'es' ? 'Preguntar al asistente sobre este ítem' : 'Ask the assistant about this item'}
+                                              title={locale === 'es' ? 'Preguntar al asistente IA' : 'Ask the AI assistant'}
                                             >
                                               <img src="/notes-aide-bot.png" alt="" className="h-5 w-5 rounded-full object-cover" />
                                             </button>
@@ -8198,7 +8763,7 @@ export function ResultPanel({
                                                 type="button"
                                                 onClick={() => setTaskMenuOpenId((prev) => (prev === task.id ? null : task.id))}
                                                 className="flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
-                                                aria-label="Abrir acciones rápidas del ítem"
+                                                aria-label={locale === 'es' ? 'Abrir acciones rápidas del ítem' : 'Open item quick actions'}
                                               >
                                                 <MoreHorizontal size={12} />
                                               </button>
@@ -10106,13 +10671,13 @@ export function ResultPanel({
               <div className="border-b border-slate-200/70 px-0 py-4">
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   <span className="rounded-md border border-emerald-200/80 bg-emerald-50/70 px-2 py-1 text-[10px] font-semibold text-emerald-700">
-                    Tiempo: {pageTurnSnapshot.savedTime}
+                    {locale === 'es' ? 'Tiempo' : 'Time'}: {pageTurnSnapshot.savedTime}
                   </span>
                   <span className="rounded-md border border-orange-200/80 bg-orange-50/70 px-2 py-1 text-[10px] font-semibold text-orange-700">
-                    Dificultad: {pageTurnSnapshot.difficulty}
+                    {locale === 'es' ? 'Dificultad' : 'Difficulty'}: {pageTurnSnapshot.difficulty}
                   </span>
                   <span className="rounded-md border border-indigo-200/80 bg-indigo-50/70 px-2 py-1 text-[10px] font-semibold text-indigo-700">
-                    Modo: {pageTurnSnapshot.modeLabel}
+                    {locale === 'es' ? 'Modo' : 'Mode'}: {pageTurnSnapshot.modeLabel}
                   </span>
                 </div>
                 <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
@@ -10168,7 +10733,7 @@ export function ResultPanel({
               : 'perspective(2400px) rotateY(0deg) rotateX(0deg)',
           }}
         >
-          <p className="paper-playbook-cover-kicker">Carpeta activa</p>
+          <p className="paper-playbook-cover-kicker">{tx('playbook.folder.active')}</p>
           <p className="paper-playbook-cover-title">{coverFolderLabel}</p>
         </div>
       )}

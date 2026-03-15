@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import type { PresentationSlide } from '@/app/home/lib/types'
+import { useLang } from '@/app/home/hooks/useLang'
 
 interface Props {
   slides: PresentationSlide[]
@@ -14,6 +15,7 @@ const VIRTUAL_W = 960
 const VIRTUAL_H = 540
 
 export function PresenterOverlay({ slides, currentIndex, onNavigate, onExit }: Props) {
+  const { lang } = useLang()
   const [viewport, setViewport] = useState({
     width: typeof window === 'undefined' ? 1280 : window.innerWidth,
     height: typeof window === 'undefined' ? 720 : window.innerHeight,
@@ -109,7 +111,7 @@ export function PresenterOverlay({ slides, currentIndex, onNavigate, onExit }: P
                 <img
                   key={element.id}
                   src={element.url}
-                  alt="Slide"
+                  alt={lang === 'en' ? 'Slide' : 'Diapositiva'}
                   className="absolute"
                   style={{
                     left: element.x * scale,

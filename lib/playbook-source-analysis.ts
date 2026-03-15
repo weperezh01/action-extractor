@@ -22,7 +22,7 @@ import {
   type ResolvedExtractionOutputLanguage,
 } from '@/lib/output-language'
 import { getAppSetting, getPromptOverride } from '@/lib/db'
-import { truncateForAi } from '@/lib/content-extractor'
+import { prepareContentForExtraction } from '@/lib/long-content-preparation'
 
 const EXTRACTION_MAX_TOKENS = 4096
 const JSON_REPAIR_MAX_TOKENS = 4096
@@ -241,7 +241,15 @@ export async function generatePlaybookFromSourceText(input: {
     throw error
   }
 
-  const { finalText: finalTranscript } = truncateForAi(transcript)
+  const preparedContent = await prepareContentForExtraction({
+    text: transcript,
+    provider,
+    model,
+    userId: input.userId ?? null,
+    sourceType: input.sourceType ?? 'multi_source',
+    onUsage: (usage) => logAiUsageSafely(usage),
+  })
+  const finalTranscript = preparedContent.finalText
   const wordCount = transcript.split(/\s+/).filter(Boolean).length
   const { originalTime, savedTime } = estimateTime(wordCount)
   const resolvedOutputLanguage = resolveExtractionOutputLanguage(requestedOutputLanguage, finalTranscript)

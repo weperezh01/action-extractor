@@ -4,7 +4,7 @@ import type { FolderItem } from '@/app/home/components/FolderDock'
 import type { ExtractionTag } from '@/app/home/lib/types'
 import { FOLDER_COLORS } from '@/app/home/components/FolderDock'
 import Image from 'next/image'
-import { EXTRACTION_MODE_OPTIONS, getExtractionModeLabel, normalizeExtractionMode, type ExtractionMode } from '@/lib/extraction-modes'
+import { getExtractionModeLabel, getExtractionModeOptions, normalizeExtractionMode, type ExtractionMode } from '@/lib/extraction-modes'
 import { getShareVisibilityLabel, isShareVisibilityShareable } from '@/app/home/lib/share-visibility'
 import { formatHistoryDate } from '@/app/home/lib/utils'
 import { resolveSystemExtractionFolderKey } from '@/lib/extraction-folders'
@@ -139,6 +139,7 @@ export function HistoryPanel({
   onMoveToWorkspace,
   lang = 'en',
 }: HistoryPanelProps) {
+  const localizedModeOptions = getExtractionModeOptions(lang)
   const generalFolderId = folders.find((folder) => resolveSystemExtractionFolderKey(folder.id) === 'general')?.id ?? null
   const hasHistory = history.length > 0
   const activeFolder = activeFolderIds.length === 1
@@ -147,7 +148,7 @@ export function HistoryPanel({
   const panelTitle = activeFolderIds.length === 0
     ? t(lang, 'hist.title')
     : activeFolderIds.length === 1
-      ? (activeFolder?.name ?? 'General')
+      ? (activeFolder?.name ?? t(lang, 'app.generalFolder'))
       : activeFolderIds
           .map((id) => folders.find((f) => f.id === id)?.name)
           .filter(Boolean)
@@ -409,7 +410,7 @@ export function HistoryPanel({
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     <p className="text-xs text-slate-400">{formatHistoryDate(item.createdAt)}</p>
                     <span className="text-[11px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 dark:bg-indigo-900/40 dark:text-indigo-300 dark:border-indigo-700">
-                      {getExtractionModeLabel(normalizeExtractionMode(item.mode))}
+                      {getExtractionModeLabel(normalizeExtractionMode(item.mode), lang)}
                     </span>
                     <span
                       className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
@@ -487,7 +488,7 @@ export function HistoryPanel({
                             }`}
                           >
                             <span className="h-3 w-3 rounded-full border border-slate-300 dark:border-slate-600" />
-                            General
+                            {t(lang, 'app.generalFolder')}
                           </button>
                           {folders.filter((f) => f.id !== generalFolderId).map(f => {
                             const meta = FOLDER_COLORS.find(c => c.value === f.color)
@@ -700,7 +701,7 @@ export function HistoryPanel({
                           {t(lang, 'hist.reExtract')}
                         </p>
                         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                          {EXTRACTION_MODE_OPTIONS.filter((opt) => opt.value !== normalizeExtractionMode(item.mode)).map((opt) => (
+                          {localizedModeOptions.filter((opt) => opt.value !== normalizeExtractionMode(item.mode)).map((opt) => (
                             <button
                               key={opt.value}
                               type="button"

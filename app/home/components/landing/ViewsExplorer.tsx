@@ -11,6 +11,7 @@ import {
   LayoutList,
   Network,
   Presentation,
+  Table2,
   Workflow,
 } from 'lucide-react'
 import type { Lang } from '@/app/home/lib/i18n'
@@ -174,6 +175,21 @@ export function ViewsExplorer({ lang }: ViewsExplorerProps) {
               iconTone: 'bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300',
               panelTone: 'border-violet-200/80 bg-violet-50/70 dark:border-violet-500/20 dark:bg-violet-950/20',
             },
+            {
+              id: 'sheets',
+              label: 'Hoja de cálculo',
+              eyebrow: 'Revisión tabular',
+              icon: Table2,
+              summary:
+                'Lleva la extracción a una vista tabular para revisar campos, fechas, valores, fórmulas y dependencias con precisión.',
+              bestFor:
+                'Equipos que necesitan ordenar datos, validar columnas, comparar tareas y trabajar el playbook como una hoja operativa.',
+              whyItMatters:
+                'Hace fácil auditar la información, detectar vacíos y editar el plan con una lectura más cercana a una hoja de cálculo real.',
+              tags: ['Filas', 'Columnas', 'Fórmulas', 'Valores'],
+              iconTone: 'bg-lime-100 text-lime-700 dark:bg-lime-500/20 dark:text-lime-300',
+              panelTone: 'border-lime-200/80 bg-lime-50/70 dark:border-lime-500/20 dark:bg-lime-950/20',
+            },
           ]
         : [
             {
@@ -311,6 +327,21 @@ export function ViewsExplorer({ lang }: ViewsExplorerProps) {
               iconTone: 'bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300',
               panelTone: 'border-violet-200/80 bg-violet-50/70 dark:border-violet-500/20 dark:bg-violet-950/20',
             },
+            {
+              id: 'sheets',
+              label: 'Sheets',
+              eyebrow: 'Tabular review',
+              icon: Table2,
+              summary:
+                'Brings the extraction into a spreadsheet-style view so fields, dates, values, formulas, and dependencies can be reviewed with precision.',
+              bestFor:
+                'Teams that need to sort data, validate columns, compare tasks, and work the playbook like an operational spreadsheet.',
+              whyItMatters:
+                'It makes the information easier to audit, exposes gaps faster, and supports a more analytical read of the same plan.',
+              tags: ['Rows', 'Columns', 'Formulas', 'Values'],
+              iconTone: 'bg-lime-100 text-lime-700 dark:bg-lime-500/20 dark:text-lime-300',
+              panelTone: 'border-lime-200/80 bg-lime-50/70 dark:border-lime-500/20 dark:bg-lime-950/20',
+            },
           ],
     [lang],
   )
@@ -378,7 +409,7 @@ export function ViewsExplorer({ lang }: ViewsExplorerProps) {
                 </h3>
               </div>
               <span className="inline-flex w-fit rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-semibold text-zinc-600 dark:border-white/10 dark:bg-zinc-950/70 dark:text-zinc-300">
-                {lang === 'es' ? `Vista ${activeIndex} de 9` : `View ${activeIndex} of 9`}
+                {lang === 'es' ? `Vista ${activeIndex} de ${items.length}` : `View ${activeIndex} of ${items.length}`}
               </span>
             </div>
 

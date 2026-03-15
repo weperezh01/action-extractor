@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { BookOpen, Check, ChevronDown, ChevronRight, Plus, UserPlus, X } from 'lucide-react'
+import { useLang } from '@/app/home/hooks/useLang'
 import {
   isSystemExtractionFolderId,
   resolveSystemExtractionFolderKey,
@@ -97,6 +98,7 @@ interface CreateFormProps {
   inputRef: RefObject<HTMLInputElement>
   newName: string
   newColor: FolderColor
+  createLabel?: string
   onNameChange: (v: string) => void
   onColorChange: (c: FolderColor) => void
   onCreate: () => void
@@ -108,6 +110,7 @@ function CreateForm({
   inputRef,
   newName,
   newColor,
+  createLabel = 'Crear',
   onNameChange,
   onColorChange,
   onCreate,
@@ -156,7 +159,7 @@ function CreateForm({
           className="flex flex-1 items-center justify-center gap-1 rounded-md bg-indigo-600 py-1.5 text-[10px] font-bold text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
         >
           <Check size={10} />
-          Crear
+          {createLabel}
         </button>
         <button
           type="button"
@@ -193,11 +196,11 @@ function buildFolderPathLabel(folderId: string, folderById: Map<string, FolderIt
   return names.reverse().join(' / ')
 }
 
-function formatPaperDate(isoDate: string | null | undefined) {
+function formatPaperDate(isoDate: string | null | undefined, lang: 'en' | 'es' = 'es') {
   if (!isoDate) return ''
   const parsed = new Date(isoDate)
   if (Number.isNaN(parsed.getTime())) return ''
-  return new Intl.DateTimeFormat('es-ES', {
+  return new Intl.DateTimeFormat(lang === 'en' ? 'en-US' : 'es-ES', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
@@ -211,6 +214,95 @@ function normalizeSearchText(value: string | null | undefined) {
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
 }
+
+const FOLDER_DOCK_COPY = {
+  en: {
+    anotherUser: 'another user',
+    collapseFolder: (name: string) => `Collapse folder ${name}`,
+    expandFolder: (name: string) => `Expand folder ${name}`,
+    folderWithoutSubfolders: (name: string) => `Folder ${name} has no subfolders`,
+    sharedBy: (name: string) => `Shared by ${name}`,
+    shared: 'Shared',
+    shareFolder: (name: string) => `Share folder ${name}`,
+    deleteFolder: (name: string) => `Delete folder ${name}`,
+    nameInside: (name: string) => `Name inside ${name}`,
+    subfolders: 'Subfolders',
+    active: 'Active',
+    folders: 'Folders',
+    desk: 'Desk',
+    view: 'View',
+    both: 'Both',
+    newFolder: 'New folder',
+    cancel: 'Cancel',
+    activeDestinations: 'Active destinations:',
+    currentDestination: 'Current destination:',
+    createFirstFolder: 'Create your first folder to start organizing your playbooks.',
+    opened: (count: number) => `Open (${count})`,
+    goTo: (title: string) => `Go to ${title}`,
+    closePlaybook: (title: string) => `Close ${title}`,
+    selectFolder: 'Select a folder',
+    note: 'note',
+    searchPlaceholder: 'Search by title, ID, or date',
+    searchAria: 'Search playbooks in the folder',
+    clearSearch: 'Clear search',
+    foldersWithoutPlaybooks: 'Selected folders do not have playbooks yet.',
+    noSearchResults: 'No playbooks match your search.',
+    general: 'General',
+    owner: 'Owner',
+    unsigned: 'Unsigned',
+    open: 'Open',
+    paper: 'Paper',
+    folderTitle: (label: string) => `Folder: ${label}`,
+    papersCount: (visible: number, total: number, filtered: boolean) =>
+      filtered ? `${visible} of ${total} papers` : `${total} papers`,
+    selectedFolders: (count: number) => `${count} selected folders`,
+    newInFolder: (name: string) => `New in ${name}`,
+    newRoot: 'New root',
+  },
+  es: {
+    anotherUser: 'otro usuario',
+    collapseFolder: (name: string) => `Contraer carpeta ${name}`,
+    expandFolder: (name: string) => `Expandir carpeta ${name}`,
+    folderWithoutSubfolders: (name: string) => `Carpeta ${name} sin subcarpetas`,
+    sharedBy: (name: string) => `Compartida por ${name}`,
+    shared: 'Compartida',
+    shareFolder: (name: string) => `Compartir carpeta ${name}`,
+    deleteFolder: (name: string) => `Eliminar carpeta ${name}`,
+    nameInside: (name: string) => `Nombre dentro de ${name}`,
+    subfolders: 'Subcarpetas',
+    active: 'Activas',
+    folders: 'Carpetas',
+    desk: 'Escritorio',
+    view: 'Vista',
+    both: 'Ambos',
+    newFolder: 'Nueva carpeta',
+    cancel: 'Cancelar',
+    activeDestinations: 'Destinos activos:',
+    currentDestination: 'Destino actual:',
+    createFirstFolder: 'Crea tu primera carpeta para comenzar a organizar tus playbooks.',
+    opened: (count: number) => `Abiertos (${count})`,
+    goTo: (title: string) => `Ir a ${title}`,
+    closePlaybook: (title: string) => `Cerrar ${title}`,
+    selectFolder: 'Selecciona una carpeta',
+    note: 'nota',
+    searchPlaceholder: 'Buscar por titulo, ID o fecha',
+    searchAria: 'Buscar playbooks en la carpeta',
+    clearSearch: 'Limpiar busqueda',
+    foldersWithoutPlaybooks: 'Las carpetas seleccionadas aún no tienen playbooks.',
+    noSearchResults: 'No hay playbooks que coincidan con tu búsqueda.',
+    general: 'General',
+    owner: 'Dueño',
+    unsigned: 'Sin firma',
+    open: 'Abierto',
+    paper: 'Papel',
+    folderTitle: (label: string) => `Carpeta: ${label}`,
+    papersCount: (visible: number, total: number, filtered: boolean) =>
+      filtered ? `${visible} de ${total} papeles` : `${total} papeles`,
+    selectedFolders: (count: number) => `${count} carpetas seleccionadas`,
+    newInFolder: (name: string) => `Nueva en ${name}`,
+    newRoot: 'Nueva raíz',
+  },
+} as const
 
 function FolderStateIcon({
   isOpen,
@@ -285,6 +377,8 @@ export function FolderDock({
   onFocusOpenDeskPlaybook,
   onCloseOpenDeskPlaybook,
 }: FolderDockProps) {
+  const { lang } = useLang()
+  const ui = FOLDER_DOCK_COPY[lang]
   const [visiblePanels, setVisiblePanels] = useState<{ folders: boolean; desk: boolean }>({
     folders: true,
     desk: true,
@@ -497,7 +591,7 @@ export function FolderDock({
   )
   const createTargetId = canCreateInSelectedFolder && selectedFolder ? selectedFolder.id : null
   const createButtonLabel =
-    canCreateInSelectedFolder && selectedFolder ? `Nueva en ${selectedFolder.name}` : 'Nueva raíz'
+    canCreateInSelectedFolder && selectedFolder ? ui.newInFolder(selectedFolder.name) : ui.newRoot
   const normalizedDeskSearch = useMemo(() => normalizeSearchText(deskSearch).trim(), [deskSearch])
   const filteredPlaybooksInDeskSelection = useMemo(() => {
     if (normalizedDeskSearch.length === 0) return playbooksInDeskSelection
@@ -509,18 +603,16 @@ export function FolderDock({
         playbook.title,
         playbook.subtitle ?? '',
         playbook.createdAt ?? '',
-        formatPaperDate(playbook.createdAt),
+        formatPaperDate(playbook.createdAt, lang),
       ].join(' ')
 
       return normalizeSearchText(searchable).includes(normalizedDeskSearch)
     })
-  }, [normalizedDeskSearch, playbooksInDeskSelection])
+  }, [lang, normalizedDeskSearch, playbooksInDeskSelection])
   const visiblePaperCount = hasDeskSelection ? filteredPlaybooksInDeskSelection.length : 0
   const totalPaperCount = hasDeskSelection ? playbooksInDeskSelection.length : 0
   const deskPaperCountLabel =
-    normalizedDeskSearch.length > 0
-      ? `${visiblePaperCount} de ${totalPaperCount} papeles`
-      : `${totalPaperCount} papeles`
+    ui.papersCount(visiblePaperCount, totalPaperCount, normalizedDeskSearch.length > 0)
   const deskSelectionKey = useMemo(() => selectedFolderIds.join('|'), [selectedFolderIds])
 
   useEffect(() => {
@@ -553,7 +645,7 @@ export function FolderDock({
       ? null
       : activeFolderPaths.length === 1
         ? activeFolderPaths[0] ?? null
-        : `${activeFolderPaths.length} carpetas seleccionadas`
+        : ui.selectedFolders(activeFolderPaths.length)
   const openDeskPlaybookIds = useMemo(() => {
     const ids = new Set<string>()
     openDeskPlaybooks.forEach((playbook) => {
@@ -620,7 +712,7 @@ export function FolderDock({
     const isFolderOpenVisual = isSelected
     const canManageShare = !isSharedFolder && !isSystemExtractionFolderId(folder.id) && Boolean(onManageFolderShare)
     const canDelete = !isSharedFolder && !isSystemExtractionFolderId(folder.id)
-    const sharedByLabel = folder.ownerName?.trim() || folder.ownerEmail || 'otro usuario'
+    const sharedByLabel = folder.ownerName?.trim() || folder.ownerEmail || ui.anotherUser
 
     return (
       <div key={folder.id} className="mt-1.5">
@@ -646,9 +738,9 @@ export function FolderDock({
             aria-label={
               hasChildren
                 ? isExpanded
-                  ? `Contraer carpeta ${folder.name}`
-                  : `Expandir carpeta ${folder.name}`
-                : `Carpeta ${folder.name} sin subcarpetas`
+                  ? ui.collapseFolder(folder.name)
+                  : ui.expandFolder(folder.name)
+                : ui.folderWithoutSubfolders(folder.name)
             }
             className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border text-[#7b6546] transition-colors dark:text-[#c3ae90] ${
               hasChildren
@@ -699,10 +791,10 @@ export function FolderDock({
               <span className="truncate">{folder.name}</span>
               {isSharedFolder && (
                 <span
-                  title={`Compartida por ${sharedByLabel}`}
+                  title={ui.sharedBy(sharedByLabel)}
                   className="inline-flex h-4 items-center rounded-full border border-sky-200 bg-sky-50 px-1.5 text-[9px] font-bold uppercase tracking-wide text-sky-700 dark:border-sky-700 dark:bg-sky-900/25 dark:text-sky-300"
                 >
-                  Compartida
+                  {ui.shared}
                 </span>
               )}
               {hasChildren && (
@@ -727,8 +819,8 @@ export function FolderDock({
                   <button
                     type="button"
                     onClick={() => onManageFolderShare?.(folder.id)}
-                    aria-label={`Compartir carpeta ${folder.name}`}
-                    title={`Compartir carpeta ${folder.name}`}
+                    aria-label={ui.shareFolder(folder.name)}
+                    title={ui.shareFolder(folder.name)}
                     className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-sky-200 bg-white text-sky-500 shadow-sm transition-colors hover:border-sky-300 hover:bg-sky-50 hover:text-sky-600 dark:border-sky-800 dark:bg-zinc-900 dark:text-sky-400 dark:hover:border-sky-700 dark:hover:bg-sky-950/40 dark:hover:text-sky-300"
                   >
                     <UserPlus size={9} />
@@ -739,7 +831,7 @@ export function FolderDock({
                   <button
                     type="button"
                     onClick={() => requestDeleteFolder(folder)}
-                    aria-label={`Eliminar carpeta ${folder.name}`}
+                    aria-label={ui.deleteFolder(folder.name)}
                     className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-400 shadow-sm transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-500 dark:hover:border-rose-800 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
                   >
                     <X size={9} />
@@ -760,7 +852,8 @@ export function FolderDock({
               onColorChange={setNewColor}
               onCreate={handleCreate}
               onCancel={cancelCreate}
-              placeholder={`Nombre dentro de ${folder.name}`}
+              placeholder={ui.nameInside(folder.name)}
+              createLabel={lang === 'en' ? 'Create' : 'Crear'}
             />
           </div>
         )}
@@ -774,7 +867,7 @@ export function FolderDock({
             }`}
           >
             <p className="px-1 text-[9px] font-semibold uppercase tracking-wide text-[#8b6f4a] dark:text-[#bea483]">
-              Subcarpetas
+              {ui.subfolders}
             </p>
             <div className="relative mt-0.5">
               <span
@@ -797,7 +890,7 @@ export function FolderDock({
     <div className="-mb-px mx-auto w-full max-w-5xl px-1 pb-0 pt-2">
       {activeFolderPaths.length > 0 && (
         <p className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wide text-indigo-600 dark:text-indigo-300">
-          Activas: {activeFoldersSummary}
+          {ui.active}: {activeFoldersSummary}
         </p>
       )}
       <div className="rounded-xl border border-[#d7c6a7]/70 bg-[linear-gradient(180deg,#fffdfa_0%,#f7efdf_100%)] p-2 shadow-[0_10px_22px_-20px_rgba(74,52,26,0.65)] dark:border-[#5d4f3f]/80 dark:bg-[linear-gradient(180deg,#26211c_0%,#2f271f_100%)]">
@@ -812,7 +905,7 @@ export function FolderDock({
                 : 'border-[#ceb994] bg-[linear-gradient(180deg,#fffefb_0%,#f5ead4_100%)] text-[#8a714f] hover:border-[#b69363] hover:text-[#654b2b] dark:border-[#64533f] dark:bg-[linear-gradient(180deg,#2f271f_0%,#372d23_100%)] dark:text-[#bca689] dark:hover:border-[#816545] dark:hover:text-[#e0cfb3]'
             }`}
           >
-            Carpetas
+            {ui.folders}
           </button>
           <button
             type="button"
@@ -824,10 +917,10 @@ export function FolderDock({
                 : 'border-[#ceb994] bg-[linear-gradient(180deg,#fffefb_0%,#f5ead4_100%)] text-[#8a714f] hover:border-[#b69363] hover:text-[#654b2b] dark:border-[#64533f] dark:bg-[linear-gradient(180deg,#2f271f_0%,#372d23_100%)] dark:text-[#bca689] dark:hover:border-[#816545] dark:hover:text-[#e0cfb3]'
             }`}
           >
-            Escritorio
+            {ui.desk}
           </button>
           <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#8f7552] dark:text-[#b7a287]">
-            Vista: {showBothPanels ? 'Ambos' : showFoldersPanel ? 'Carpetas' : 'Escritorio'}
+            {ui.view}: {showBothPanels ? ui.both : showFoldersPanel ? ui.folders : ui.desk}
           </span>
         </div>
 
@@ -840,7 +933,7 @@ export function FolderDock({
             <div className="min-w-0">
             <div className="mb-2 flex items-center gap-2 px-1">
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#8d714e] dark:text-[#c8b292]">
-                Carpetas
+                {ui.folders}
               </p>
               {!isCreating ? (
                 <button
@@ -850,7 +943,7 @@ export function FolderDock({
                   className="inline-flex items-center gap-1 rounded-md border border-[#ccb085] bg-[linear-gradient(180deg,#fff7e8_0%,#efdbb3_100%)] px-2 py-1 text-[10px] font-semibold text-[#5e4728] transition-colors hover:border-[#b49361] hover:bg-[linear-gradient(180deg,#fff4e1_0%,#e8cd98_100%)] dark:border-[#705c3f] dark:bg-[linear-gradient(180deg,#3b2f24_0%,#4c3a2a_100%)] dark:text-[#e0ceaf] dark:hover:border-[#8d734f] dark:hover:bg-[linear-gradient(180deg,#4a392a_0%,#5b4733_100%)]"
                 >
                   <Plus size={11} />
-                  <span className="truncate">Nueva carpeta</span>
+                  <span className="truncate">{ui.newFolder}</span>
                 </button>
               ) : (
                 <button
@@ -858,14 +951,14 @@ export function FolderDock({
                   onClick={cancelCreate}
                   className="inline-flex items-center rounded-md border border-[#ccb085] px-2 py-1 text-[10px] font-semibold text-[#6c5436] transition-colors hover:bg-[#f8ecd6] dark:border-[#6f5d43] dark:text-[#cdbb9d] dark:hover:bg-[#3b3025]"
                 >
-                  Cancelar
+                  {ui.cancel}
                 </button>
               )}
             </div>
 
             {hasDeskSelection && !isCreating && (
               <p className="mb-2 px-1 text-[10px] text-[#886d4b] dark:text-[#bda789]">
-                {selectedFolderIds.length > 1 ? 'Destinos activos:' : 'Destino actual:'}{' '}
+                {selectedFolderIds.length > 1 ? ui.activeDestinations : ui.currentDestination}{' '}
                 <span className="font-semibold">{deskFolderPathLabel}</span>
               </p>
             )}
@@ -880,7 +973,8 @@ export function FolderDock({
                   onColorChange={setNewColor}
                   onCreate={handleCreate}
                   onCancel={cancelCreate}
-                  placeholder={selectedFolder ? `Nombre dentro de ${selectedFolder.name}` : 'Nombre de la carpeta'}
+                  placeholder={selectedFolder ? ui.nameInside(selectedFolder.name) : (lang === 'en' ? 'Folder name' : 'Nombre de la carpeta')}
+                  createLabel={lang === 'en' ? 'Create' : 'Crear'}
                 />
               </div>
             )}
@@ -888,7 +982,7 @@ export function FolderDock({
             <div className="max-h-[330px] overflow-y-auto overflow-x-hidden pr-1">
               {rootFolders.length === 0 && !isCreating ? (
                 <p className="px-1 py-4 text-xs text-[#8c7352] dark:text-[#b9a487]">
-                  Crea tu primera carpeta para comenzar a organizar tus playbooks.
+                  {ui.createFirstFolder}
                 </p>
               ) : (
                 <div className="space-y-1">{rootFolders.map((folder) => renderFolderNode(folder, 0))}</div>
@@ -900,7 +994,7 @@ export function FolderDock({
           {showDeskPanel && (
             <aside className="folder-playbooks-desk min-w-0 rounded-lg p-2">
             <span aria-hidden="true" className="folder-playbooks-desk-stamp">
-              Escritorio
+              {ui.desk}
             </span>
             <div
               className="folder-playbooks-desk-layout"
@@ -909,7 +1003,7 @@ export function FolderDock({
               {openDeskPlaybooks.length > 0 && (
                 <div className="folder-playbooks-openbar">
                   <p className="folder-playbooks-openbar-label">
-                    Abiertos ({openDeskPlaybooks.length})
+                    {ui.opened(openDeskPlaybooks.length)}
                   </p>
                   <div className="folder-playbooks-openbar-scroll">
                     {openDeskPlaybooks.map((playbook) => (
@@ -925,7 +1019,7 @@ export function FolderDock({
                           type="button"
                           onClick={() => onFocusOpenDeskPlaybook?.(playbook.id)}
                           className="folder-playbooks-openbar-chip-focus"
-                          title={`Ir a ${playbook.title}`}
+                          title={ui.goTo(playbook.title)}
                         >
                           <span className="folder-playbooks-openbar-chip-icon">
                             <BookOpen size={11} />
@@ -937,8 +1031,8 @@ export function FolderDock({
                             type="button"
                             onClick={() => onCloseOpenDeskPlaybook(playbook.id)}
                             className="folder-playbooks-openbar-chip-close"
-                            aria-label={`Cerrar ${playbook.title}`}
-                            title={`Cerrar ${playbook.title}`}
+                            aria-label={ui.closePlaybook(playbook.title)}
+                            title={ui.closePlaybook(playbook.title)}
                           >
                             <X size={10} />
                           </button>
@@ -952,7 +1046,7 @@ export function FolderDock({
               <div className="folder-playbooks-desk-surface">
                 <div className="folder-playbooks-desk-header">
                   <p className="folder-playbooks-desk-path truncate text-[11px] font-semibold">
-                    {deskFolderPathLabel ?? 'Selecciona una carpeta'}
+                    {deskFolderPathLabel ?? ui.selectFolder}
                   </p>
                   <span className="folder-playbooks-desk-accessories" aria-hidden="true">
                     <span className="folder-playbooks-desk-calculator">
@@ -970,7 +1064,7 @@ export function FolderDock({
                       </span>
                     </span>
                     <span className="folder-playbooks-desk-pen" />
-                    <span className="folder-playbooks-desk-sticky">nota</span>
+                    <span className="folder-playbooks-desk-sticky">{ui.note}</span>
                   </span>
                 </div>
 
@@ -981,16 +1075,16 @@ export function FolderDock({
                         type="text"
                         value={deskSearch}
                         onChange={(e) => setDeskSearch(e.target.value)}
-                        placeholder="Buscar por titulo, ID o fecha"
+                        placeholder={ui.searchPlaceholder}
                         className="folder-playbooks-desk-search-input"
-                        aria-label="Buscar playbooks en la carpeta"
+                        aria-label={ui.searchAria}
                       />
                       {deskSearch.trim().length > 0 && (
                         <button
                           type="button"
                           onClick={() => setDeskSearch('')}
                           className="folder-playbooks-desk-search-clear"
-                          aria-label="Limpiar busqueda"
+                          aria-label={ui.clearSearch}
                         >
                           <X size={12} />
                         </button>
@@ -1004,11 +1098,11 @@ export function FolderDock({
                     <div className="folder-playbooks-desk-scroll mt-1.5 max-h-[50vh] overflow-y-auto pr-1">
                       {playbooksInDeskSelection.length === 0 ? (
                         <p className="folder-playbooks-desk-empty rounded-md px-2.5 py-2 text-xs">
-                          Las carpetas seleccionadas aún no tienen playbooks.
+                          {ui.foldersWithoutPlaybooks}
                         </p>
                       ) : filteredPlaybooksInDeskSelection.length === 0 ? (
                         <p className="folder-playbooks-desk-empty rounded-md px-2.5 py-2 text-xs">
-                          No hay playbooks que coincidan con tu búsqueda.
+                          {ui.noSearchResults}
                         </p>
                       ) : (
                         <div className="relative pt-1">
@@ -1016,10 +1110,10 @@ export function FolderDock({
                             const isActive = activePlaybookId != null && activePlaybookId === playbook.id
                             const isOpenInDesk = openDeskPlaybookIds.has(playbook.id)
                             const paperAngleClass = index % 2 === 0 ? '-rotate-[0.35deg]' : 'rotate-[0.35deg]'
-                            const paperDate = formatPaperDate(playbook.createdAt)
+                            const paperDate = formatPaperDate(playbook.createdAt, lang)
                             const playbookFolderLabel = playbook.folderId
                               ? buildFolderPathLabel(playbook.folderId, folderById)
-                              : 'General'
+                              : ui.general
                             const stackZIndex = isActive
                               ? filteredPlaybooksInDeskSelection.length + 20
                               : index + 1
@@ -1028,7 +1122,7 @@ export function FolderDock({
                               if (ownerName) return ownerName
                               const ownerEmail = playbook.ownerEmail?.trim()
                               if (ownerEmail) return ownerEmail
-                              return playbook.source === 'mine' ? 'Propietario' : 'Sin firma'
+                              return playbook.source === 'mine' ? ui.owner : ui.unsigned
                             })()
                             return (
                               <div
@@ -1066,10 +1160,10 @@ export function FolderDock({
                                           ? 'border-[#c7a06a] bg-[#f4dfbc] text-[#684423] dark:border-[#9e7a4f] dark:bg-[#5a442e] dark:text-[#f0ddbf]'
                                           : 'border-[#ddc9a8] bg-[#f9f0df] dark:border-[#6b5841] dark:bg-[#463729]'
                                       }`}>
-                                        {isOpenInDesk ? 'Abierto' : 'Papel'}
+                                        {isOpenInDesk ? ui.open : ui.paper}
                                       </span>
                                       <span
-                                        title={`Carpeta: ${playbookFolderLabel}`}
+                                        title={ui.folderTitle(playbookFolderLabel)}
                                         className="max-w-[9.8rem] truncate rounded-full border border-[#d6c3a1] bg-[#f8ecd6] px-1.5 py-[1px] text-[9px] font-semibold text-[#6d5233] dark:border-[#6b5841] dark:bg-[#4a3a2c] dark:text-[#e1ccad]"
                                       >
                                         {playbookFolderLabel}
@@ -1078,7 +1172,7 @@ export function FolderDock({
                                     {paperDate && <span className="shrink-0">{paperDate}</span>}
                                   </div>
                                   <p
-                                    title={`Dueño: ${ownerSignature}`}
+                                    title={`${ui.owner}: ${ownerSignature}`}
                                     className="folder-playbooks-desk-owner-signature"
                                   >
                                     {ownerSignature}

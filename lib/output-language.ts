@@ -1,5 +1,6 @@
 export type ExtractionOutputLanguage = 'auto' | 'es' | 'en'
 export type ResolvedExtractionOutputLanguage = 'es' | 'en'
+export type ExtractionOutputLanguageUiLang = 'en' | 'es'
 
 export interface ExtractionOutputLanguageOption {
   value: ExtractionOutputLanguage
@@ -9,23 +10,54 @@ export interface ExtractionOutputLanguageOption {
 
 export const DEFAULT_EXTRACTION_OUTPUT_LANGUAGE: ExtractionOutputLanguage = 'auto'
 
-export const EXTRACTION_OUTPUT_LANGUAGE_OPTIONS: readonly ExtractionOutputLanguageOption[] = [
-  {
-    value: 'auto',
-    label: 'Automático',
-    description: 'Detecta idioma del video',
+const EXTRACTION_OUTPUT_LANGUAGE_COPY: Record<
+  ExtractionOutputLanguageUiLang,
+  Record<ExtractionOutputLanguage, { label: string; description: string }>
+> = {
+  en: {
+    auto: {
+      label: 'Automatic',
+      description: 'Detect the source language',
+    },
+    es: {
+      label: 'Spanish',
+      description: 'Force output in Spanish',
+    },
+    en: {
+      label: 'English',
+      description: 'Force output in English',
+    },
   },
-  {
-    value: 'es',
-    label: 'Español',
-    description: 'Salida forzada en español',
+  es: {
+    auto: {
+      label: 'Automático',
+      description: 'Detecta idioma del contenido',
+    },
+    es: {
+      label: 'Español',
+      description: 'Salida forzada en español',
+    },
+    en: {
+      label: 'Inglés',
+      description: 'Salida forzada en inglés',
+    },
   },
-  {
-    value: 'en',
-    label: 'English',
-    description: 'Force output in English',
-  },
-]
+}
+
+export function getExtractionOutputLanguageOptions(
+  lang: ExtractionOutputLanguageUiLang = 'es'
+): readonly ExtractionOutputLanguageOption[] {
+  return (Object.keys(EXTRACTION_OUTPUT_LANGUAGE_COPY[lang]) as ExtractionOutputLanguage[]).map(
+    (value) => ({
+      value,
+      label: EXTRACTION_OUTPUT_LANGUAGE_COPY[lang][value].label,
+      description: EXTRACTION_OUTPUT_LANGUAGE_COPY[lang][value].description,
+    }),
+  )
+}
+
+export const EXTRACTION_OUTPUT_LANGUAGE_OPTIONS: readonly ExtractionOutputLanguageOption[] =
+  getExtractionOutputLanguageOptions('es')
 
 const EXTRACTION_OUTPUT_LANGUAGE_SET = new Set<ExtractionOutputLanguage>(
   EXTRACTION_OUTPUT_LANGUAGE_OPTIONS.map((option) => option.value)
@@ -127,8 +159,9 @@ export function resolveExtractionOutputLanguage(
   return requestedLanguage
 }
 
-export function getExtractionOutputLanguageLabel(value: ExtractionOutputLanguage) {
-  const found = EXTRACTION_OUTPUT_LANGUAGE_OPTIONS.find((option) => option.value === value)
-  return found?.label ?? 'Automático'
+export function getExtractionOutputLanguageLabel(
+  value: ExtractionOutputLanguage,
+  lang: ExtractionOutputLanguageUiLang = 'es'
+) {
+  return EXTRACTION_OUTPUT_LANGUAGE_COPY[lang][value]?.label ?? EXTRACTION_OUTPUT_LANGUAGE_COPY.es.auto.label
 }
-

@@ -16,8 +16,9 @@ import {
   Search,
   X,
 } from 'lucide-react'
+import { ExtractionModeGuideButton } from '@/app/home/components/ExtractionModeGuideButton'
 import { detectSourceType } from '@/lib/source-detector'
-import { EXTRACTION_MODE_OPTIONS, normalizeExtractionMode, type ExtractionMode } from '@/lib/extraction-modes'
+import { getExtractionModeOptions, normalizeExtractionMode, type ExtractionMode } from '@/lib/extraction-modes'
 import type { ExtractResult, SourceType } from '@/app/home/lib/types'
 import { useLang } from '@/app/home/hooks/useLang'
 import { t } from '@/app/home/lib/i18n'
@@ -60,14 +61,98 @@ interface ExtractionFormProps {
 type EntryMode = 'manual' | 'ia' | 'search'
 
 const ENTRY_MODE_RING = [
-  { value: 'manual', label: 'Manual', icon: PenLine },
-  { value: 'ia', label: 'Extraer', icon: Bot },
-  { value: 'search', label: 'Buscar', icon: Search },
+  { value: 'manual', icon: PenLine },
+  { value: 'ia', icon: Bot },
+  { value: 'search', icon: Search },
 ] as const satisfies ReadonlyArray<{
   value: EntryMode
-  label: string
   icon: typeof PenLine
 }>
+
+const FORM_COPY = {
+  en: {
+    entryModeGroup: 'Entry mode',
+    entryModes: {
+      manual: 'Manual',
+      ia: 'Extract',
+      search: 'Search',
+    },
+    viewHistory: 'View history',
+    uploadedChars: 'chars',
+    removeFile: 'Remove file',
+    publicSearchPlaceholder: 'Search public playbooks by title, objective, or author...',
+    uploadFileTitle: 'Upload PDF, DOCX, or TXT',
+    uploadFileAria: 'Upload PDF, DOCX, or TXT file',
+    analyzing: 'Analyzing',
+    searching: 'Searching',
+    search: 'Search',
+    extract: 'Extract',
+    publicResults: 'Public results',
+    availableMainAppOnly: 'Available in the main app when signed in.',
+    openPublicPlaybookError: 'Could not open the public playbook.',
+    unknownAuthor: 'Unknown author',
+    searchPrompt: 'Type and press Search to find public playbooks.',
+    title: 'Title',
+    optional: '(optional)',
+    manualTitlePlaceholder: 'Ex: Q1 launch plan',
+    mode: 'Mode',
+    coverImage: 'Cover image',
+    coverPreviewAlt: 'Cover preview',
+    removeImage: 'Remove image',
+    uploading: 'Uploading...',
+    uploadImage: 'Upload image',
+    cancel: 'Cancel',
+    creating: 'Creating...',
+    create: 'Create',
+    placeholders: {
+      youtube: 'Paste the YouTube link...',
+      web_url: 'Website URL...',
+      default: 'YouTube link, website, text, or file (.pdf, .docx, .txt)...',
+    },
+    unknownDate: 'Unknown date',
+  },
+  es: {
+    entryModeGroup: 'Modo de entrada',
+    entryModes: {
+      manual: 'Manual',
+      ia: 'Extraer',
+      search: 'Buscar',
+    },
+    viewHistory: 'Ver historial',
+    uploadedChars: 'chars',
+    removeFile: 'Quitar archivo',
+    publicSearchPlaceholder: 'Busca playbooks públicos por título, objetivo o autor...',
+    uploadFileTitle: 'Subir PDF, DOCX o TXT',
+    uploadFileAria: 'Subir archivo PDF, DOCX o TXT',
+    analyzing: 'Analizando',
+    searching: 'Buscando',
+    search: 'Buscar',
+    extract: 'Extraer',
+    publicResults: 'Resultados públicos',
+    availableMainAppOnly: 'Disponible en la app principal con sesión iniciada.',
+    openPublicPlaybookError: 'No se pudo abrir el playbook público.',
+    unknownAuthor: 'Autor desconocido',
+    searchPrompt: 'Escribe y presiona Buscar para encontrar playbooks públicos.',
+    title: 'Título',
+    optional: '(opcional)',
+    manualTitlePlaceholder: 'Ej: Plan de lanzamiento Q1',
+    mode: 'Modo',
+    coverImage: 'Imagen de portada',
+    coverPreviewAlt: 'Vista previa portada',
+    removeImage: 'Quitar imagen',
+    uploading: 'Subiendo...',
+    uploadImage: 'Subir imagen',
+    cancel: 'Cancelar',
+    creating: 'Creando...',
+    create: 'Crear',
+    placeholders: {
+      youtube: 'Pega el link de YouTube...',
+      web_url: 'URL de la página web...',
+      default: 'Link de YouTube, web, texto o archivo (.pdf, .docx, .txt)...',
+    },
+    unknownDate: 'Fecha desconocida',
+  },
+} as const
 
 interface PublicPlaybookSearchItem {
   id: string
@@ -96,29 +181,34 @@ function SourceIcon({ sourceType, size = 17 }: { sourceType: SourceType; size?: 
   }
 }
 
-function getPlaceholder(sourceType: SourceType, hasFile: boolean): string {
+function getPlaceholder(
+  sourceType: SourceType,
+  hasFile: boolean,
+  lang: keyof typeof FORM_COPY
+): string {
   if (hasFile) return ''
+  const copy = FORM_COPY[lang].placeholders
   switch (sourceType) {
     case 'youtube':
-      return 'Pega el link de YouTube...'
+      return copy.youtube
     case 'web_url':
-      return 'URL de la página web...'
+      return copy.web_url
     default:
-      return 'Link de YouTube, web, texto o archivo (.pdf, .docx, .txt)...'
+      return copy.default
   }
 }
 
-function formatSearchDate(value: string) {
+function formatSearchDate(value: string, lang: keyof typeof FORM_COPY) {
   try {
     const date = new Date(value)
-    if (Number.isNaN(date.getTime())) return 'Fecha desconocida'
-    return date.toLocaleDateString('es-ES', {
+    if (Number.isNaN(date.getTime())) return FORM_COPY[lang].unknownDate
+    return date.toLocaleDateString(lang === 'en' ? 'en-US' : 'es-ES', {
       year: 'numeric',
       month: 'short',
       day: '2-digit',
     })
   } catch {
-    return 'Fecha desconocida'
+    return FORM_COPY[lang].unknownDate
   }
 }
 
@@ -142,6 +232,8 @@ export function ExtractionForm({
   onOpenBatchMode,
 }: ExtractionFormProps) {
   const { lang } = useLang()
+  const ui = FORM_COPY[lang]
+  const localizedModeOptions = getExtractionModeOptions(lang)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const thumbInputRef = useRef<HTMLInputElement>(null)
 
@@ -441,7 +533,7 @@ export function ExtractionForm({
         <div className="flex items-center gap-2">
           <div
             role="radiogroup"
-            aria-label="Modo de entrada"
+            aria-label={ui.entryModeGroup}
             className={`relative h-11 w-[16.2rem] shrink-0 [perspective:1100px] transition-transform duration-[2400ms] sm:w-[17.2rem] ${
               ringPulseActive ? 'scale-[1.01]' : ''
             }`}
@@ -513,7 +605,7 @@ export function ExtractionForm({
                   )}
                   <span className="relative inline-flex items-center gap-1.5">
                     <Icon size={13} />
-                    {option.label}
+                    {ui.entryModes[option.value]}
                   </span>
                 </button>
               )
@@ -526,7 +618,7 @@ export function ExtractionForm({
           <button
             type="button"
             onClick={onScrollToHistory}
-            aria-label="Ver historial"
+            aria-label={ui.viewHistory}
             className="group inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-indigo-200 bg-gradient-to-r from-indigo-50 to-sky-50 text-indigo-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-indigo-300 hover:from-indigo-100 hover:to-sky-100 hover:shadow-md dark:border-indigo-800/70 dark:from-indigo-950/40 dark:to-sky-950/40 dark:text-indigo-300 dark:hover:border-indigo-700"
           >
             <History size={15} className="transition-transform duration-200 group-hover:-translate-y-0.5" />
@@ -560,14 +652,14 @@ export function ExtractionForm({
                   {uploadedFile.name}
                 </span>
                 <span className="shrink-0 text-xs text-zinc-400">
-                  {(uploadedFile.charCount / 1000).toFixed(1)}k chars
+                  {(uploadedFile.charCount / 1000).toFixed(1)}k {ui.uploadedChars}
                 </span>
                 <button
                   type="button"
                   onClick={onClearFile}
                   disabled={isProcessing}
                   className="ml-auto shrink-0 rounded-full p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                  aria-label="Quitar archivo"
+                  aria-label={ui.removeFile}
                 >
                   <X size={14} />
                 </button>
@@ -578,8 +670,8 @@ export function ExtractionForm({
                 data-extraction-input="true"
                 placeholder={
                   isSearchMode
-                    ? 'Busca playbooks públicos por título, objetivo o autor...'
-                    : getPlaceholder(detectedSourceType, false)
+                    ? ui.publicSearchPlaceholder
+                    : getPlaceholder(detectedSourceType, false, lang)
                 }
                 className="h-12 w-full bg-transparent px-2 text-base text-zinc-800 placeholder:text-zinc-400 outline-none dark:text-zinc-100 dark:placeholder:text-zinc-500"
                 value={url}
@@ -597,8 +689,8 @@ export function ExtractionForm({
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isProcessing || isUploading}
                   className="shrink-0 rounded-full p-2 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                  title="Subir PDF, DOCX o TXT"
-                  aria-label="Subir archivo PDF, DOCX o TXT"
+                  title={ui.uploadFileTitle}
+                  aria-label={ui.uploadFileAria}
                 >
                   {isUploading ? (
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-600" />
@@ -637,16 +729,16 @@ export function ExtractionForm({
               {!isSearchMode && isProcessing ? (
                 <>
                   <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                  Analizando
+                  {ui.analyzing}
                 </>
               ) : isSearchMode && publicSearchLoading ? (
                 <>
                   <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                  Buscando
+                  {ui.searching}
                 </>
               ) : (
                 <>
-                  {isSearchMode ? 'Buscar' : 'Extraer'}
+                  {isSearchMode ? ui.search : ui.extract}
                   {isSearchMode ? <Search size={16} /> : <ArrowRight size={16} />}
                 </>
               )}
@@ -700,12 +792,12 @@ export function ExtractionForm({
         <div className="mt-3 rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-white/10 dark:bg-zinc-950">
           <div className="mb-2 flex items-center justify-between gap-2">
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500 dark:text-zinc-400">
-              Resultados públicos
+              {ui.publicResults}
             </p>
             {publicSearchLoading && (
               <div className="inline-flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
                 <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-600" />
-                Buscando...
+                {ui.searching}...
               </div>
             )}
           </div>
@@ -724,7 +816,7 @@ export function ExtractionForm({
                     type="button"
                     onClick={() => {
                       if (!onOpenPublicPlaybook) {
-                        setPublicSearchError('Disponible en la app principal con sesión iniciada.')
+                        setPublicSearchError(ui.availableMainAppOnly)
                         return
                       }
                       setPublicSearchError(null)
@@ -737,7 +829,7 @@ export function ExtractionForm({
                           const msg =
                             error instanceof Error && error.message.trim()
                               ? error.message
-                              : 'No se pudo abrir el playbook público.'
+                              : ui.openPublicPlaybookError
                           setPublicSearchError(msg)
                         })
                         .finally(() => {
@@ -764,7 +856,7 @@ export function ExtractionForm({
                         {item.title}
                       </span>
                       <span className="mt-0.5 block truncate text-xs text-zinc-500 dark:text-zinc-400">
-                        {(item.ownerName?.trim() || item.ownerEmail || 'Autor desconocido')} · {formatSearchDate(item.createdAt)}
+                        {(item.ownerName?.trim() || item.ownerEmail || ui.unknownAuthor)} · {formatSearchDate(item.createdAt, lang)}
                       </span>
                       <span className="mt-0.5 block line-clamp-2 text-xs text-zinc-500 dark:text-zinc-400">
                         {item.objectivePreview}
@@ -780,7 +872,7 @@ export function ExtractionForm({
           ) : (
             !publicSearchLoading && (
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Escribe y presiona <span className="font-semibold">Buscar</span> para encontrar playbooks públicos.
+                {ui.searchPrompt}
               </p>
             )
           )}
@@ -807,13 +899,13 @@ export function ExtractionForm({
             {/* Title */}
             <div>
               <label className="mb-1 block text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-                Título <span className="font-normal text-zinc-400">(opcional)</span>
+                {ui.title} <span className="font-normal text-zinc-400">{ui.optional}</span>
               </label>
               <input
                 type="text"
                 value={manualTitle}
                 onChange={(e) => setManualTitle(e.target.value)}
-                placeholder="Ej: Plan de lanzamiento Q1"
+                placeholder={ui.manualTitlePlaceholder}
                 maxLength={200}
                 className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800 placeholder:text-zinc-400 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-400/20 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-violet-500"
               />
@@ -821,15 +913,18 @@ export function ExtractionForm({
 
             {/* Mode */}
             <div>
-              <label className="mb-1 block text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-                Modo
-              </label>
+              <div className="mb-1 flex items-center gap-2">
+                <label className="block text-xs font-semibold text-zinc-500 dark:text-zinc-400">
+                  {ui.mode}
+                </label>
+                <ExtractionModeGuideButton mode={manualMode} />
+              </div>
               <select
                 value={manualMode}
                 onChange={(e) => setManualMode(normalizeExtractionMode(e.target.value))}
                 className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-800 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-400/20 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-100"
               >
-                {EXTRACTION_MODE_OPTIONS.map((opt) => (
+                {localizedModeOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label} — {opt.description}
                   </option>
@@ -841,21 +936,21 @@ export function ExtractionForm({
             {cloudinaryAvailable === true && (
               <div>
                 <label className="mb-1 block text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-                  Imagen de portada <span className="font-normal text-zinc-400">(opcional)</span>
+                  {ui.coverImage} <span className="font-normal text-zinc-400">{ui.optional}</span>
                 </label>
                 {manualThumbnailPreview ? (
                   <div className="relative inline-block">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={manualThumbnailPreview}
-                      alt="Vista previa portada"
+                      alt={ui.coverPreviewAlt}
                       className="h-20 w-36 rounded-lg border border-zinc-200 object-cover dark:border-white/10"
                     />
                     <button
                       type="button"
                       onClick={handleClearThumb}
                       className="absolute -right-2 -top-2 rounded-full bg-white p-0.5 shadow-md border border-zinc-200 text-zinc-500 hover:text-zinc-700 dark:bg-zinc-800 dark:border-white/10 dark:text-zinc-400 dark:hover:text-zinc-200"
-                      aria-label="Quitar imagen"
+                      aria-label={ui.removeImage}
                     >
                       <X size={12} />
                     </button>
@@ -870,12 +965,12 @@ export function ExtractionForm({
                     {isUploadingThumb ? (
                       <>
                         <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-600" />
-                        Subiendo...
+                        {ui.uploading}
                       </>
                     ) : (
                       <>
                         <ImageIcon size={13} />
-                        Subir imagen
+                        {ui.uploadImage}
                       </>
                     )}
                   </button>
@@ -913,7 +1008,7 @@ export function ExtractionForm({
                 disabled={isCreating}
                 className="rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-white/5 dark:hover:text-zinc-200"
               >
-                Cancelar
+                {ui.cancel}
               </button>
               <button
                 type="button"
@@ -924,12 +1019,12 @@ export function ExtractionForm({
                 {isCreating ? (
                   <>
                     <div className="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                    Creando...
+                    {ui.creating}
                   </>
                 ) : (
                   <>
                     <PenLine size={12} />
-                    Crear
+                    {ui.create}
                   </>
                 )}
               </button>

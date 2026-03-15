@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio'
 
-const MAX_WEB_CHARS = 100_000
-const MAX_AI_CHARS = 50_000
+export const MAX_WEB_CHARS = 100_000
+export const MAX_AI_CHARS = 50_000
 
 export interface ExtractedContent {
   text: string
@@ -88,15 +88,25 @@ export async function extractPdfContent(
   buffer: Buffer,
   filename: string
 ): Promise<ExtractedContent> {
-  // pdf-parse v2 uses PDFParse class with buffer option
+  // pdf-parse v2 expects binary input in the `data` field.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { PDFParse } = require('pdf-parse') as {
-    PDFParse: new (opts: { buffer: Buffer }) => { getText(): Promise<{ text: string }> }
+    PDFParse: new (opts: { data: Buffer | Uint8Array }) => {
+      getText(): Promise<{ text: string }>
+      destroy(): Promise<void>
+    }
   }
-  const parser = new PDFParse({ buffer })
-  const data = await parser.getText()
-  const text = (data.text ?? '').replace(/\s{3,}/g, '\n\n').trim()
-  return { text, title: filename, charCount: text.length }
+  const parser = new PDFParse({ data: buffer })
+
+  try {
+    const data = await parser.getText()
+    const text = (data.text ?? '').replace(/\s{3,}/g, '\n\n').trim()
+    return { text, title: filename, charCount: text.length }
+  } finally {
+    await parser.destroy().catch(() => {
+      // noop: freeing parser resources is best-effort
+    })
+  }
 }
 
 export async function extractDocxContent(

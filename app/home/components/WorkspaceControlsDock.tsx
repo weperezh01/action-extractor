@@ -2,13 +2,16 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, Settings2 } from 'lucide-react'
+import { ExtractionModeGuideButton } from '@/app/home/components/ExtractionModeGuideButton'
+import { useLang } from '@/app/home/hooks/useLang'
 import {
-  EXTRACTION_MODE_OPTIONS,
   getExtractionModeLabel,
+  getExtractionModeOptions,
   type ExtractionMode,
 } from '@/lib/extraction-modes'
 import {
-  EXTRACTION_OUTPUT_LANGUAGE_OPTIONS,
+  getExtractionOutputLanguageOptions,
+  getExtractionOutputLanguageLabel,
   type ExtractionOutputLanguage,
 } from '@/lib/output-language'
 
@@ -72,6 +75,37 @@ const triggerClass =
 const panelClass =
   'absolute right-0 z-20 mt-2 rounded-xl border border-zinc-200 bg-white p-2 dark:border-white/10 dark:bg-zinc-950'
 
+const UI_COPY = {
+  en: {
+    mode: 'Mode',
+    language: 'Language',
+    connections: 'Connections',
+    exportConnections: 'Export connections',
+    disconnecting: 'Disconnecting...',
+    disconnect: 'Disconnect',
+    connecting: 'Connecting...',
+    connect: 'Connect',
+    unavailable: 'Unavailable',
+    connected: 'Connected',
+    noConnection: 'Not connected',
+    notConfigured: 'Not configured on server',
+  },
+  es: {
+    mode: 'Modo',
+    language: 'Idioma',
+    connections: 'Conexiones',
+    exportConnections: 'Conexiones de exportación',
+    disconnecting: 'Desconectando...',
+    disconnect: 'Desconectar',
+    connecting: 'Conectando...',
+    connect: 'Conectar',
+    unavailable: 'No disponible',
+    connected: 'Conectado',
+    noConnection: 'Sin conexión',
+    notConfigured: 'No configurado en servidor',
+  },
+} as const
+
 export function WorkspaceControlsDock({
   extractionMode,
   outputLanguage,
@@ -113,7 +147,9 @@ export function WorkspaceControlsDock({
   onConnectGoogleDocs,
   onDisconnectGoogleDocs,
 }: WorkspaceControlsDockProps) {
+  const { lang } = useLang()
   const [isModeOpen, setIsModeOpen] = useState(false)
+  const [isModeGuideOpen, setIsModeGuideOpen] = useState(false)
   const [isLanguageOpen, setIsLanguageOpen] = useState(false)
   const [isIntegrationsOpen, setIsIntegrationsOpen] = useState(false)
   const controlsRef = useRef<HTMLDivElement | null>(null)
@@ -133,9 +169,10 @@ export function WorkspaceControlsDock({
     return () => document.removeEventListener('mousedown', handleOutsideClick)
   }, [])
 
-  const outputLanguageLabel =
-    EXTRACTION_OUTPUT_LANGUAGE_OPTIONS.find((option) => option.value === outputLanguage)?.label ??
-    'Español'
+  const ui = UI_COPY[lang]
+  const localizedModeOptions = getExtractionModeOptions(lang)
+  const localizedOutputLanguageOptions = getExtractionOutputLanguageOptions(lang)
+  const outputLanguageLabel = getExtractionOutputLanguageLabel(outputLanguage, lang)
 
   const integrationControls: IntegrationControl[] = [
     {
@@ -198,122 +235,136 @@ export function WorkspaceControlsDock({
               ? 'perspective(700px) translateX(56px) rotateY(-12deg) scale(0.88)'
               : 'perspective(700px) translateX(0px) rotateY(0deg) scale(1)',
             pointerEvents: (isManualOpen || isSearchOpen) ? 'none' : undefined,
-            overflow: (isModeOpen || isLanguageOpen) ? 'visible' : 'hidden',
+            overflow: (isModeOpen || isModeGuideOpen || isLanguageOpen) ? 'visible' : 'hidden',
             transition: 'max-width 0.65s cubic-bezier(0.4, 0, 0.2, 1), max-height 0.65s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.55s cubic-bezier(0.4, 0, 0.2, 1), transform 0.65s cubic-bezier(0.4, 0, 0.2, 1)',
             transformOrigin: 'left center',
             display: 'flex',
             gap: '0.5rem',
           }}
         >
-        <div className="relative">
-          <button
-            type="button"
-            disabled={isProcessing}
-            onClick={() => {
-              setIsModeOpen((previous) => {
-                const next = !previous
-                if (next) {
-                  setIsLanguageOpen(false)
-                  setIsIntegrationsOpen(false)
-                }
-                return next
-              })
-            }}
-            className={`${triggerClass} disabled:cursor-not-allowed disabled:opacity-60`}
-          >
-            <span>Modo: {getExtractionModeLabel(extractionMode)}</span>
-            <ChevronDown
-              size={14}
-              className={`transition-transform duration-200 ${isModeOpen ? 'rotate-180' : ''}`}
-            />
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <button
+                type="button"
+                disabled={isProcessing}
+                onClick={() => {
+                  setIsModeOpen((previous) => {
+                    const next = !previous
+                    if (next) {
+                      setIsLanguageOpen(false)
+                      setIsIntegrationsOpen(false)
+                    }
+                    return next
+                  })
+              }}
+                className={`${triggerClass} disabled:cursor-not-allowed disabled:opacity-60`}
+              >
+                <span>{ui.mode}: {getExtractionModeLabel(extractionMode, lang)}</span>
+                <ChevronDown
+                  size={14}
+                  className={`transition-transform duration-200 ${isModeOpen ? 'rotate-180' : ''}`}
+                />
+              </button>
 
-          {isModeOpen && (
-            <div className={`${panelClass} w-[22rem]`}>
-              <div className="space-y-1">
-                {EXTRACTION_MODE_OPTIONS.map((option) => {
-                  const isActive = extractionMode === option.value
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      disabled={isProcessing}
-                      onClick={() => {
-                        onExtractionModeChange(option.value)
-                        setIsModeOpen(false)
-                      }}
-                      className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
-                        isActive
-                          ? 'border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-950/40 dark:text-violet-300'
-                          : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-white/5'
-                      } disabled:cursor-not-allowed disabled:opacity-60`}
-                    >
-                      <p className="text-sm font-semibold">{option.label}</p>
-                      <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-                        {option.description}
-                      </p>
-                    </button>
-                  )
-                })}
-              </div>
+              {isModeOpen && (
+                <div className={`${panelClass} w-[22rem]`}>
+                  <div className="space-y-1">
+                    {localizedModeOptions.map((option) => {
+                      const isActive = extractionMode === option.value
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          disabled={isProcessing}
+                          onClick={() => {
+                            onExtractionModeChange(option.value)
+                            setIsModeOpen(false)
+                          }}
+                          className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                            isActive
+                              ? 'border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-950/40 dark:text-violet-300'
+                              : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-white/5'
+                          } disabled:cursor-not-allowed disabled:opacity-60`}
+                        >
+                          <p className="text-sm font-semibold">{option.label}</p>
+                          <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                            {option.description}
+                          </p>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        <div className="relative">
-          <button
-            type="button"
-            disabled={isProcessing}
-            onClick={() => {
-              setIsLanguageOpen((previous) => {
-                const next = !previous
-                if (next) {
-                  setIsModeOpen(false)
-                  setIsIntegrationsOpen(false)
-                }
-                return next
-              })
-            }}
-            className={`${triggerClass} disabled:cursor-not-allowed disabled:opacity-60`}
-          >
-            <span>Idioma: {outputLanguageLabel}</span>
-            <ChevronDown
-              size={14}
-              className={`transition-transform duration-200 ${isLanguageOpen ? 'rotate-180' : ''}`}
+            <ExtractionModeGuideButton
+              mode={extractionMode}
+              align="right"
+              onBeforeOpen={() => {
+                setIsModeOpen(false)
+                setIsLanguageOpen(false)
+                setIsIntegrationsOpen(false)
+              }}
+              onOpenChange={setIsModeGuideOpen}
+              buttonClassName="inline-flex h-9 w-9 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/40 dark:border-white/15 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-white/5 dark:hover:text-white"
             />
-          </button>
+          </div>
 
-          {isLanguageOpen && (
-            <div className={`${panelClass} w-[20rem]`}>
-              <div className="space-y-1">
-                {EXTRACTION_OUTPUT_LANGUAGE_OPTIONS.map((option) => {
-                  const isActive = outputLanguage === option.value
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      disabled={isProcessing}
-                      onClick={() => {
-                        onOutputLanguageChange(option.value)
-                        setIsLanguageOpen(false)
-                      }}
-                      className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
-                        isActive
-                          ? 'border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-950/40 dark:text-violet-300'
-                          : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-white/5'
-                      } disabled:cursor-not-allowed disabled:opacity-60`}
-                    >
-                      <p className="text-sm font-semibold">{option.label}</p>
-                      <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-                        {option.description}
-                      </p>
-                    </button>
-                  )
-                })}
+          <div className="relative">
+            <button
+              type="button"
+              disabled={isProcessing}
+              onClick={() => {
+                setIsLanguageOpen((previous) => {
+                  const next = !previous
+                  if (next) {
+                    setIsModeOpen(false)
+                    setIsIntegrationsOpen(false)
+                  }
+                  return next
+                })
+              }}
+              className={`${triggerClass} disabled:cursor-not-allowed disabled:opacity-60`}
+            >
+              <span>{ui.language}: {outputLanguageLabel}</span>
+              <ChevronDown
+                size={14}
+                className={`transition-transform duration-200 ${isLanguageOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+
+            {isLanguageOpen && (
+              <div className={`${panelClass} w-[20rem]`}>
+                <div className="space-y-1">
+                  {localizedOutputLanguageOptions.map((option) => {
+                    const isActive = outputLanguage === option.value
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        disabled={isProcessing}
+                        onClick={() => {
+                          onOutputLanguageChange(option.value)
+                          setIsLanguageOpen(false)
+                        }}
+                        className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                          isActive
+                            ? 'border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-950/40 dark:text-violet-300'
+                            : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-white/5'
+                        } disabled:cursor-not-allowed disabled:opacity-60`}
+                      >
+                        <p className="text-sm font-semibold">{option.label}</p>
+                        <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                          {option.description}
+                        </p>
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
         </div>
 
         <div className="relative">
@@ -332,7 +383,7 @@ export function WorkspaceControlsDock({
             className={triggerClass}
           >
             <Settings2 size={13} />
-            <span>Conexiones: {connectedIntegrations}/4</span>
+            <span>{ui.connections}: {connectedIntegrations}/4</span>
             <ChevronDown
               size={14}
               className={`transition-transform duration-200 ${isIntegrationsOpen ? 'rotate-180' : ''}`}
@@ -342,7 +393,7 @@ export function WorkspaceControlsDock({
           {isIntegrationsOpen && (
             <div className={`${panelClass} w-[22rem]`}>
               <p className="px-1 pb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                Conexiones de exportación
+                {ui.exportConnections}
               </p>
               <div className="space-y-2">
                 {integrationControls.map((control) => {
@@ -351,19 +402,19 @@ export function WorkspaceControlsDock({
                     : control.connecting || !control.configured
                   const actionLabel = control.connected
                     ? control.disconnecting
-                      ? 'Desconectando...'
-                      : 'Desconectar'
+                      ? ui.disconnecting
+                      : ui.disconnect
                     : control.connecting
-                      ? 'Conectando...'
+                      ? ui.connecting
                       : control.configured
-                        ? 'Conectar'
-                        : 'No disponible'
+                        ? ui.connect
+                        : ui.unavailable
 
                   const statusLabel = control.connected
-                    ? `Conectado${control.accountLabel ? `: ${control.accountLabel}` : ''}`
+                    ? `${ui.connected}${control.accountLabel ? `: ${control.accountLabel}` : ''}`
                     : control.configured
-                      ? 'Sin conexión'
-                      : 'No configurado en servidor'
+                      ? ui.noConnection
+                      : ui.notConfigured
 
                   return (
                     <div

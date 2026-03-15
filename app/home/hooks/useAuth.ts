@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReadonlyURLSearchParams } from 'next/navigation'
+import { getAuthCopy, translateAuthServerMessage } from '@/app/home/lib/auth-copy'
+import type { Lang } from '@/app/home/lib/i18n'
 import type { AuthMode, SessionUser } from '@/app/home/lib/types'
 
 const SESSION_REQUEST_TIMEOUT_MS = 10000
@@ -29,6 +31,7 @@ async function migrateGuestExtractions() {
 }
 
 interface UseAuthParams {
+  lang: Lang
   searchParams: ReadonlyURLSearchParams
   resetTokenFromUrl: string | null
   onAuthenticated: () => Promise<void> | void
@@ -43,6 +46,7 @@ interface UseAuthParams {
 }
 
 export function useAuth({
+  lang,
   searchParams,
   resetTokenFromUrl,
   onAuthenticated,
@@ -122,37 +126,39 @@ export function useAuth({
       clearTimeout(timeoutId)
       if (blockSessionCheck) setSessionLoading(false)
     }
-  }, [blockSessionCheck, onAuthenticated, onSessionMissing])
+  }, [blockSessionCheck, onAuthenticated, onSessionMissing, triggerMigration])
 
   useEffect(() => {
     void loadSession()
   }, [loadSession])
 
   useEffect(() => {
+    const copy = getAuthCopy(lang)
     const verificationStatus = searchParams.get('email_verification')
     if (!verificationStatus) return
 
     setAuthMode('login')
     if (verificationStatus === 'success') {
       setAuthError(null)
-      setAuthNotice('Correo verificado correctamente. Ya puedes iniciar sesión.')
+      setAuthNotice(copy.messages.emailVerifiedSuccess)
     } else if (verificationStatus === 'expired') {
       setAuthNotice(null)
-      setAuthError('El enlace de verificación expiró. Regístrate nuevamente para recibir otro correo.')
+      setAuthError(copy.messages.emailVerifiedExpired)
     } else if (verificationStatus === 'invalid') {
       setAuthNotice(null)
-      setAuthError('El enlace de verificación no es válido o ya fue utilizado.')
+      setAuthError(copy.messages.emailVerifiedInvalid)
     } else {
       setAuthNotice(null)
-      setAuthError('No se pudo verificar tu correo. Intenta nuevamente.')
+      setAuthError(copy.messages.emailVerifiedUnknown)
     }
 
     if (typeof window !== 'undefined') {
       window.history.replaceState({}, '', historyBasePath)
     }
-  }, [historyBasePath, searchParams])
+  }, [historyBasePath, lang, searchParams])
 
   useEffect(() => {
+    const copy = getAuthCopy(lang)
     const authStatus = searchParams.get('auth')
     if (!authStatus) return
 
@@ -161,20 +167,20 @@ export function useAuth({
     setAuthError(null)
 
     if (authStatus === 'google_success') {
-      setAuthNotice('Sesión iniciada con Google correctamente.')
-      setGlobalNotice('Sesión iniciada con Google.')
+      setAuthNotice(copy.messages.googleSuccess)
+      setGlobalNotice(copy.messages.googleSuccessGlobal)
       triggerMigration()
       void onAuthenticated()
     } else if (authStatus === 'google_blocked') {
-      setAuthError('Tu cuenta está bloqueada temporalmente. Contacta al administrador.')
+      setAuthError(copy.messages.googleBlocked)
     } else if (authStatus === 'google_not_configured') {
-      setAuthError('Google OAuth no está configurado en el servidor.')
+      setAuthError(copy.messages.googleNotConfigured)
     } else if (authStatus === 'google_cancelled') {
-      setAuthError('Autorización con Google cancelada.')
+      setAuthError(copy.messages.googleCancelled)
     } else if (authStatus === 'google_invalid_state') {
-      setAuthError('No se pudo validar la sesión de Google. Intenta nuevamente.')
+      setAuthError(copy.messages.googleInvalidState)
     } else if (authStatus === 'google_error') {
-      setAuthError('No se pudo iniciar sesión con Google. Intenta nuevamente.')
+      setAuthError(copy.messages.googleError)
     } else {
       return
     }
@@ -182,7 +188,7 @@ export function useAuth({
     if (typeof window !== 'undefined') {
       window.history.replaceState({}, '', historyBasePath)
     }
-  }, [historyBasePath, onAuthenticated, searchParams, setGlobalNotice])
+  }, [historyBasePath, lang, onAuthenticated, searchParams, setGlobalNotice, triggerMigration])
 
   const handleGoogleAuthStart = useCallback(() => {
     if (authLoading || googleAuthLoading) return
@@ -199,6 +205,7 @@ export function useAuth({
 
   const handleAuthSubmit = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
+      const copy = getAuthCopy(lang)
       event.preventDefault()
       if (authLoading) return
 
@@ -232,19 +239,18 @@ export function useAuth({
             }
           | null
         if (!res.ok) {
+          const translatedError = translateAuthServerMessage(lang, data?.error)
           setAuthError(
-            typeof data?.error === 'string' && data.error.trim()
-              ? data.error
-              : 'No se pudo completar la operación.'
+            typeof translatedError === 'string' && translatedError.trim()
+              ? translatedError
+              : copy.messages.genericOperationError
           )
           return
         }
 
         if (authMode === 'register') {
           const registerMessage =
-            typeof data?.message === 'string' && data.message.trim()
-              ? data.message
-              : 'Cuenta creada. Revisa tu correo para verificarla antes de iniciar sesión.'
+            translateAuthServerMessage(lang, data?.message) ?? copy.messages.registerSuccess
           setAuthMode('login')
           setPassword('')
           setAuthError(null)
@@ -254,7 +260,7 @@ export function useAuth({
         }
 
         if (!data?.user) {
-          setAuthError('Respuesta inválida del servidor. Intenta de nuevo.')
+          setAuthError(copy.messages.invalidServerResponse)
           return
         }
 
@@ -266,48 +272,51 @@ export function useAuth({
         triggerMigration()
         await onAuthenticated()
       } catch {
-        setAuthError('Error de conexión. Intenta de nuevo.')
+        setAuthError(copy.messages.connectionRetry)
       } finally {
         setAuthLoading(false)
       }
     },
-    [authLoading, authMode, email, name, onAuthenticated, password, setGlobalError]
+    [authLoading, authMode, email, lang, name, onAuthenticated, password, setGlobalError, triggerMigration]
   )
 
-  const handleForgotPassword = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (forgotLoading) return
-    setForgotLoading(true)
-    setForgotError(null)
-    try {
-      const res = await fetch('/api/auth/forgot-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: forgotEmail }),
-      })
-      if (!res.ok) {
-        const data = await res.json().catch(() => null)
-        setForgotError(
-          typeof data?.error === 'string'
-            ? data.error
-            : 'Error al enviar el correo. Intenta de nuevo.'
-        )
-        return
+  const handleForgotPassword = useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      const copy = getAuthCopy(lang)
+      event.preventDefault()
+      if (forgotLoading) return
+      setForgotLoading(true)
+      setForgotError(null)
+      try {
+        const res = await fetch('/api/auth/forgot-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: forgotEmail }),
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => null)
+          setForgotError(
+            translateAuthServerMessage(lang, data?.error) ?? copy.messages.forgotEmailError
+          )
+          return
+        }
+        setForgotSuccess(true)
+      } catch {
+        setForgotError(copy.messages.connectionRetry)
+      } finally {
+        setForgotLoading(false)
       }
-      setForgotSuccess(true)
-    } catch {
-      setForgotError('Error de conexión. Intenta de nuevo.')
-    } finally {
-      setForgotLoading(false)
-    }
-  }, [forgotEmail, forgotLoading])
+    },
+    [forgotEmail, forgotLoading, lang]
+  )
 
   const handleResetPassword = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
+      const copy = getAuthCopy(lang)
       event.preventDefault()
       if (resetLoading) return
       if (newPassword !== confirmPassword) {
-        setResetError('Las contraseñas no coinciden.')
+        setResetError(copy.messages.passwordsMismatch)
         return
       }
       setResetLoading(true)
@@ -320,17 +329,19 @@ export function useAuth({
         })
         const data = await res.json()
         if (!res.ok) {
-          setResetError(data.error ?? 'No se pudo restablecer la contraseña.')
+          setResetError(
+            translateAuthServerMessage(lang, data?.error) ?? copy.messages.resetPasswordError
+          )
           return
         }
         setResetSuccess(true)
       } catch {
-        setResetError('Error de conexión. Intenta de nuevo.')
+        setResetError(copy.messages.connectionRetry)
       } finally {
         setResetLoading(false)
       }
     },
-    [confirmPassword, newPassword, resetLoading, resetTokenFromUrl]
+    [confirmPassword, lang, newPassword, resetLoading, resetTokenFromUrl]
   )
 
   const handleLogout = useCallback(async () => {

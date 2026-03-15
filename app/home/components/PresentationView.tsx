@@ -21,6 +21,7 @@ import type {
   PresentationSlide,
   TextElementStyle,
 } from '@/app/home/lib/types'
+import { useLang } from '@/app/home/hooks/useLang'
 import { SlideCanvas } from './presentation/SlideCanvas'
 import { PresenterOverlay } from './presentation/PresenterOverlay'
 
@@ -33,6 +34,79 @@ interface Props {
 const VIRTUAL_W = 960
 const VIRTUAL_H = 540
 const MIN_SIZE = 20
+
+const PRESENTATION_COPY = {
+  en: {
+    loadingMode: 'Loading presentation mode...',
+    text: 'Text',
+    image: 'Image',
+    bullets: 'Bullets',
+    generateFromTasks: 'Generate from tasks',
+    present: 'Present',
+    saving: 'Saving...',
+    readOnly: 'Read only',
+    slide: 'Slide',
+    moveUp: 'Move up',
+    moveDown: 'Move down',
+    addSlide: 'Add slide',
+    duplicateSlide: 'Duplicate slide',
+    deleteSlide: 'Delete slide',
+    selectElement: 'Select an element to edit its properties.',
+    positionAndSize: 'Position and size',
+    size: 'Size',
+    color: 'Color',
+    bold: 'Bold',
+    lineHeight: 'Line height',
+    explodeBullets: 'Explode bullets',
+    bringToFront: 'Bring to front',
+    sendToBack: 'Send to back',
+    deleteElement: 'Delete element',
+    contain: 'Contain',
+    cover: 'Cover',
+    defaultLoadError: 'Could not load the presentation.',
+    uploadImageError: 'Could not upload the image.',
+    invalidImageUrl: 'The response did not include a valid image URL.',
+    duplicateSuffix: 'copy',
+    defaultPhase: (phaseId: number) => `Phase ${phaseId}`,
+  },
+  es: {
+    loadingMode: 'Cargando modo presentación...',
+    text: 'Texto',
+    image: 'Imagen',
+    bullets: 'Viñetas',
+    generateFromTasks: 'Generar desde tareas',
+    present: 'Presentar',
+    saving: 'Guardando...',
+    readOnly: 'Solo lectura',
+    slide: 'Diapositiva',
+    moveUp: 'Subir',
+    moveDown: 'Bajar',
+    addSlide: 'Agregar diapositiva',
+    duplicateSlide: 'Duplicar diapositiva',
+    deleteSlide: 'Eliminar diapositiva',
+    selectElement: 'Selecciona un elemento para editar propiedades.',
+    positionAndSize: 'Posición y tamaño',
+    size: 'Tamaño',
+    color: 'Color',
+    bold: 'Negrita',
+    lineHeight: 'Interlineado',
+    explodeBullets: 'Separar viñetas',
+    bringToFront: 'Traer al frente',
+    sendToBack: 'Enviar atrás',
+    deleteElement: 'Eliminar elemento',
+    contain: 'Contener',
+    cover: 'Cubrir',
+    defaultLoadError: 'No se pudo cargar la presentación.',
+    uploadImageError: 'No se pudo subir la imagen.',
+    invalidImageUrl: 'La respuesta no incluyó una URL de imagen válida.',
+    duplicateSuffix: 'copia',
+    defaultPhase: (phaseId: number) => `Fase ${phaseId}`,
+  },
+} as const
+
+function getDefaultSlideTitle(index: number, lang: 'en' | 'es') {
+  return `${PRESENTATION_COPY[lang].slide} ${index + 1}`
+}
 
 function makeId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -64,11 +138,11 @@ function createEmptySlide(title?: string): PresentationSlide {
   }
 }
 
-function createDefaultDeck(): PresentationDeck {
+function createDefaultDeck(lang: 'en' | 'es' = 'en'): PresentationDeck {
   return {
     version: 1,
     theme: { background: '#ffffff', accent: '#4f46e5' },
-    slides: [createEmptySlide('Slide 1')],
+    slides: [createEmptySlide(getDefaultSlideTitle(0, lang))],
   }
 }
 
@@ -165,7 +239,7 @@ function sanitizeElement(value: unknown): PresentationElement | null {
   return null
 }
 
-function sanitizeSlide(value: unknown, index: number): PresentationSlide | null {
+function sanitizeSlide(value: unknown, index: number, lang: 'en' | 'es' = 'en'): PresentationSlide | null {
   if (!isRecord(value)) return null
 
   const slideId =
@@ -178,7 +252,7 @@ function sanitizeSlide(value: unknown, index: number): PresentationSlide | null 
 
   return {
     id: slideId,
-    title: typeof value.title === 'string' ? value.title : `Slide ${index + 1}`,
+    title: typeof value.title === 'string' ? value.title : getDefaultSlideTitle(index, lang),
     background: typeof value.background === 'string' && value.background.trim()
       ? value.background
       : '#ffffff',
@@ -186,12 +260,12 @@ function sanitizeSlide(value: unknown, index: number): PresentationSlide | null 
   }
 }
 
-function sanitizeDeck(value: unknown): PresentationDeck | null {
+function sanitizeDeck(value: unknown, lang: 'en' | 'es' = 'en'): PresentationDeck | null {
   if (!isRecord(value)) return null
 
   const rawSlides = Array.isArray(value.slides) ? value.slides : []
   const slides = rawSlides
-    .map((slide, index) => sanitizeSlide(slide, index))
+    .map((slide, index) => sanitizeSlide(slide, index, lang))
     .filter((slide): slide is PresentationSlide => slide !== null)
 
   const theme = isRecord(value.theme)
@@ -204,7 +278,7 @@ function sanitizeDeck(value: unknown): PresentationDeck | null {
   return {
     version: typeof value.version === 'number' && Number.isFinite(value.version) ? value.version : 1,
     theme,
-    slides: slides.length > 0 ? slides : [createEmptySlide('Slide 1')],
+    slides: slides.length > 0 ? slides : [createEmptySlide(getDefaultSlideTitle(0, lang))],
   }
 }
 
@@ -239,6 +313,8 @@ function resolveSlideIndex(deck: PresentationDeck, lastSlideId: string | null) {
 }
 
 export function PresentationView({ interactiveTasks, extractionId, canEdit }: Props) {
+  const { lang } = useLang()
+  const ui = PRESENTATION_COPY[lang]
   const isGuest = extractionId.startsWith('g-')
   const deckStorageKey = `presentation:deck:${extractionId}`
   const lastSlideStorageKey = `presentation:lastSlide:${extractionId}`
@@ -272,14 +348,14 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
 
           if (storedDeckRaw) {
             try {
-              nextDeck = sanitizeDeck(JSON.parse(storedDeckRaw))
+              nextDeck = sanitizeDeck(JSON.parse(storedDeckRaw), lang)
             } catch {
               nextDeck = null
             }
           }
 
           if (!nextDeck) {
-            nextDeck = createDefaultDeck()
+            nextDeck = createDefaultDeck(lang)
             localStorage.setItem(deckStorageKey, JSON.stringify(nextDeck))
           }
 
@@ -303,7 +379,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
         }
 
         const deckPayload = await deckRes.json().catch(() => ({}))
-        let nextDeck = sanitizeDeck((deckPayload as { deck?: unknown }).deck)
+        let nextDeck = sanitizeDeck((deckPayload as { deck?: unknown }).deck, lang)
 
         if (!nextDeck && canEdit) {
           const createRes = await fetch(`/api/extractions/${extractionId}/presentation`, {
@@ -314,11 +390,11 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
 
           if (createRes.ok) {
             const createPayload = await createRes.json().catch(() => ({}))
-            nextDeck = sanitizeDeck((createPayload as { deck?: unknown }).deck)
+            nextDeck = sanitizeDeck((createPayload as { deck?: unknown }).deck, lang)
           }
         }
 
-        if (!nextDeck) nextDeck = createDefaultDeck()
+        if (!nextDeck) nextDeck = createDefaultDeck(lang)
 
         let lastSlideId: string | null = null
         if (stateRes.ok) {
@@ -338,11 +414,11 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
         console.error('[ActionExtractor] presentation load error:', error)
         if (cancelled) return
 
-        setDeck(createDefaultDeck())
+        setDeck(createDefaultDeck(lang))
         setCurrentSlideIndex(0)
         setSelectedElementId(null)
         setIsDirty(false)
-        setLoadError('No se pudo cargar la presentación.')
+        setLoadError(ui.defaultLoadError)
       } finally {
         if (!cancelled) setIsLoading(false)
       }
@@ -353,7 +429,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
     return () => {
       cancelled = true
     }
-  }, [canEdit, deckStorageKey, extractionId, isGuest, lastSlideStorageKey])
+  }, [canEdit, deckStorageKey, extractionId, isGuest, lang, lastSlideStorageKey, ui.defaultLoadError])
 
   useEffect(() => {
     if (!deck || !isDirty || !canEdit) return
@@ -499,7 +575,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
           const message =
             payload && typeof payload === 'object' && typeof (payload as { error?: unknown }).error === 'string'
               ? (payload as { error: string }).error
-              : 'No se pudo subir la imagen.'
+              : ui.uploadImageError
           throw new Error(message)
         }
 
@@ -509,7 +585,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
             : undefined
 
         if (!attachment || typeof attachment.url !== 'string' || !attachment.url.trim()) {
-          throw new Error('La respuesta no incluyó una URL de imagen válida.')
+          throw new Error(ui.invalidImageUrl)
         }
 
         const publicId =
@@ -537,7 +613,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
         setIsUploadingImage(false)
       }
     },
-    [addElement, canEdit]
+    [addElement, canEdit, ui.invalidImageUrl, ui.uploadImageError]
   )
 
   const handleSelectImageFile = useCallback(
@@ -578,11 +654,11 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
   const handleAddSlide = useCallback(() => {
     if (!canEdit || !deck) return
 
-    const newSlide = createEmptySlide(`Slide ${deck.slides.length + 1}`)
+    const newSlide = createEmptySlide(getDefaultSlideTitle(deck.slides.length, lang))
     updateDeck((prev) => ({ ...prev, slides: [...prev.slides, newSlide] }))
     setCurrentSlideIndex(deck.slides.length)
     setSelectedElementId(null)
-  }, [canEdit, deck, updateDeck])
+  }, [canEdit, deck, lang, updateDeck])
 
   const handleDuplicateSlide = useCallback(() => {
     if (!canEdit || !deck) return
@@ -595,7 +671,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
       const cloned: PresentationSlide = {
         ...source,
         id: makeId(),
-        title: source.title ? `${source.title} (copia)` : `Slide ${currentSlideIndex + 2}`,
+        title: source.title ? `${source.title} (${ui.duplicateSuffix})` : getDefaultSlideTitle(currentSlideIndex + 1, lang),
         elements: source.elements.map((element) => cloneElement(element)),
       }
 
@@ -609,7 +685,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
 
     setCurrentSlideIndex(nextIndex)
     setSelectedElementId(null)
-  }, [canEdit, currentSlideIndex, deck, updateDeck])
+  }, [canEdit, currentSlideIndex, deck, lang, ui.duplicateSuffix, updateDeck])
 
   const handleDeleteCurrentSlide = useCallback(() => {
     if (!canEdit || !deck) return
@@ -618,7 +694,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
     updateDeck((prev) => {
       if (prev.slides.length <= 1) {
         nextIndex = 0
-        return { ...prev, slides: [createEmptySlide('Slide 1')] }
+        return { ...prev, slides: [createEmptySlide(getDefaultSlideTitle(0, lang))] }
       }
 
       const nextSlides = prev.slides.filter((_, index) => index !== currentSlideIndex)
@@ -628,7 +704,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
 
     setCurrentSlideIndex(nextIndex)
     setSelectedElementId(null)
-  }, [canEdit, currentSlideIndex, deck, updateDeck])
+  }, [canEdit, currentSlideIndex, deck, lang, updateDeck])
 
   const handleMoveSlide = useCallback(
     (index: number, delta: -1 | 1) => {
@@ -698,7 +774,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
 
     const phases = new Map<string, InteractiveTask[]>()
     interactiveTasks.forEach((task) => {
-      const phaseName = task.phaseTitle?.trim() || `Fase ${task.phaseId}`
+      const phaseName = task.phaseTitle?.trim() || ui.defaultPhase(task.phaseId)
       const list = phases.get(phaseName) ?? []
       list.push(task)
       phases.set(phaseName, list)
@@ -706,7 +782,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
 
     const entries = Array.from(phases.entries())
     if (entries.length === 0) {
-      setDeck(createDefaultDeck())
+      setDeck(createDefaultDeck(lang))
       setCurrentSlideIndex(0)
       setSelectedElementId(null)
       setIsDirty(true)
@@ -742,13 +818,13 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
     }))
 
     setDeck((prev) => ({
-      ...(prev ?? createDefaultDeck()),
+      ...(prev ?? createDefaultDeck(lang)),
       slides,
     }))
     setIsDirty(true)
     setCurrentSlideIndex(0)
     setSelectedElementId(null)
-  }, [canEdit, interactiveTasks])
+  }, [canEdit, interactiveTasks, lang, ui.defaultPhase])
 
   const handleGeometryChange = useCallback(
     (field: 'x' | 'y' | 'w' | 'h', rawValue: number) => {
@@ -790,7 +866,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
       <div className="flex h-64 items-center justify-center rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
         <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-300">
           <Loader2 size={16} className="animate-spin" />
-          Cargando modo presentación...
+          {ui.loadingMode}
         </div>
       </div>
     )
@@ -807,7 +883,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
               className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
             >
               <Plus size={12} />
-              Texto
+              {ui.text}
             </button>
 
             <button
@@ -817,7 +893,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
               className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
             >
               {isUploadingImage ? <Loader2 size={12} className="animate-spin" /> : <ImageIcon size={12} />}
-              Imagen
+              {ui.image}
             </button>
 
             <button
@@ -826,7 +902,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
               className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
             >
               <List size={12} />
-              Viñetas
+              {ui.bullets}
             </button>
 
             <button
@@ -835,7 +911,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
               className="inline-flex items-center gap-1.5 rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
             >
               <AlignLeft size={12} />
-              Generar desde tareas
+              {ui.generateFromTasks}
             </button>
           </>
         )}
@@ -846,7 +922,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
           className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
         >
           <Play size={12} />
-          Presentar
+          {ui.present}
         </button>
 
         <div className="ml-auto flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
@@ -854,10 +930,10 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
           {isSaving && (
             <span className="inline-flex items-center gap-1">
               <Loader2 size={12} className="animate-spin" />
-              Guardando...
+              {ui.saving}
             </span>
           )}
-          {!canEdit && <span>Solo lectura</span>}
+          {!canEdit && <span>{ui.readOnly}</span>}
         </div>
 
         <input
@@ -896,7 +972,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                         {index + 1}
                       </span>
                       <span className="absolute inset-x-1 bottom-1 truncate text-[10px] font-medium text-slate-700 dark:text-slate-200">
-                        {slide.title || `Slide ${index + 1}`}
+                        {slide.title || getDefaultSlideTitle(index, lang)}
                       </span>
                     </div>
                   </button>
@@ -908,7 +984,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                         onClick={() => handleMoveSlide(index, -1)}
                         disabled={index === 0}
                         className="inline-flex h-6 w-6 items-center justify-center rounded border border-slate-200 text-slate-500 disabled:opacity-40 dark:border-slate-700"
-                        title="Subir"
+                        title={ui.moveUp}
                       >
                         <ChevronUp size={12} />
                       </button>
@@ -917,7 +993,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                         onClick={() => handleMoveSlide(index, 1)}
                         disabled={index === deck.slides.length - 1}
                         className="inline-flex h-6 w-6 items-center justify-center rounded border border-slate-200 text-slate-500 disabled:opacity-40 dark:border-slate-700"
-                        title="Bajar"
+                        title={ui.moveDown}
                       >
                         <ChevronDown size={12} />
                       </button>
@@ -934,7 +1010,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                 type="button"
                 onClick={handleAddSlide}
                 className="inline-flex h-8 items-center justify-center rounded border border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-                title="Agregar slide"
+                title={ui.addSlide}
               >
                 <Plus size={13} />
               </button>
@@ -942,7 +1018,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                 type="button"
                 onClick={handleDuplicateSlide}
                 className="inline-flex h-8 items-center justify-center rounded border border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-                title="Duplicar slide"
+                title={ui.duplicateSlide}
               >
                 <Copy size={13} />
               </button>
@@ -950,7 +1026,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                 type="button"
                 onClick={handleDeleteCurrentSlide}
                 className="inline-flex h-8 items-center justify-center rounded border border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-300 dark:hover:bg-rose-900/25"
-                title="Eliminar slide"
+                title={ui.deleteSlide}
               >
                 <Trash2 size={13} />
               </button>
@@ -973,11 +1049,11 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
 
         <aside className="w-full shrink-0 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900 lg:w-52">
           {!selectedElement ? (
-            <p className="text-xs text-slate-500 dark:text-slate-400">Selecciona un elemento para editar propiedades.</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">{ui.selectElement}</p>
           ) : (
             <div className="space-y-3">
               <div>
-                <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">Posición y tamaño</p>
+                <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">{ui.positionAndSize}</p>
                 <div className="mt-1 grid grid-cols-2 gap-1.5">
                   <label className="text-[11px] text-slate-500 dark:text-slate-400">
                     X
@@ -1024,10 +1100,10 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
 
               {selectedElement.type === 'text' && (
                 <div className="space-y-1.5">
-                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">Texto</p>
+                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">{ui.text}</p>
 
                   <label className="block text-[11px] text-slate-500 dark:text-slate-400">
-                    Tamaño
+                    {ui.size}
                     <input
                       type="number"
                       min={8}
@@ -1052,7 +1128,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                   </label>
 
                   <label className="block text-[11px] text-slate-500 dark:text-slate-400">
-                    Color
+                    {ui.color}
                     <input
                       type="color"
                       value={selectedElement.style?.color ?? '#0f172a'}
@@ -1096,7 +1172,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                         : 'border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300'
                     }`}
                   >
-                    Negrita
+                    {ui.bold}
                   </button>
 
                   <div className="grid grid-cols-3 gap-1">
@@ -1133,10 +1209,10 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
 
               {selectedElement.type === 'bullet' && (
                 <div className="space-y-1.5">
-                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">Viñetas</p>
+                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">{ui.bullets}</p>
 
                   <label className="block text-[11px] text-slate-500 dark:text-slate-400">
-                    Tamaño
+                    {ui.size}
                     <input
                       type="number"
                       min={8}
@@ -1161,7 +1237,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                   </label>
 
                   <label className="block text-[11px] text-slate-500 dark:text-slate-400">
-                    Color
+                    {ui.color}
                     <input
                       type="color"
                       value={selectedElement.style?.color ?? '#0f172a'}
@@ -1184,7 +1260,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                   </label>
 
                   <label className="block text-[11px] text-slate-500 dark:text-slate-400">
-                    Interlineado
+                    {ui.lineHeight}
                     <input
                       type="number"
                       min={0.8}
@@ -1215,7 +1291,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                       onClick={handleExplodeBullets}
                       className="w-full rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
                     >
-                      Explode bullets
+                      {ui.explodeBullets}
                     </button>
                   )}
                 </div>
@@ -1223,7 +1299,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
 
               {selectedElement.type === 'image' && (
                 <div className="space-y-1.5">
-                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">Imagen</p>
+                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">{ui.image}</p>
 
                   <div className="grid grid-cols-2 gap-1">
                     {(['contain', 'cover'] as Array<'contain' | 'cover'>).map((cropMode) => (
@@ -1242,7 +1318,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                             : 'border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300'
                         }`}
                       >
-                        {cropMode}
+                        {cropMode === 'contain' ? ui.contain : ui.cover}
                       </button>
                     ))}
                   </div>
@@ -1257,14 +1333,14 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                       onClick={bringToFront}
                       className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300"
                     >
-                      Bring to front
+                      {ui.bringToFront}
                     </button>
                     <button
                       type="button"
                       onClick={sendToBack}
                       className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300"
                     >
-                      Send to back
+                      {ui.sendToBack}
                     </button>
                   </div>
 
@@ -1273,7 +1349,7 @@ export function PresentationView({ interactiveTasks, extractionId, canEdit }: Pr
                     onClick={() => handleDeleteElement(selectedElement.id)}
                     className="w-full rounded border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300"
                   >
-                    Delete element
+                    {ui.deleteElement}
                   </button>
                 </>
               )}

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { ChevronLeft, MessageSquarePlus, RotateCcw, Send, Trash2, X } from 'lucide-react'
+import { useLang } from '@/app/home/hooks/useLang'
 
 interface ChatReference {
   id: string
@@ -71,16 +72,110 @@ interface KnowledgeChatProps {
   onClearFocusedItem?: () => void
 }
 
+const CHAT_COPY = {
+  en: {
+    assistantName: 'Content Assistant',
+    assistantAlt: 'AI Assistant',
+    welcome:
+      'I am your content assistant. I can answer questions about your extractions and what you have built from them.',
+    untitledConversation: 'Untitled',
+    itemQuestionTitle: 'Item question',
+    loadHistoryError: 'Could not load the assistant history.',
+    createConversationError: 'Could not create the conversation.',
+    answerQuestionError: 'Could not answer the question.',
+    noClearAnswer: 'I could not find a clear answer with the current context.',
+    clearHistoryError: 'Could not clear the assistant history.',
+    activeExtraction: 'Active extraction',
+    allExtractions: 'All my extractions',
+    newConversation: 'New conversation',
+    itemFocusIntro: (path: string, text: string) =>
+      `I am ready to help with item **${path}**:\n\n_"${text}"_\n\nWhat do you need to know about this point?`,
+    openAssistant: 'Open content assistant',
+    myConversations: 'My conversations',
+    viewConversations: 'View conversations',
+    conversations: 'Conversations',
+    clearChatHistory: 'Clear chat history',
+    clearHistory: 'Clear history',
+    backToChat: 'Back to chat',
+    closeChat: 'Close chat',
+    noConversations: 'No conversations yet.',
+    loading: 'Loading...',
+    deleteConversation: (title: string) => `Delete conversation: ${title}`,
+    delete: 'Delete',
+    all: 'All',
+    active: 'Active',
+    stopFocusing: 'Stop focusing this item',
+    removeFocus: 'Remove focus',
+    loadingHistory: 'Loading history...',
+    thinking: 'Thinking...',
+    tokenLimitReached: 'Daily token limit reached. Come back tomorrow to continue.',
+    limitReachedPlaceholder: 'Daily limit reached',
+    questionPlaceholder: 'Ask about your extractions...',
+    send: 'Send',
+    chatTokensToday: 'chat tokens today',
+    rightNow: 'Just now',
+    minutesAgo: (count: number) => `${count} min ago`,
+    hoursAgo: (count: number) => `${count}h ago`,
+    yesterday: 'Yesterday',
+    daysAgo: (count: number) => `${count} days ago`,
+  },
+  es: {
+    assistantName: 'Asistente de Contenidos',
+    assistantAlt: 'Asistente IA',
+    welcome:
+      'Soy tu asistente de contenidos. Puedo responder preguntas sobre tus extracciones y lo que has trabajado en ellas.',
+    untitledConversation: 'Sin título',
+    itemQuestionTitle: 'Consulta de ítem',
+    loadHistoryError: 'No se pudo cargar el historial del asistente.',
+    createConversationError: 'No se pudo crear la conversación.',
+    answerQuestionError: 'No se pudo responder la pregunta.',
+    noClearAnswer: 'No encontré una respuesta clara con el contexto actual.',
+    clearHistoryError: 'No se pudo limpiar el historial del asistente.',
+    activeExtraction: 'Extracción activa',
+    allExtractions: 'Todas mis extracciones',
+    newConversation: 'Nueva conversación',
+    itemFocusIntro: (path: string, text: string) =>
+      `Estoy listo para ayudarte con el ítem **${path}**:\n\n_"${text}"_\n\n¿Qué necesitas saber sobre este punto?`,
+    openAssistant: 'Abrir asistente de contenidos',
+    myConversations: 'Mis conversaciones',
+    viewConversations: 'Ver conversaciones',
+    conversations: 'Conversaciones',
+    clearChatHistory: 'Limpiar historial del chat',
+    clearHistory: 'Limpiar historial',
+    backToChat: 'Volver al chat',
+    closeChat: 'Cerrar chat',
+    noConversations: 'No hay conversaciones aún.',
+    loading: 'Cargando...',
+    deleteConversation: (title: string) => `Eliminar conversación: ${title}`,
+    delete: 'Eliminar',
+    all: 'Todas',
+    active: 'Activa',
+    stopFocusing: 'Dejar de enfocar este ítem',
+    removeFocus: 'Quitar enfoque',
+    loadingHistory: 'Cargando historial...',
+    thinking: 'Pensando...',
+    tokenLimitReached: 'Límite diario de tokens alcanzado. Vuelve mañana para continuar.',
+    limitReachedPlaceholder: 'Límite diario alcanzado',
+    questionPlaceholder: 'Pregunta sobre tus extracciones...',
+    send: 'Enviar',
+    chatTokensToday: 'tokens chat hoy',
+    rightNow: 'Ahora mismo',
+    minutesAgo: (count: number) => `Hace ${count} min`,
+    hoursAgo: (count: number) => `Hace ${count}h`,
+    yesterday: 'Ayer',
+    daysAgo: (count: number) => `Hace ${count} días`,
+  },
+} as const
+
 function createMessageId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-function buildWelcomeMessage(): ChatMessage {
+function buildWelcomeMessage(lang: 'en' | 'es'): ChatMessage {
   return {
     id: createMessageId(),
     role: 'assistant',
-    content:
-      'Soy tu asistente de contenidos. Puedo responder preguntas sobre tus extracciones y lo que has trabajado en ellas.',
+    content: CHAT_COPY[lang].welcome,
   }
 }
 
@@ -153,7 +248,7 @@ function normalizeHistoryMessages(payload: unknown): ChatMessage[] {
     .filter((entry): entry is ChatMessage => Boolean(entry))
 }
 
-function normalizeConversations(payload: unknown): ConversationItem[] {
+function normalizeConversations(payload: unknown, lang: 'en' | 'es'): ConversationItem[] {
   if (!Array.isArray(payload)) return []
   return payload
     .map((entry): ConversationItem | null => {
@@ -162,8 +257,8 @@ function normalizeConversations(payload: unknown): ConversationItem[] {
       if (!id) return null
       const title =
         typeof (entry as { title?: unknown }).title === 'string'
-          ? (entry as { title: string }).title.trim() || 'Sin título'
-          : 'Sin título'
+          ? (entry as { title: string }).title.trim() || CHAT_COPY[lang].untitledConversation
+          : CHAT_COPY[lang].untitledConversation
       return {
         id,
         title,
@@ -182,21 +277,21 @@ function normalizeConversations(payload: unknown): ConversationItem[] {
     .filter((entry): entry is ConversationItem => Boolean(entry))
 }
 
-function formatRelativeDate(isoDate: string) {
+function formatRelativeDate(isoDate: string, lang: 'en' | 'es') {
   if (!isoDate) return ''
   const date = new Date(isoDate)
   if (Number.isNaN(date.getTime())) return ''
   const now = Date.now()
   const diffMs = now - date.getTime()
   const diffMins = Math.floor(diffMs / 60_000)
-  if (diffMins < 2) return 'Ahora mismo'
-  if (diffMins < 60) return `Hace ${diffMins} min`
+  if (diffMins < 2) return CHAT_COPY[lang].rightNow
+  if (diffMins < 60) return CHAT_COPY[lang].minutesAgo(diffMins)
   const diffHours = Math.floor(diffMins / 60)
-  if (diffHours < 24) return `Hace ${diffHours}h`
+  if (diffHours < 24) return CHAT_COPY[lang].hoursAgo(diffHours)
   const diffDays = Math.floor(diffHours / 24)
-  if (diffDays === 1) return 'Ayer'
-  if (diffDays < 7) return `Hace ${diffDays} días`
-  return date.toLocaleDateString('es-MX', { month: 'short', day: 'numeric' })
+  if (diffDays === 1) return CHAT_COPY[lang].yesterday
+  if (diffDays < 7) return CHAT_COPY[lang].daysAgo(diffDays)
+  return date.toLocaleDateString(lang === 'en' ? 'en-US' : 'es-MX', { month: 'short', day: 'numeric' })
 }
 
 function normalizeFocusedItemContextSegment(value: string | null | undefined, maxLength: number) {
@@ -211,12 +306,13 @@ function normalizeFocusedItemContextSegment(value: string | null | undefined, ma
 
 function buildFocusedItemConversationContext(
   activeExtractionId: string | null,
-  focusedItemContext: FocusedItemContext
+  focusedItemContext: FocusedItemContext,
+  lang: 'en' | 'es',
 ) {
   const titleBase = focusedItemContext.path
     ? `${focusedItemContext.path} - ${focusedItemContext.text}`
     : focusedItemContext.text
-  const title = titleBase.slice(0, 80).trim() || 'Consulta de item'
+  const title = titleBase.slice(0, 80).trim() || CHAT_COPY[lang].itemQuestionTitle
   const contextId = JSON.stringify({
     extractionId: normalizeFocusedItemContextSegment(activeExtractionId, 120),
     phaseTitle: normalizeFocusedItemContextSegment(focusedItemContext.phaseTitle, 160),
@@ -232,6 +328,8 @@ function buildFocusedItemConversationContext(
 }
 
 export function KnowledgeChat({ activeExtractionId, focusedItemContext, onClearFocusedItem }: KnowledgeChatProps) {
+  const { lang } = useLang()
+  const ui = CHAT_COPY[lang]
   const [isOpen, setIsOpen] = useState(false)
   const [showConversations, setShowConversations] = useState(false)
   const [scope, setScope] = useState<'active' | 'all'>(activeExtractionId ? 'active' : 'all')
@@ -247,7 +345,7 @@ export function KnowledgeChat({ activeExtractionId, focusedItemContext, onClearF
   const [conversations, setConversations] = useState<ConversationItem[]>([])
   const [conversationsLoaded, setConversationsLoaded] = useState(false)
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
-  const [activeConversationTitle, setActiveConversationTitle] = useState('Asistente de Contenidos')
+  const [activeConversationTitle, setActiveConversationTitle] = useState<string>(ui.assistantName)
   const [creatingConversation, setCreatingConversation] = useState(false)
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null)
 
@@ -262,6 +360,12 @@ export function KnowledgeChat({ activeExtractionId, focusedItemContext, onClearF
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId
   }, [activeConversationId])
+
+  useEffect(() => {
+    if (!activeConversationId) {
+      setActiveConversationTitle(ui.assistantName)
+    }
+  }, [activeConversationId, ui.assistantName])
 
   const fetchChatTokens = useCallback(async () => {
     try {
@@ -281,7 +385,7 @@ export function KnowledgeChat({ activeExtractionId, focusedItemContext, onClearF
       const response = await fetch('/api/chat/conversations', { cache: 'no-store' })
       const payload = (await response.json().catch(() => ({}))) as ConversationsApiResponse
       if (!response.ok) return
-      const list = normalizeConversations(payload.conversations)
+      const list = normalizeConversations(payload.conversations, lang)
       setConversations(list)
       setConversationsLoaded(true)
       return list
@@ -306,24 +410,24 @@ export function KnowledgeChat({ activeExtractionId, focusedItemContext, onClearF
         const response = await fetch(url, { method: 'GET', cache: 'no-store' })
         const payload = (await response.json().catch(() => ({}))) as ChatHistoryApiResponse
         if (!response.ok) {
-          setMessages((previous) => (previous.length > 0 ? previous : [buildWelcomeMessage()]))
-          setError(resolveErrorMessage(payload, 'No se pudo cargar el historial del asistente.'))
+          setMessages((previous) => (previous.length > 0 ? previous : [buildWelcomeMessage(lang)]))
+          setError(resolveErrorMessage(payload, ui.loadHistoryError))
           setHistoryLoaded(true)
           return
         }
 
         const restoredMessages = normalizeHistoryMessages(payload.messages)
-        setMessages(restoredMessages.length > 0 ? restoredMessages : [buildWelcomeMessage()])
+        setMessages(restoredMessages.length > 0 ? restoredMessages : [buildWelcomeMessage(lang)])
         setHistoryLoaded(true)
       } catch {
-        setMessages((previous) => (previous.length > 0 ? previous : [buildWelcomeMessage()]))
-        setError('No se pudo cargar el historial del asistente.')
+        setMessages((previous) => (previous.length > 0 ? previous : [buildWelcomeMessage(lang)]))
+        setError(ui.loadHistoryError)
         setHistoryLoaded(true)
       } finally {
         setHistoryLoading(false)
       }
     },
-    [historyLoading]
+    [historyLoading, lang, ui.loadHistoryError]
   )
 
   useEffect(() => {
@@ -368,9 +472,9 @@ export function KnowledgeChat({ activeExtractionId, focusedItemContext, onClearF
 
   const canSend = input.trim().length > 0 && !loading && !historyLoading && !clearingHistory && !tokensExhausted
   const scopeLabel = useMemo(() => {
-    if (scope === 'active' && activeExtractionId) return 'Extracción activa'
-    return 'Todas mis extracciones'
-  }, [scope, activeExtractionId])
+    if (scope === 'active' && activeExtractionId) return ui.activeExtraction
+    return ui.allExtractions
+  }, [scope, activeExtractionId, ui.activeExtraction, ui.allExtractions])
 
   const switchConversation = useCallback((conv: ConversationItem) => {
     setActiveConversationId(conv.id)
@@ -396,21 +500,21 @@ export function KnowledgeChat({ activeExtractionId, focusedItemContext, onClearF
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title: input?.title || 'Nueva conversación',
+          title: input?.title || ui.newConversation,
           contextType: input?.contextType,
           contextId: input?.contextId,
         }),
       })
       const payload = (await response.json().catch(() => ({}))) as CreateConversationApiResponse
       if (!response.ok) {
-        setError(resolveErrorMessage(payload, 'No se pudo crear la conversación.'))
+        setError(resolveErrorMessage(payload, ui.createConversationError))
         return null
       }
       const convRaw = payload.conversation
       if (!convRaw || typeof convRaw !== 'object') return null
       const newConv: ConversationItem = {
         id: typeof (convRaw as { id?: unknown }).id === 'string' ? (convRaw as { id: string }).id : '',
-        title: typeof (convRaw as { title?: unknown }).title === 'string' ? (convRaw as { title: string }).title : 'Nueva conversación',
+        title: typeof (convRaw as { title?: unknown }).title === 'string' ? (convRaw as { title: string }).title : ui.newConversation,
         contextType:
           typeof (convRaw as { contextType?: unknown }).contextType === 'string'
             ? (convRaw as { contextType: string }).contextType
@@ -426,13 +530,13 @@ export function KnowledgeChat({ activeExtractionId, focusedItemContext, onClearF
       setConversations((prev) => [newConv, ...prev.filter((conversation) => conversation.id !== newConv.id)])
       return { conversation: newConv, created }
     } catch {
-      setError('No se pudo crear la conversación.')
+      setError(ui.createConversationError)
       return null
     } finally {
       creatingConversationRef.current = false
       setCreatingConversation(false)
     }
-  }, [])
+  }, [ui.createConversationError, ui.newConversation])
 
   // Auto-open the same conversation for a specific item if it already exists.
   useEffect(() => {
@@ -444,7 +548,8 @@ export function KnowledgeChat({ activeExtractionId, focusedItemContext, onClearF
 
     const conversationContext = buildFocusedItemConversationContext(
       activeExtractionId,
-      focusedItemContext
+      focusedItemContext,
+      lang
     )
 
     void createNewConversation(conversationContext).then((result) => {
@@ -459,15 +564,11 @@ export function KnowledgeChat({ activeExtractionId, focusedItemContext, onClearF
       setMessages([{
         id: createMessageId(),
         role: 'assistant',
-        content: `Estoy listo para ayudarte con el ítem **${focusedItemContext.path}**:
-
-_"${focusedItemContext.text}"_
-
-¿Qué necesitas saber sobre este punto?`,
+        content: ui.itemFocusIntro(focusedItemContext.path, focusedItemContext.text),
       }])
       setHistoryLoaded(true)
     })
-  }, [focusedItemContext, activeExtractionId, createNewConversation, switchConversation])
+  }, [focusedItemContext, activeExtractionId, createNewConversation, switchConversation, lang, ui])
 
     const deleteConversation = useCallback(
     async (conv: ConversationItem) => {
@@ -489,7 +590,7 @@ _"${focusedItemContext.text}"_
             switchConversation(remaining[0])
           } else {
             setActiveConversationId(null)
-            setActiveConversationTitle('Asistente de Contenidos')
+            setActiveConversationTitle(ui.assistantName)
             setShowConversations(false)
             setHistoryLoaded(false)
             setMessages([])
@@ -501,7 +602,7 @@ _"${focusedItemContext.text}"_
         setDeletingConversationId(null)
       }
     },
-    [deletingConversationId, conversations, activeConversationId, switchConversation]
+    [deletingConversationId, conversations, activeConversationId, switchConversation, ui.assistantName]
   )
 
   const submitQuestion = async () => {
@@ -539,14 +640,14 @@ _"${focusedItemContext.text}"_
             setChatTokens((prev) => prev ? { ...prev, remaining: 0, allowed: false } : prev)
           }
         }
-        setError(resolveErrorMessage(payload, 'No se pudo responder la pregunta.'))
+        setError(resolveErrorMessage(payload, ui.answerQuestionError))
         return
       }
 
       const answer =
         typeof payload.answer === 'string' && payload.answer.trim().length > 0
           ? payload.answer.trim()
-          : 'No encontré una respuesta clara con el contexto actual.'
+          : ui.noClearAnswer
       const references = normalizeReferences(payload.references)
 
       setMessages((previous) => [
@@ -567,7 +668,7 @@ _"${focusedItemContext.text}"_
         if (list) setConversations(list)
       })
     } catch {
-      setError('No se pudo responder la pregunta.')
+      setError(ui.answerQuestionError)
     } finally {
       setLoading(false)
     }
@@ -585,15 +686,15 @@ _"${focusedItemContext.text}"_
       const response = await fetch(url, { method: 'DELETE' })
       const payload = (await response.json().catch(() => ({}))) as ChatHistoryApiResponse
       if (!response.ok) {
-        setError(resolveErrorMessage(payload, 'No se pudo limpiar el historial del asistente.'))
+        setError(resolveErrorMessage(payload, ui.clearHistoryError))
         return
       }
 
-      setMessages([buildWelcomeMessage()])
+      setMessages([buildWelcomeMessage(lang)])
       setHistoryLoaded(true)
       setInput('')
     } catch {
-      setError('No se pudo limpiar el historial del asistente.')
+      setError(ui.clearHistoryError)
     } finally {
       setClearingHistory(false)
     }
@@ -612,14 +713,14 @@ _"${focusedItemContext.text}"_
           type="button"
           onClick={() => setIsOpen(true)}
           className="group fixed bottom-24 right-4 z-40 rounded-full transition-all duration-300 hover:-translate-y-1 hover:scale-[1.03] lg:right-20 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-200 dark:focus-visible:ring-indigo-900/50"
-          aria-label="Abrir asistente de contenidos"
+          aria-label={ui.openAssistant}
         >
           <span aria-hidden="true" className="chat-avatar-halo absolute inset-1 rounded-full bg-indigo-500/25 blur-md" />
           <span className="chat-avatar-float relative block">
             <span className="chat-avatar-inline inline-block">
               <img
                 src="/notes-aide-bot.png"
-                alt="Asistente IA"
+                alt={ui.assistantAlt}
                 className="h-16 w-16 rounded-full border-2 border-indigo-400/70 object-cover shadow-[0_24px_54px_-20px_rgba(79,70,229,0.95)] md:h-[4.5rem] md:w-[4.5rem]"
               />
             </span>
@@ -634,13 +735,13 @@ _"${focusedItemContext.text}"_
             <div className="min-w-0 flex-1">
               {showConversations ? (
                 <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                  Mis conversaciones
+                  {ui.myConversations}
                 </p>
               ) : (
                 <>
                   <p className="inline-flex items-center gap-2 text-sm font-semibold text-slate-800 dark:text-slate-100">
                     <span className="chat-avatar-inline inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-100/80 ring-1 ring-indigo-200/80 dark:bg-indigo-500/10 dark:ring-indigo-400/20">
-                      <img src="/notes-aide-bot.png" alt="Asistente" className="h-7 w-7 rounded-full object-cover" />
+                      <img src="/notes-aide-bot.png" alt={ui.assistantName} className="h-7 w-7 rounded-full object-cover" />
                     </span>
                     <span className="truncate max-w-[160px]" title={activeConversationTitle}>
                       {activeConversationTitle}
@@ -663,10 +764,10 @@ _"${focusedItemContext.text}"_
                   }}
                   disabled={creatingConversation}
                   className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 px-2 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-                  title="Nueva conversación"
+                  title={ui.newConversation}
                 >
                   <MessageSquarePlus size={13} />
-                  <span className="hidden sm:inline">Nueva</span>
+                  <span className="hidden sm:inline">{ui.newConversation}</span>
                 </button>
               ) : (
                 <>
@@ -674,8 +775,8 @@ _"${focusedItemContext.text}"_
                     type="button"
                     onClick={() => setShowConversations(true)}
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
-                    aria-label="Ver conversaciones"
-                    title="Conversaciones"
+                    aria-label={ui.viewConversations}
+                    title={ui.conversations}
                   >
                     <MessageSquarePlus size={14} />
                   </button>
@@ -684,8 +785,8 @@ _"${focusedItemContext.text}"_
                     onClick={() => void clearHistory()}
                     disabled={clearingHistory || historyLoading || loading}
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
-                    aria-label="Limpiar historial del chat"
-                    title="Limpiar historial"
+                    aria-label={ui.clearChatHistory}
+                    title={ui.clearHistory}
                   >
                     <RotateCcw size={14} />
                   </button>
@@ -703,7 +804,7 @@ _"${focusedItemContext.text}"_
                   }
                 }}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
-                aria-label={showConversations ? 'Volver al chat' : 'Cerrar chat'}
+                aria-label={showConversations ? ui.backToChat : ui.closeChat}
               >
                 {showConversations ? <ChevronLeft size={14} /> : <X size={14} />}
               </button>
@@ -715,13 +816,13 @@ _"${focusedItemContext.text}"_
             <div className="max-h-[56vh] overflow-y-auto">
               {conversations.length === 0 && conversationsLoaded && (
                 <div className="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">
-                  No hay conversaciones aún.
+                  {ui.noConversations}
                 </div>
               )}
               {!conversationsLoaded && (
                 <div className="flex items-center justify-center gap-2 px-4 py-6 text-xs text-slate-500">
                   <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-500" />
-                  Cargando...
+                  {ui.loading}
                 </div>
               )}
               <ul className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -738,7 +839,7 @@ _"${focusedItemContext.text}"_
                     >
                       <p className="truncate text-sm font-medium leading-tight">{conv.title}</p>
                       <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">
-                        {formatRelativeDate(conv.updatedAt)}
+                        {formatRelativeDate(conv.updatedAt, lang)}
                       </p>
                     </button>
                     <button
@@ -746,8 +847,8 @@ _"${focusedItemContext.text}"_
                       onClick={() => void deleteConversation(conv)}
                       disabled={deletingConversationId === conv.id}
                       className="shrink-0 rounded p-1 text-slate-300 opacity-0 transition-all hover:text-rose-500 disabled:opacity-50 group-hover:opacity-100 dark:text-slate-600 dark:hover:text-rose-400"
-                      aria-label={`Eliminar conversación: ${conv.title}`}
-                      title="Eliminar"
+                      aria-label={ui.deleteConversation(conv.title)}
+                      title={ui.delete}
                     >
                       <Trash2 size={13} />
                     </button>
@@ -772,7 +873,7 @@ _"${focusedItemContext.text}"_
                         : 'text-slate-500 hover:text-slate-700 dark:text-slate-300 dark:hover:text-slate-100'
                     }`}
                   >
-                    Todas
+                    {ui.all}
                   </button>
                   <button
                     type="button"
@@ -784,7 +885,7 @@ _"${focusedItemContext.text}"_
                         : 'text-slate-500 hover:text-slate-700 dark:text-slate-300 dark:hover:text-slate-100'
                     }`}
                   >
-                    Activa
+                    {ui.active}
                   </button>
                 </div>
               </div>
@@ -805,8 +906,8 @@ _"${focusedItemContext.text}"_
                     type="button"
                     onClick={() => onClearFocusedItem?.()}
                     className="flex-shrink-0 rounded p-0.5 text-indigo-400 hover:bg-indigo-100 hover:text-indigo-600 dark:hover:bg-indigo-900/40 dark:hover:text-indigo-300"
-                    aria-label="Dejar de enfocar este ítem"
-                    title="Quitar enfoque"
+                    aria-label={ui.stopFocusing}
+                    title={ui.removeFocus}
                   >
                     <X size={12} />
                   </button>
@@ -818,7 +919,7 @@ _"${focusedItemContext.text}"_
                 {historyLoading && messages.length === 0 && (
                   <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
                     <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-500 dark:border-slate-600 dark:border-t-indigo-400" />
-                    Cargando historial...
+                    {ui.loadingHistory}
                   </div>
                 )}
 
@@ -851,7 +952,7 @@ _"${focusedItemContext.text}"_
                 {loading && (
                   <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
                     <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-500 dark:border-slate-600 dark:border-t-indigo-400" />
-                    Pensando...
+                    {ui.thinking}
                   </div>
                 )}
               </div>
@@ -860,7 +961,7 @@ _"${focusedItemContext.text}"_
               <footer className="border-t border-slate-200 px-4 py-3 dark:border-slate-700">
                 {tokensExhausted && (
                   <p className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
-                    Límite diario de tokens alcanzado. Vuelve mañana para continuar.
+                    {ui.tokenLimitReached}
                   </p>
                 )}
                 {!tokensExhausted && error && (
@@ -882,7 +983,7 @@ _"${focusedItemContext.text}"_
                     rows={2}
                     maxLength={2000}
                     disabled={tokensExhausted}
-                    placeholder={tokensExhausted ? 'Límite diario alcanzado' : 'Pregunta sobre tus extracciones...'}
+                    placeholder={tokensExhausted ? ui.limitReachedPlaceholder : ui.questionPlaceholder}
                     className="min-h-[44px] flex-1 resize-none rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50 disabled:text-slate-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/40 dark:disabled:bg-slate-900 dark:disabled:text-slate-600"
                   />
                   <button
@@ -892,7 +993,7 @@ _"${focusedItemContext.text}"_
                     className="inline-flex h-11 items-center gap-1 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-400"
                   >
                     <Send size={13} />
-                    {historyLoading ? 'Cargando...' : 'Enviar'}
+                    {historyLoading ? ui.loading : ui.send}
                   </button>
                 </div>
 
@@ -904,7 +1005,7 @@ _"${focusedItemContext.text}"_
                         ? 'text-rose-500 dark:text-rose-400'
                         : 'text-slate-400 dark:text-slate-500'
                   }`}>
-                    {tokensExhausted ? '0' : chatTokens.remaining.toLocaleString('es-MX')} / {chatTokens.limit.toLocaleString('es-MX')} tokens chat hoy
+                    {tokensExhausted ? '0' : chatTokens.remaining.toLocaleString(lang === 'en' ? 'en-US' : 'es-MX')} / {chatTokens.limit.toLocaleString(lang === 'en' ? 'en-US' : 'es-MX')} {ui.chatTokensToday}
                   </p>
                 )}
               </footer>

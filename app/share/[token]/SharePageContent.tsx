@@ -5,6 +5,7 @@ import Image from 'next/image'
 import { useLang } from '@/app/home/hooks/useLang'
 import { t } from '@/app/home/lib/i18n'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
+import { getLegalPagePath } from '@/lib/legal-links'
 import { flattenItemsAsText, normalizePlaybookPhases, type PlaybookNode } from '@/lib/playbook-tree'
 import { buildYoutubeThumbnailUrl } from '@/lib/video-preview'
 import { SharedTaskTimeline } from './SharedTaskTimeline'
@@ -66,6 +67,8 @@ function formatHistoryDate(isoDate: string) {
 
 export function SharePageContent({ extraction, token, tasks, attachments }: SharePageContentProps) {
   const { lang } = useLang()
+  const privacyHref = getLegalPagePath(lang, 'privacy')
+  const termsHref = getLegalPagePath(lang, 'terms')
 
   const phases = normalizePlaybookPhases(safeParse<unknown>(extraction.phases_json, []))
   const metadata = safeParse<ExtractionMetadata>(extraction.metadata_json, {
@@ -102,16 +105,16 @@ export function SharePageContent({ extraction, token, tasks, attachments }: Shar
 
             <div className="flex flex-wrap items-center gap-3 text-sm">
               <Link
-                href="/privacy-policy"
+                href={privacyHref}
                 className="text-slate-500 transition-colors hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
               >
-                Privacy
+                {t(lang, 'nav.privacy')}
               </Link>
               <Link
-                href="/terms-of-use"
+                href={termsHref}
                 className="text-slate-500 transition-colors hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
               >
-                Terms
+                {t(lang, 'nav.terms')}
               </Link>
               <Link
                 href="/"

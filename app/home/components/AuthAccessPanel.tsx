@@ -1,9 +1,12 @@
 import type { FormEvent } from 'react'
 import { CheckCircle2 } from 'lucide-react'
+import { getAuthCopy } from '@/app/home/lib/auth-copy'
+import type { Lang } from '@/app/home/lib/i18n'
 import type { AuthMode } from '@/app/home/lib/types'
 import { GoogleIcon } from '@/app/home/components/GoogleIcon'
 
 interface AuthAccessPanelProps {
+  lang: Lang
   signInHref?: string
   resetTokenFromUrl: string | null
   resetSuccess: boolean
@@ -51,6 +54,7 @@ const feedbackBaseClass =
   'rounded-lg border px-3 py-2 text-sm'
 
 export function AuthAccessPanel({
+  lang,
   signInHref = '/app',
   resetTokenFromUrl,
   resetSuccess,
@@ -89,6 +93,8 @@ export function AuthAccessPanel({
   onForgotSuccessChange,
   onSubmitForgotPassword,
 }: AuthAccessPanelProps) {
+  const copy = getAuthCopy(lang)
+
   if (resetTokenFromUrl) {
     return (
       <section className="mx-auto max-w-md space-y-5">
@@ -98,31 +104,31 @@ export function AuthAccessPanel({
               <CheckCircle2 size={28} />
             </div>
             <h1 className="mt-4 text-2xl font-extrabold tracking-tight text-zinc-900 dark:text-white">
-              Contraseña actualizada
+              {copy.resetSuccessTitle}
             </h1>
             <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-              Tu contraseña fue restablecida correctamente.
+              {copy.resetSuccessBody}
             </p>
             <a
               href={signInHref}
               className="mt-5 inline-flex rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-[0_34px_78px_-18px_rgba(124,58,237,1)] transition-colors duration-200 hover:bg-violet-700 dark:shadow-[0_26px_56px_-22px_rgba(139,92,246,0.98)]"
             >
-              Iniciar sesión
+              {copy.signInCta}
             </a>
           </div>
         ) : (
           <div className={panelClass}>
             <h1 className="text-2xl font-extrabold tracking-tight text-zinc-900 dark:text-white">
-              Nueva contraseña
+              {copy.newPasswordTitle}
             </h1>
             <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-              Define una contraseña nueva para tu cuenta.
+              {copy.newPasswordBody}
             </p>
 
             <form onSubmit={onSubmitResetPassword} className="mt-5 space-y-4">
               <div>
                 <label className="mb-1.5 block text-sm text-zinc-600 dark:text-zinc-300">
-                  Nueva contraseña
+                  {copy.newPasswordLabel}
                 </label>
                 <input
                   type="password"
@@ -131,13 +137,13 @@ export function AuthAccessPanel({
                   required
                   minLength={8}
                   className={inputClass}
-                  placeholder="Mínimo 8 caracteres"
+                  placeholder={copy.passwordMin}
                 />
               </div>
 
               <div>
                 <label className="mb-1.5 block text-sm text-zinc-600 dark:text-zinc-300">
-                  Confirmar contraseña
+                  {copy.confirmPasswordLabel}
                 </label>
                 <input
                   type="password"
@@ -146,7 +152,7 @@ export function AuthAccessPanel({
                   required
                   minLength={8}
                   className={inputClass}
-                  placeholder="Repite la contraseña"
+                  placeholder={copy.repeatPassword}
                 />
               </div>
 
@@ -161,7 +167,7 @@ export function AuthAccessPanel({
                 disabled={resetLoading}
                 className="h-11 w-full rounded-xl bg-violet-600 text-sm font-semibold text-white shadow-[0_34px_78px_-18px_rgba(124,58,237,1)] transition-colors duration-200 hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-zinc-400 dark:shadow-[0_26px_56px_-22px_rgba(139,92,246,0.98)]"
               >
-                {resetLoading ? 'Guardando...' : 'Restablecer contraseña'}
+                {resetLoading ? copy.resetSaving : copy.resetSubmit}
               </button>
             </form>
           </div>
@@ -179,10 +185,10 @@ export function AuthAccessPanel({
               <CheckCircle2 size={28} />
             </div>
             <h1 className="mt-4 text-2xl font-extrabold tracking-tight text-zinc-900 dark:text-white">
-              Revisa tu correo
+              {copy.forgotSuccessTitle}
             </h1>
             <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-              Si el correo está registrado, te enviaremos un enlace para restablecer tu contraseña.
+              {copy.forgotSuccessBody}
             </p>
             <button
               type="button"
@@ -193,22 +199,22 @@ export function AuthAccessPanel({
               }}
               className="mt-5 text-sm font-medium text-zinc-600 transition-colors hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
             >
-              Volver a iniciar sesión
+              {copy.backToSignIn}
             </button>
           </div>
         ) : (
           <div className={panelClass}>
             <h1 className="text-2xl font-extrabold tracking-tight text-zinc-900 dark:text-white">
-              Recuperar contraseña
+              {copy.forgotTitle}
             </h1>
             <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-              Te enviaremos un enlace seguro para actualizar tu contraseña.
+              {copy.forgotBody}
             </p>
 
             <form onSubmit={onSubmitForgotPassword} className="mt-5 space-y-4">
               <div>
                 <label className="mb-1.5 block text-sm text-zinc-600 dark:text-zinc-300">
-                  Correo electrónico
+                  {copy.emailLabel}
                 </label>
                 <input
                   type="email"
@@ -216,7 +222,7 @@ export function AuthAccessPanel({
                   onChange={(event) => onForgotEmailChange(event.target.value)}
                   required
                   className={inputClass}
-                  placeholder="tu@correo.com"
+                  placeholder={copy.emailPlaceholder}
                 />
               </div>
 
@@ -231,7 +237,7 @@ export function AuthAccessPanel({
                 disabled={forgotLoading}
                 className="h-11 w-full rounded-xl bg-violet-600 text-sm font-semibold text-white shadow-[0_34px_78px_-18px_rgba(124,58,237,1)] transition-colors duration-200 hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-zinc-400 dark:shadow-[0_26px_56px_-22px_rgba(139,92,246,0.98)]"
               >
-                {forgotLoading ? 'Enviando...' : 'Enviar enlace'}
+                {forgotLoading ? copy.forgotSending : copy.forgotSendLink}
               </button>
 
               <button
@@ -242,7 +248,7 @@ export function AuthAccessPanel({
                 }}
                 className="w-full text-sm font-medium text-zinc-600 transition-colors hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
               >
-                Volver a iniciar sesión
+                {copy.backToSignIn}
               </button>
             </form>
           </div>
@@ -255,10 +261,10 @@ export function AuthAccessPanel({
     <section className="mx-auto max-w-md space-y-4">
       <div className="text-center">
         <h2 className="text-3xl font-extrabold tracking-tight text-zinc-900 dark:text-white">
-          Accede a tu espacio
+          {authMode === 'register' ? copy.panelRegisterTitle : copy.panelLoginTitle}
         </h2>
         <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-          Guarda historial por usuario y exporta resultados en un flujo de alta conversión.
+          {copy.panelSubtitle}
         </p>
       </div>
 
@@ -276,7 +282,7 @@ export function AuthAccessPanel({
                 : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-white/5'
             }`}
           >
-            Iniciar sesión
+            {copy.loginTab}
           </button>
           <button
             type="button"
@@ -291,7 +297,7 @@ export function AuthAccessPanel({
                 : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-white/5'
             }`}
           >
-            Registrarme
+            {copy.registerTab}
           </button>
         </div>
 
@@ -304,47 +310,53 @@ export function AuthAccessPanel({
           >
             <GoogleIcon className="h-4 w-4" />
             {googleAuthLoading
-              ? 'Conectando con Google...'
+              ? copy.googleConnecting
               : authMode === 'register'
-                ? 'Crear cuenta con Google'
-                : 'Continuar con Google'}
+                ? copy.googleCreate
+                : copy.googleContinue}
           </button>
 
           <div className="relative py-1">
             <div className="h-px w-full bg-zinc-200 dark:bg-white/10" />
             <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white px-2 text-[11px] font-medium uppercase tracking-wide text-zinc-400 dark:bg-zinc-950 dark:text-zinc-500">
-              o con correo
+              {copy.orWithEmail}
             </span>
           </div>
 
           {authMode === 'register' && (
             <div>
-              <label className="mb-1.5 block text-sm text-zinc-600 dark:text-zinc-300">Nombre</label>
+              <label className="mb-1.5 block text-sm text-zinc-600 dark:text-zinc-300">
+                {copy.nameLabel}
+              </label>
               <input
                 type="text"
                 value={name}
                 onChange={(event) => onNameChange(event.target.value)}
                 required
                 className={inputClass}
-                placeholder="Tu nombre"
+                placeholder={copy.namePlaceholder}
               />
             </div>
           )}
 
           <div>
-            <label className="mb-1.5 block text-sm text-zinc-600 dark:text-zinc-300">Correo</label>
+            <label className="mb-1.5 block text-sm text-zinc-600 dark:text-zinc-300">
+              {copy.emailLabel}
+            </label>
             <input
               type="email"
               value={email}
               onChange={(event) => onEmailChange(event.target.value)}
               required
               className={inputClass}
-              placeholder="tu@correo.com"
+              placeholder={copy.emailPlaceholder}
             />
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm text-zinc-600 dark:text-zinc-300">Contraseña</label>
+            <label className="mb-1.5 block text-sm text-zinc-600 dark:text-zinc-300">
+              {copy.passwordLabel}
+            </label>
             <input
               type="password"
               value={password}
@@ -352,7 +364,7 @@ export function AuthAccessPanel({
               required
               minLength={8}
               className={inputClass}
-              placeholder="Mínimo 8 caracteres"
+              placeholder={copy.passwordMin}
             />
           </div>
 
@@ -374,10 +386,10 @@ export function AuthAccessPanel({
             className="h-11 w-full rounded-xl bg-violet-600 text-sm font-semibold text-white shadow-[0_34px_78px_-18px_rgba(124,58,237,1)] transition-colors duration-200 hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-zinc-400 dark:shadow-[0_26px_56px_-22px_rgba(139,92,246,0.98)]"
           >
             {authLoading
-              ? 'Procesando...'
+              ? copy.authProcessing
               : authMode === 'login'
-                ? 'Entrar'
-                : 'Crear cuenta'}
+                ? copy.loginSubmit
+                : copy.registerSubmit}
           </button>
 
           {authMode === 'login' && (
@@ -390,7 +402,7 @@ export function AuthAccessPanel({
               }}
               className="w-full text-sm font-medium text-zinc-600 transition-colors hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
             >
-              ¿Olvidaste tu contraseña?
+              {copy.forgotPassword}
             </button>
           )}
         </form>

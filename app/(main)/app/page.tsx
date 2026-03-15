@@ -73,10 +73,12 @@ import {
 import type {
   ExtractResult,
   ExtractionAccessRole,
+  ExtractionClonePermission,
   ExtractionMember,
   ExtractionTag,
   HistoryItem,
   Phase,
+  PlaybookLineageData,
   ShareVisibility,
   SharedExtractionItem,
   SourceType,
@@ -164,6 +166,126 @@ function normalizeSearchText(value: string | null | undefined) {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
+}
+
+function normalizeClonePermission(value: unknown): ExtractionClonePermission {
+  if (value === 'template_only' || value === 'full') return value
+  return 'disabled'
+}
+
+function normalizePlaybookLineageData(value: unknown): PlaybookLineageData {
+  const raw = value as {
+    generation?: unknown
+    nodes?: unknown
+    copies?: unknown
+  } | null
+
+  const nodes = Array.isArray(raw?.nodes)
+    ? raw.nodes
+        .map((entry, index) => {
+          if (!entry || typeof entry !== 'object') return null
+          const node = entry as {
+            depth?: unknown
+            isCurrent?: unknown
+            isOriginal?: unknown
+            accessible?: unknown
+            title?: unknown
+            ownerName?: unknown
+            ownerEmail?: unknown
+            createdAt?: unknown
+          }
+
+          return {
+            depth:
+              typeof node.depth === 'number' && Number.isFinite(node.depth) ? Math.max(0, Math.trunc(node.depth)) : index,
+            isCurrent: node.isCurrent === true,
+            isOriginal: node.isOriginal === true,
+            accessible: node.accessible === true,
+            title: typeof node.title === 'string' && node.title.trim() ? node.title.trim() : null,
+            ownerName:
+              typeof node.ownerName === 'string' && node.ownerName.trim() ? node.ownerName.trim() : null,
+            ownerEmail:
+              typeof node.ownerEmail === 'string' && node.ownerEmail.trim() ? node.ownerEmail.trim() : null,
+            createdAt:
+              typeof node.createdAt === 'string' && node.createdAt.trim() ? node.createdAt.trim() : null,
+          }
+        })
+        .filter((node): node is PlaybookLineageData['nodes'][number] => Boolean(node))
+    : []
+
+  const rawCopies = raw?.copies as
+    | {
+        directCount?: unknown
+        totalCount?: unknown
+        recent?: unknown
+      }
+    | null
+
+  const copies =
+    rawCopies && typeof rawCopies === 'object'
+      ? {
+          directCount:
+            typeof rawCopies.directCount === 'number' && Number.isFinite(rawCopies.directCount)
+              ? Math.max(0, Math.trunc(rawCopies.directCount))
+              : 0,
+          totalCount:
+            typeof rawCopies.totalCount === 'number' && Number.isFinite(rawCopies.totalCount)
+              ? Math.max(0, Math.trunc(rawCopies.totalCount))
+              : 0,
+          recent: Array.isArray(rawCopies.recent)
+            ? rawCopies.recent
+                .map((entry) => {
+                  if (!entry || typeof entry !== 'object') return null
+                  const copy = entry as {
+                    depth?: unknown
+                    title?: unknown
+                    copiedByName?: unknown
+                    copiedByEmail?: unknown
+                    createdAt?: unknown
+                    copiedFromTitle?: unknown
+                  }
+
+                  const title =
+                    typeof copy.title === 'string' && copy.title.trim() ? copy.title.trim() : null
+                  const createdAt =
+                    typeof copy.createdAt === 'string' && copy.createdAt.trim() ? copy.createdAt.trim() : null
+
+                  if (!title || !createdAt) return null
+
+                  return {
+                    depth:
+                      typeof copy.depth === 'number' && Number.isFinite(copy.depth)
+                        ? Math.max(1, Math.trunc(copy.depth))
+                        : 1,
+                    title,
+                    copiedByName:
+                      typeof copy.copiedByName === 'string' && copy.copiedByName.trim()
+                        ? copy.copiedByName.trim()
+                        : null,
+                    copiedByEmail:
+                      typeof copy.copiedByEmail === 'string' && copy.copiedByEmail.trim()
+                        ? copy.copiedByEmail.trim()
+                        : null,
+                    createdAt,
+                    copiedFromTitle:
+                      typeof copy.copiedFromTitle === 'string' && copy.copiedFromTitle.trim()
+                        ? copy.copiedFromTitle.trim()
+                        : null,
+                  }
+                })
+                .filter((entry): entry is NonNullable<PlaybookLineageData['copies']>['recent'][number] => Boolean(entry))
+            : [],
+        }
+      : null
+
+  return {
+    generation:
+      typeof raw?.generation === 'number' && Number.isFinite(raw.generation)
+        ? Math.max(0, Math.trunc(raw.generation))
+        : Math.max(0, nodes.length - 1),
+    nodes,
+    copies,
+  }
 }
 
 function parseApiErrorMessage(payload: unknown, fallback: string) {
@@ -338,6 +460,7 @@ function ActionExtractor() {
   const [shareLoading, setShareLoading] = useState(false)
   const [shareCopied, setShareCopied] = useState(false)
   const [shareVisibilityLoading, setShareVisibilityLoading] = useState(false)
+  const [clonePermissionLoading, setClonePermissionLoading] = useState(false)
   const [historyShareLoadingItemId, setHistoryShareLoadingItemId] = useState<string | null>(null)
   const [historyShareCopiedItemId, setHistoryShareCopiedItemId] = useState<string | null>(null)
   const [sharedWithMe, setSharedWithMe] = useState<SharedExtractionItem[]>([])
@@ -935,6 +1058,7 @@ function ActionExtractor() {
     handleResetPassword,
     handleLogout: handleAuthLogout,
   } = useAuth({
+    lang,
     searchParams,
     resetTokenFromUrl,
     onAuthenticated: handleAuthenticated,
@@ -1600,12 +1724,16 @@ function ActionExtractor() {
           const resolvedShareVisibility = normalizeShareVisibility(
             (payload as { shareVisibility?: unknown }).shareVisibility
           )
+          const resolvedClonePermission = normalizeClonePermission(
+            (payload as { clonePermission?: unknown }).clonePermission
+          )
           const fromCache = (payload as { cached?: unknown }).cached === true
           setResult({
             ...(payload as ExtractResult),
             phases: normalizePlaybookPhases((payload as { phases?: unknown }).phases),
             mode: resolvedMode,
             shareVisibility: resolvedShareVisibility,
+            clonePermission: resolvedClonePermission,
             accessRole: 'owner',
           })
           setResultAccessRole('owner')
@@ -1616,6 +1744,7 @@ function ActionExtractor() {
           setActivePhasesByPlaybookId({})
           setStackedResultIds([])
           setPendingStackedScrollPlaybookId(null)
+          setClonePermissionLoading(false)
           setError(null)
           setStreamStatus(fromCache ? t(lang, 'app.resultFromCache') : t(lang, 'app.extractionComplete'))
           setNotice(
@@ -1968,6 +2097,262 @@ function ActionExtractor() {
     }
   }
 
+  const handleUpdateClonePermission = async (nextPermission: ExtractionClonePermission) => {
+    if (resultAccessRole !== 'owner') {
+      setError(t(lang, 'app.onlyOwnerClonePermission'))
+      return
+    }
+
+    const extractionId = result?.id?.trim()
+    if (!extractionId || clonePermissionLoading) return
+
+    const currentPermission = normalizeClonePermission(result?.clonePermission)
+    if (currentPermission === nextPermission) return
+
+    setError(null)
+    setNotice(null)
+    setClonePermissionLoading(true)
+    setResult((previous) => {
+      if (!previous || previous.id !== extractionId) return previous
+      return {
+        ...previous,
+        clonePermission: nextPermission,
+      }
+    })
+    setHistory((previous) =>
+      previous.map((item) =>
+        item.id === extractionId ? { ...item, clonePermission: nextPermission } : item
+      )
+    )
+
+    try {
+      const res = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/clone-permission`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clonePermission: nextPermission }),
+      })
+
+      if (res.status === 401) {
+        handleUnauthorized()
+        setError(t(lang, 'app.sessionExpired'))
+        setResult((previous) => {
+          if (!previous || previous.id !== extractionId) return previous
+          return {
+            ...previous,
+            clonePermission: currentPermission,
+          }
+        })
+        setHistory((previous) =>
+          previous.map((item) =>
+            item.id === extractionId ? { ...item, clonePermission: currentPermission } : item
+          )
+        )
+        return
+      }
+
+      const data = (await res.json().catch(() => null)) as
+        | { clonePermission?: unknown; error?: unknown }
+        | null
+
+      if (!res.ok) {
+        setError(parseApiErrorMessage(data, t(lang, 'app.clonePermissionError')))
+        setResult((previous) => {
+          if (!previous || previous.id !== extractionId) return previous
+          return {
+            ...previous,
+            clonePermission: currentPermission,
+          }
+        })
+        setHistory((previous) =>
+          previous.map((item) =>
+            item.id === extractionId ? { ...item, clonePermission: currentPermission } : item
+          )
+        )
+        return
+      }
+
+      const persistedPermission = normalizeClonePermission(data?.clonePermission)
+      setResult((previous) => {
+        if (!previous || previous.id !== extractionId) return previous
+        return {
+          ...previous,
+          clonePermission: persistedPermission,
+        }
+      })
+      setHistory((previous) =>
+        previous.map((item) =>
+          item.id === extractionId ? { ...item, clonePermission: persistedPermission } : item
+        )
+      )
+      setNotice(t(lang, 'app.clonePermissionUpdated'))
+    } catch {
+      setError(t(lang, 'app.clonePermissionError'))
+      setResult((previous) => {
+        if (!previous || previous.id !== extractionId) return previous
+        return {
+          ...previous,
+          clonePermission: currentPermission,
+        }
+      })
+      setHistory((previous) =>
+        previous.map((item) =>
+          item.id === extractionId ? { ...item, clonePermission: currentPermission } : item
+        )
+      )
+    } finally {
+      setClonePermissionLoading(false)
+    }
+  }
+
+  const handleCloneResult = useCallback(
+    async (input: {
+      extractionId: string
+      folderId: string | null
+      name: string
+      mode: 'full' | 'template'
+    }) => {
+      const extractionId = input.extractionId.trim()
+      if (!extractionId) return false
+
+      setError(null)
+      setNotice(null)
+
+      try {
+        const res = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/clone`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            folderId: input.folderId,
+            name: input.name,
+            mode: input.mode,
+          }),
+        })
+
+        if (res.status === 401) {
+          handleUnauthorized()
+          setError(t(lang, 'app.sessionExpired'))
+          return false
+        }
+
+        const data = (await res.json().catch(() => null)) as
+          | { item?: Partial<HistoryItem>; error?: unknown }
+          | null
+
+        if (!res.ok) {
+          setError(parseApiErrorMessage(data, t(lang, 'app.cloneError')))
+          return false
+        }
+
+        const rawItem = data?.item
+        if (!rawItem || typeof rawItem !== 'object' || typeof rawItem.id !== 'string') {
+          setError(t(lang, 'app.cloneError'))
+          return false
+        }
+
+        const clonedItem = {
+          ...(rawItem as HistoryItem),
+          mode: normalizeExtractionMode((rawItem as { mode?: unknown }).mode),
+          phases: normalizePlaybookPhases((rawItem as { phases?: unknown }).phases),
+          shareVisibility: normalizeShareVisibility(
+            (rawItem as { shareVisibility?: unknown }).shareVisibility
+          ),
+          clonePermission: normalizeClonePermission(
+            (rawItem as { clonePermission?: unknown }).clonePermission
+          ),
+        } as HistoryItem
+
+        setHistory((previous) => [clonedItem, ...previous.filter((item) => item.id !== clonedItem.id)])
+        setUrl(clonedItem.url ?? '')
+        setUploadedFile(null)
+        const clonedMode = normalizeExtractionMode(clonedItem.mode)
+        setExtractionMode(clonedMode)
+        setResult({
+          id: clonedItem.id,
+          orderNumber: clonedItem.orderNumber,
+          shareVisibility: normalizeShareVisibility(clonedItem.shareVisibility),
+          clonePermission: normalizeClonePermission(clonedItem.clonePermission),
+          createdAt: clonedItem.createdAt,
+          folderId: clonedItem.folderId ?? null,
+          url: clonedItem.url ?? null,
+          videoId: clonedItem.videoId ?? null,
+          videoTitle: clonedItem.videoTitle ?? null,
+          thumbnailUrl: clonedItem.thumbnailUrl ?? null,
+          mode: clonedMode,
+          objective: clonedItem.objective,
+          phases: normalizePlaybookPhases(clonedItem.phases),
+          proTip: clonedItem.proTip,
+          metadata: clonedItem.metadata,
+          sourceType: clonedItem.sourceType,
+          transcriptSource: clonedItem.transcriptSource ?? null,
+          sourceLabel: clonedItem.sourceLabel ?? null,
+          sourceFileUrl: clonedItem.sourceFileUrl ?? null,
+          sourceFileName: clonedItem.sourceFileName ?? null,
+          sourceFileSizeBytes: clonedItem.sourceFileSizeBytes ?? null,
+          sourceFileMimeType: clonedItem.sourceFileMimeType ?? null,
+          hasSourceText: clonedItem.hasSourceText ?? false,
+          isStarred: clonedItem.isStarred ?? false,
+          tags: clonedItem.tags ?? [],
+          accessRole: 'owner',
+          ownerName: user?.name ?? null,
+          ownerEmail: user?.email ?? null,
+        })
+        setStackedResultIds([])
+        setPendingStackedScrollPlaybookId(null)
+        setResultAccessRole('owner')
+        setCircleMembers([])
+        setIsResultBookClosed(false)
+        setActivePhasesByPlaybookId({})
+        setShareCopied(false)
+        setShareVisibilityLoading(false)
+        setClonePermissionLoading(false)
+        setStreamStatus(null)
+        setStreamPreview('')
+        setShouldScrollToResult(true)
+        setNotice(
+          input.mode === 'full'
+            ? t(lang, 'app.cloneCreated')
+            : t(lang, 'app.cloneCreatedTemplate')
+        )
+        void loadHistory()
+        return true
+      } catch {
+        setError(t(lang, 'app.cloneError'))
+        return false
+      }
+    },
+    [handleUnauthorized, lang, loadHistory, setHistory, user?.email, user?.name]
+  )
+
+  const handleLoadLineage = useCallback(
+    async (extractionIdRaw: string): Promise<PlaybookLineageData> => {
+      const extractionId = extractionIdRaw.trim()
+      if (!extractionId) {
+        throw new Error('No se encontró el playbook para cargar el linaje.')
+      }
+
+      const res = await fetch(`/api/extractions/${encodeURIComponent(extractionId)}/lineage`, {
+        cache: 'no-store',
+      })
+
+      if (res.status === 401) {
+        handleUnauthorized()
+        throw new Error(t(lang, 'app.sessionExpired'))
+      }
+
+      const data = (await res.json().catch(() => null)) as
+        | (PlaybookLineageData & { error?: unknown })
+        | { error?: unknown }
+        | null
+
+      if (!res.ok) {
+        throw new Error(parseApiErrorMessage(data, 'No se pudo cargar el linaje del playbook.'))
+      }
+
+      return normalizePlaybookLineageData(data)
+    },
+    [handleUnauthorized, lang]
+  )
+
   const handleSaveResultMeta = useCallback(
     async (meta: { title: string; thumbnailUrl: string | null; objective: string }) => {
       if (resultAccessRole !== 'owner') return false
@@ -2238,6 +2623,7 @@ function ActionExtractor() {
           phases: normalizePlaybookPhases(data.item.phases),
           mode: normalizeExtractionMode(data.item.mode),
           shareVisibility: normalizeShareVisibility(data.item.shareVisibility),
+          clonePermission: normalizeClonePermission(data.item.clonePermission),
           accessRole: 'owner',
         }
 
@@ -2249,6 +2635,7 @@ function ActionExtractor() {
         setStackedResultIds([])
         setPendingStackedScrollPlaybookId(null)
         setShareCopied(false)
+        setClonePermissionLoading(false)
         setExtractionMode(normalizeExtractionMode(nextResult.mode))
         setUrl((nextResult.url ?? url).trim())
         setNotice(
@@ -2406,6 +2793,7 @@ function ActionExtractor() {
       id: item.id,
       orderNumber: item.orderNumber,
       shareVisibility: normalizeShareVisibility(item.shareVisibility),
+      clonePermission: normalizeClonePermission(item.clonePermission),
       createdAt: item.createdAt,
       folderId: item.folderId ?? null,
       url: item.url ?? null,
@@ -2418,6 +2806,7 @@ function ActionExtractor() {
       proTip: item.proTip,
       metadata: item.metadata,
       sourceType: item.sourceType,
+      transcriptSource: item.transcriptSource ?? null,
       sourceLabel: item.sourceLabel ?? null,
       sourceFileUrl: item.sourceFileUrl ?? null,
       sourceFileName: item.sourceFileName ?? null,
@@ -2425,6 +2814,7 @@ function ActionExtractor() {
       sourceFileMimeType: item.sourceFileMimeType ?? null,
       hasSourceText: item.hasSourceText ?? false,
       isStarred: item.isStarred ?? false,
+      tags: item.tags ?? [],
       accessRole: 'owner',
       ownerName: user?.name ?? null,
       ownerEmail: user?.email ?? null,
@@ -2437,6 +2827,7 @@ function ActionExtractor() {
       id: item.id,
       orderNumber: item.orderNumber,
       shareVisibility: normalizeShareVisibility(item.shareVisibility),
+      clonePermission: normalizeClonePermission(item.clonePermission),
       createdAt: item.createdAt,
       folderId: item.folderId ?? null,
       url: item.url ?? null,
@@ -2449,12 +2840,14 @@ function ActionExtractor() {
       proTip: item.proTip,
       metadata: item.metadata,
       sourceType: item.sourceType,
+      transcriptSource: item.transcriptSource ?? null,
       sourceLabel: item.sourceLabel ?? null,
       sourceFileUrl: item.sourceFileUrl ?? null,
       sourceFileName: item.sourceFileName ?? null,
       sourceFileSizeBytes: item.sourceFileSizeBytes ?? null,
       sourceFileMimeType: item.sourceFileMimeType ?? null,
       hasSourceText: item.hasSourceText ?? false,
+      tags: item.tags ?? [],
       accessRole: item.accessRole,
       ownerName: item.ownerName,
       ownerEmail: item.ownerEmail,
@@ -2479,6 +2872,7 @@ function ActionExtractor() {
     setError(null)
     setShareCopied(false)
     setShareVisibilityLoading(false)
+    setClonePermissionLoading(false)
     setStreamStatus(null)
     setStreamPreview('')
     setShouldScrollToResult(true)
@@ -2499,6 +2893,7 @@ function ActionExtractor() {
     setError(null)
     setShareCopied(false)
     setShareVisibilityLoading(false)
+    setClonePermissionLoading(false)
     setStreamStatus(null)
     setStreamPreview('')
     setShouldScrollToResult(true)
@@ -2531,6 +2926,7 @@ function ActionExtractor() {
       mode,
       objective: typeof item.objective === 'string' ? item.objective : '',
       phases: normalizePlaybookPhases(item.phases),
+      clonePermission: normalizeClonePermission(item.clonePermission),
     })
     setStackedResultIds([])
     setPendingStackedScrollPlaybookId(null)
@@ -2541,6 +2937,7 @@ function ActionExtractor() {
     setError(null)
     setShareCopied(false)
     setShareVisibilityLoading(false)
+    setClonePermissionLoading(false)
     setStreamStatus(null)
     setStreamPreview('')
     setShouldScrollToResult(true)
@@ -2972,10 +3369,10 @@ function ActionExtractor() {
   }, [folderShareTargetId, folders])
   const getFolderLabelById = useCallback(
     (folderId: string | null | undefined) => {
-      if (!folderId) return 'General'
-      return allFolders.find((folder) => folder.id === folderId)?.name ?? 'General'
+      if (!folderId) return t(lang, 'app.generalFolder')
+      return allFolders.find((folder) => folder.id === folderId)?.name ?? t(lang, 'app.generalFolder')
     },
-    [allFolders]
+    [allFolders, lang]
   )
   const normalizedGlobalPlaybookQuery = useMemo(
     () => normalizeSearchText(globalPlaybookQuery).trim(),
@@ -3299,7 +3696,11 @@ function ActionExtractor() {
                   const textColor = isExhausted ? 'text-rose-600 dark:text-rose-400' : isWarning ? 'text-amber-600 dark:text-amber-400' : 'text-violet-600 dark:text-violet-400'
                   return (
                     <div
-                      title={`${fmt(Math.max(0, remaining))} tokens de chat restantes hoy · límite: ${fmt(chatTokenLimit)}`}
+                      title={
+                        lang === 'en'
+                          ? `${fmt(Math.max(0, remaining))} chat tokens remaining today · limit: ${fmt(chatTokenLimit)}`
+                          : `${fmt(Math.max(0, remaining))} tokens de chat restantes hoy · límite: ${fmt(chatTokenLimit)}`
+                      }
                       className="hidden sm:flex items-center gap-1.5"
                     >
                       <span className={`text-[11px] font-semibold ${textColor}`}>Chat</span>
@@ -3366,7 +3767,7 @@ function ActionExtractor() {
                   type="button"
                   onClick={toggleLang}
                   className="inline-flex h-9 items-center justify-center rounded-lg px-2.5 text-xs font-bold text-zinc-500 transition-all duration-150 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/[0.07] dark:hover:text-zinc-200"
-                  title={lang === 'en' ? 'Cambiar a Español' : 'Switch to English'}
+                  title={lang === 'en' ? 'Switch to Spanish' : 'Cambiar a inglés'}
                 >
                   {lang === 'en' ? 'ES' : 'EN'}
                 </button>
@@ -3393,50 +3794,51 @@ function ActionExtractor() {
                 </h1>
                 <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                   {resetTokenFromUrl
-                    ? 'Reset your password'
-                    : 'Log in or create an account to continue.'}
+                    ? (lang === 'en' ? 'Reset your password' : 'Restablece tu contraseña')
+                    : (lang === 'en' ? 'Log in or create an account to continue.' : 'Inicia sesión o crea una cuenta para continuar.')}
                 </p>
               </div>
 
-            <AuthAccessPanel
-              resetTokenFromUrl={resetTokenFromUrl}
-              resetSuccess={resetSuccess}
-              resetLoading={resetLoading}
-              resetError={resetError}
-              newPassword={newPassword}
-              confirmPassword={confirmPassword}
-              onNewPasswordChange={setNewPassword}
-              onConfirmPasswordChange={setConfirmPassword}
-              onSubmitResetPassword={handleResetPassword}
-              authMode={authMode}
-              onAuthModeChange={setAuthMode}
-              authLoading={authLoading}
-              googleAuthLoading={googleAuthLoading}
-              authNotice={authNotice}
-              authError={authError}
-              onAuthNoticeChange={setAuthNotice}
-              onAuthErrorChange={setAuthError}
-              onGoogleAuthStart={handleGoogleAuthStart}
-              onSubmitAuth={handleAuthSubmit}
-              name={name}
-              email={email}
-              password={password}
-              onNameChange={setName}
-              onEmailChange={setEmail}
-              onPasswordChange={setPassword}
-              forgotEmail={forgotEmail}
-              forgotLoading={forgotLoading}
-              forgotError={forgotError}
-              forgotSuccess={forgotSuccess}
-              onForgotEmailChange={setForgotEmail}
-              onForgotErrorChange={setForgotError}
-              onForgotSuccessChange={setForgotSuccess}
-              onSubmitForgotPassword={handleForgotPassword}
-            />
+              <AuthAccessPanel
+                lang={lang}
+                resetTokenFromUrl={resetTokenFromUrl}
+                resetSuccess={resetSuccess}
+                resetLoading={resetLoading}
+                resetError={resetError}
+                newPassword={newPassword}
+                confirmPassword={confirmPassword}
+                onNewPasswordChange={setNewPassword}
+                onConfirmPasswordChange={setConfirmPassword}
+                onSubmitResetPassword={handleResetPassword}
+                authMode={authMode}
+                onAuthModeChange={setAuthMode}
+                authLoading={authLoading}
+                googleAuthLoading={googleAuthLoading}
+                authNotice={authNotice}
+                authError={authError}
+                onAuthNoticeChange={setAuthNotice}
+                onAuthErrorChange={setAuthError}
+                onGoogleAuthStart={handleGoogleAuthStart}
+                onSubmitAuth={handleAuthSubmit}
+                name={name}
+                email={email}
+                password={password}
+                onNameChange={setName}
+                onEmailChange={setEmail}
+                onPasswordChange={setPassword}
+                forgotEmail={forgotEmail}
+                forgotLoading={forgotLoading}
+                forgotError={forgotError}
+                forgotSuccess={forgotSuccess}
+                onForgotEmailChange={setForgotEmail}
+                onForgotErrorChange={setForgotError}
+                onForgotSuccessChange={setForgotSuccess}
+                onSubmitForgotPassword={handleForgotPassword}
+              />
 
               <div className="text-center">
                 <a href="/" className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
-                  ← Back to landing
+                  {lang === 'en' ? '← Back to landing' : '← Volver al inicio'}
                 </a>
               </div>
             </div>
@@ -3819,7 +4221,7 @@ function ActionExtractor() {
                     }}
                     placeholder={t(lang, 'app.globalSearch')}
                     className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 outline-none transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500"
-                    aria-label="Buscar playbooks globalmente"
+                    aria-label={t(lang, 'app.searchPlaybooks')}
                   />
                   {globalPlaybookQuery.trim().length > 0 && (
                     <button
@@ -3895,7 +4297,7 @@ function ActionExtractor() {
                   aria-controls="folder-dock-drawer-panel"
                 >
                   <span aria-hidden="true" className="playbook-folder-drawer-tab-handle" />
-                  <span className="playbook-folder-drawer-tab-label">Carpetas</span>
+                  <span className="playbook-folder-drawer-tab-label">{t(lang, 'app.foldersDrawer')}</span>
                 </button>
 
                 <div
@@ -4010,6 +4412,11 @@ function ActionExtractor() {
                         })
                       }}
                       onStarResult={(starred) => void handleStarResult(starred)}
+                      cloneAccessRole={result.accessRole ?? resultAccessRole}
+                      clonePermissionLoading={clonePermissionLoading}
+                      onClonePermissionChange={handleUpdateClonePermission}
+                      onCloneResult={handleCloneResult}
+                      onLoadLineage={handleLoadLineage}
                       allTags={allTags}
                       onAddTag={handleAddTagToResult}
                       onRemoveTag={handleRemoveTagFromResult}
@@ -4095,7 +4502,7 @@ function ActionExtractor() {
                             onExportToGoogleSheets={() => handleExportToGoogleSheets(item.id)}
                             onConnectGoogleDocs={handleConnectGoogleDocs}
                             onOpenPlaybookReference={openDeskPlaybookByIdentifier}
-                      onFocusItemForChat={setFocusedItemForChat}
+                            onFocusItemForChat={setFocusedItemForChat}
                             onReExtractMode={(mode) => {
                               handleScrollToExtractor()
                               void handleExtract({
@@ -4103,6 +4510,9 @@ function ActionExtractor() {
                                 mode,
                               })
                             }}
+                            cloneAccessRole={stackedResult.accessRole ?? (item.source === 'mine' ? 'owner' : 'viewer')}
+                            onCloneResult={handleCloneResult}
+                            onLoadLineage={handleLoadLineage}
                           />
                         </div>
                       )
@@ -4115,8 +4525,8 @@ function ActionExtractor() {
                     >
                       <span aria-hidden="true" className="paper-playbook-fold" />
                       <div aria-hidden="true" className="paper-playbook-cover translate-y-0 opacity-100">
-                        <p className="paper-playbook-cover-kicker">Carpeta activa</p>
-                        <p className="paper-playbook-cover-title">General</p>
+                        <p className="paper-playbook-cover-kicker">{t(lang, 'app.activeFolderTitle')}</p>
+                        <p className="paper-playbook-cover-title">{t(lang, 'app.generalFolder')}</p>
                       </div>
                     </div>
                   </div>
@@ -4210,7 +4620,7 @@ function ActionExtractor() {
             <button
               type="button"
               onClick={handleScrollToExtractor}
-              aria-label="Volver al extractor"
+              aria-label={t(lang, 'app.backToExtractorAria')}
               className={`fixed bottom-6 right-4 z-40 inline-flex items-center gap-2 rounded-full border border-violet-400/70 bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_22px_44px_-18px_rgba(79,70,229,0.8)] transition-all duration-300 hover:-translate-y-0.5 hover:from-violet-500 hover:to-indigo-500 md:right-6 ${
                 showBackToExtractorButton
                   ? 'pointer-events-auto translate-y-0 opacity-100'
@@ -4218,15 +4628,15 @@ function ActionExtractor() {
               }`}
             >
               <ArrowUp size={16} />
-              <span className="hidden sm:inline">Volver al extractor</span>
-              <span className="sm:hidden">Inicio</span>
+              <span className="hidden sm:inline">{t(lang, 'app.backToExtractor')}</span>
+              <span className="sm:hidden">{t(lang, 'app.homeShort')}</span>
             </button>
 
             {result && (
               <button
                 type="button"
                 onClick={handleScrollToHistory}
-                aria-label="Ir al historial de extracciones"
+                aria-label={t(lang, 'app.goToHistoryAria')}
                 className={`fixed bottom-6 left-4 z-40 inline-flex items-center gap-2 rounded-full border border-cyan-300/80 bg-gradient-to-r from-cyan-500 to-teal-500 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_22px_44px_-18px_rgba(13,148,136,0.85)] transition-all duration-300 hover:-translate-y-0.5 hover:from-cyan-400 hover:to-teal-400 md:left-6 ${
                   showGoToHistoryButton
                     ? 'pointer-events-auto translate-y-0 opacity-100'
@@ -4234,8 +4644,8 @@ function ActionExtractor() {
                 }`}
               >
                 <History size={16} />
-                <span className="hidden sm:inline">Ir al historial</span>
-                <span className="sm:hidden">Historial</span>
+                <span className="hidden sm:inline">{t(lang, 'app.goToHistory')}</span>
+                <span className="sm:hidden">{t(lang, 'app.historyShort')}</span>
               </button>
             )}
 
@@ -4256,12 +4666,12 @@ function ActionExtractor() {
                   <div className="mb-4 flex items-start justify-between gap-3">
                     <div>
                       <h2 id="folder-share-modal-title" className="text-lg font-bold text-slate-900 dark:text-slate-100">
-                        Compartir carpeta
+                        {t(lang, 'app.folderShareTitle')}
                       </h2>
                       <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                        Carpeta:{' '}
+                        {t(lang, 'app.folderLabel')}:{' '}
                         <span className="font-semibold text-slate-800 dark:text-slate-100">
-                          {folderShareTargetFolder?.name ?? 'Carpeta'}
+                          {folderShareTargetFolder?.name ?? t(lang, 'app.folderLabel')}
                         </span>
                       </p>
                     </div>
@@ -4270,7 +4680,7 @@ function ActionExtractor() {
                       onClick={closeFolderShareModal}
                       className="inline-flex h-8 items-center rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
                     >
-                      Cerrar
+                      {t(lang, 'app.close')}
                     </button>
                   </div>
 
@@ -4288,7 +4698,7 @@ function ActionExtractor() {
                       autoComplete="off"
                       autoCapitalize="none"
                       spellCheck={false}
-                      placeholder="correo@usuario.com"
+                      placeholder={t(lang, 'app.shareEmailPlaceholder')}
                       className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                     />
                     <button
@@ -4296,11 +4706,11 @@ function ActionExtractor() {
                       disabled={folderShareMutationLoading || !isFolderShareEmailDraftValid}
                       className="inline-flex h-10 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-4 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:opacity-60 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
                     >
-                      {folderShareMutationLoading ? 'Compartiendo...' : 'Agregar acceso'}
+                      {folderShareMutationLoading ? t(lang, 'app.sharing') : t(lang, 'app.addAccess')}
                     </button>
                   </form>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    Correo a compartir:{' '}
+                    {t(lang, 'app.sharingEmail')}{' '}
                     <span className="font-semibold text-slate-700 dark:text-slate-200">
                       {normalizedFolderShareEmailDraft || '—'}
                     </span>
@@ -4309,7 +4719,7 @@ function ActionExtractor() {
                   <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-700 dark:bg-slate-800/35">
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                        Usuarios con acceso ({folderShareMembers.length})
+                        {t(lang, 'app.usersWithAccess')} ({folderShareMembers.length})
                       </p>
                       <button
                         type="button"
@@ -4317,17 +4727,17 @@ function ActionExtractor() {
                         disabled={folderShareMembersLoading}
                         className="inline-flex h-7 items-center rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
                       >
-                        {folderShareMembersLoading ? 'Cargando...' : 'Recargar'}
+                        {folderShareMembersLoading ? t(lang, 'app.loadingShort') : t(lang, 'app.reload')}
                       </button>
                     </div>
 
                     {folderShareMembersLoading ? (
                       <p className="text-sm text-slate-500 dark:text-slate-400">
-                        Cargando usuarios compartidos...
+                        {t(lang, 'app.folderSharesLoading')}
                       </p>
                     ) : folderShareMembers.length === 0 ? (
                       <p className="text-sm text-slate-500 dark:text-slate-400">
-                        Esta carpeta todavía no está compartida con otros usuarios.
+                        {t(lang, 'app.folderNotShared')}
                       </p>
                     ) : (
                       <ul className="space-y-2">
@@ -4352,7 +4762,7 @@ function ActionExtractor() {
                                 disabled={folderShareMutationLoading}
                                 className="inline-flex h-7 items-center rounded-md border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:opacity-60 dark:border-rose-800 dark:bg-rose-900/25 dark:text-rose-300 dark:hover:bg-rose-900/40"
                               >
-                                Revocar
+                                {t(lang, 'app.revoke')}
                               </button>
                             </li>
                           )
@@ -4374,11 +4784,10 @@ function ActionExtractor() {
                 >
                   <div className="mb-5">
                     <h2 id="reauth-modal-title" className="text-xl font-bold text-slate-900 dark:text-slate-100">
-                      Sesión expirada
+                      {t(lang, 'app.sessionExpiredTitle')}
                     </h2>
                     <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                      Reautentica para seguir extrayendo, exportando y guardando historial. Tu
-                      resultado actual se mantiene visible.
+                      {t(lang, 'app.sessionExpiredDesc')}
                     </p>
                   </div>
 
@@ -4397,19 +4806,19 @@ function ActionExtractor() {
                       }`}
                     >
                       <GoogleIcon className="h-4 w-4" />
-                      {googleAuthLoading ? 'Conectando con Google...' : 'Continuar con Google'}
+                      {googleAuthLoading ? t(lang, 'app.connectingGoogle') : t(lang, 'app.continueGoogle')}
                     </button>
 
                     <div className="relative py-1">
                       <div className="h-px w-full bg-slate-200 dark:bg-slate-700" />
                       <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-slate-900 px-2 text-[11px] font-medium uppercase tracking-wide text-slate-400">
-                        o con correo
+                        {t(lang, 'app.orWithEmail')}
                       </span>
                     </div>
 
                     <div>
                       <label className="block text-sm text-slate-600 mb-1.5 dark:text-slate-300">
-                        Correo
+                        {t(lang, 'app.emailLabel')}
                       </label>
                       <input
                         type="email"
@@ -4417,13 +4826,13 @@ function ActionExtractor() {
                         onChange={(event) => setEmail(event.target.value)}
                         required
                         className="w-full h-11 rounded-lg border border-slate-300 bg-white px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                        placeholder="tu@correo.com"
+                        placeholder={t(lang, 'app.emailPlaceholder')}
                       />
                     </div>
 
                     <div>
                       <label className="block text-sm text-slate-600 mb-1.5 dark:text-slate-300">
-                        Contraseña
+                        {t(lang, 'app.passwordLabel')}
                       </label>
                       <input
                         type="password"
@@ -4432,7 +4841,7 @@ function ActionExtractor() {
                         required
                         minLength={8}
                         className="w-full h-11 rounded-lg border border-slate-300 bg-white px-3 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                        placeholder="Mínimo 8 caracteres"
+                        placeholder={t(lang, 'app.passwordPlaceholder')}
                       />
                     </div>
 
@@ -4455,7 +4864,7 @@ function ActionExtractor() {
                         authLoading ? 'bg-slate-400' : 'bg-indigo-600 hover:bg-indigo-700'
                       }`}
                     >
-                      {authLoading ? 'Procesando...' : 'Reiniciar sesión'}
+                      {authLoading ? t(lang, 'app.processing') : t(lang, 'app.restartSession')}
                     </button>
                   </form>
                 </div>

@@ -15,8 +15,10 @@ import {
   RotateCcw,
   X,
 } from 'lucide-react'
+import { ExtractionModeGuideButton } from '@/app/home/components/ExtractionModeGuideButton'
+import { useLang } from '@/app/home/hooks/useLang'
 import type { ExtractionMode } from '@/lib/extraction-modes'
-import { EXTRACTION_MODE_OPTIONS, normalizeExtractionMode } from '@/lib/extraction-modes'
+import { getExtractionModeOptions, normalizeExtractionMode } from '@/lib/extraction-modes'
 import type { ExtractionOutputLanguage } from '@/lib/output-language'
 import type { FolderItem } from '@/app/home/components/FolderDock'
 import { isSystemExtractionFolderId } from '@/lib/extraction-folders'
@@ -57,6 +59,49 @@ export interface BatchExtractPanelProps {
   onComplete: () => void
   initialUrls?: string[]
 }
+
+const BATCH_COPY = {
+  en: {
+    title: 'Batch Extraction',
+    playlistSource: 'Load from YouTube Playlist',
+    load: 'Load',
+    loading: 'Loading...',
+    processFirst: 'videos total · the first {count} will be processed',
+    createFolderAutomatically: 'Create folder',
+    automatically: 'automatically',
+    addVideosToBatch: 'Add {count} videos to batch',
+    mode: 'Mode',
+    folder: 'Folder',
+    withoutFolder: 'No folder',
+    urlPlaceholder: 'https://youtube.com/watch?v=...',
+    removeUrl: 'Remove URL',
+    addUrl: 'Add URL',
+    completed: 'completed...',
+    startBatch: 'Start batch',
+    clear: 'Clear',
+    processingInOrder: 'Processing in order. Do not close this tab.',
+  },
+  es: {
+    title: 'Extracción por Lote',
+    playlistSource: 'Cargar desde Playlist de YouTube',
+    load: 'Cargar',
+    loading: 'Cargando...',
+    processFirst: 'videos en total · se procesarán los primeros {count}',
+    createFolderAutomatically: 'Crear carpeta',
+    automatically: 'automáticamente',
+    addVideosToBatch: 'Agregar {count} videos al lote',
+    mode: 'Modo',
+    folder: 'Carpeta',
+    withoutFolder: 'Sin carpeta',
+    urlPlaceholder: 'https://youtube.com/watch?v=...',
+    removeUrl: 'Eliminar URL',
+    addUrl: 'Agregar URL',
+    completed: 'completadas...',
+    startBatch: 'Iniciar lote',
+    clear: 'Limpiar',
+    processingInOrder: 'Procesando en orden. No cierres esta pestaña.',
+  },
+} as const
 
 function createItemId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -177,6 +222,9 @@ export function BatchExtractPanel({
   onComplete,
   initialUrls,
 }: BatchExtractPanelProps) {
+  const { lang } = useLang()
+  const ui = BATCH_COPY[lang]
+  const localizedModeOptions = getExtractionModeOptions(lang)
   // ── batch state ───────────────────────────────────────────────────────────
   const [items, setItems] = useState<BatchItem[]>(() => buildInitialItems(initialUrls))
   const [maxItems, setMaxItems] = useState(MAX_ITEMS_MANUAL)
@@ -353,7 +401,7 @@ export function BatchExtractPanel({
         <div className="flex items-center gap-2">
           <Layers size={15} className="text-indigo-500" />
           <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-            Extracción por Lote
+            {ui.title}
           </h3>
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
             máx. {maxItems}
@@ -384,7 +432,7 @@ export function BatchExtractPanel({
       {showPlaylist && (
         <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/60 p-4 dark:border-indigo-900/50 dark:bg-indigo-950/20">
           <p className="mb-2 text-xs font-semibold text-indigo-700 dark:text-indigo-300">
-            Cargar desde Playlist de YouTube
+            {ui.playlistSource}
           </p>
           <div className="flex gap-2">
             <input
@@ -409,7 +457,7 @@ export function BatchExtractPanel({
               className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:opacity-50"
             >
               {playlistLoading ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
-              {playlistLoading ? 'Cargando...' : 'Cargar'}
+              {playlistLoading ? ui.loading : ui.load}
             </button>
           </div>
 
@@ -428,8 +476,11 @@ export function BatchExtractPanel({
                     {playlistResult.title}
                   </p>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    {playlistResult.videoCount} videos en total · se procesarán los primeros{' '}
-                    {Math.min(playlistResult.videos.length, MAX_ITEMS_PLAYLIST)}
+                    {playlistResult.videoCount}{' '}
+                    {ui.processFirst.replace(
+                      '{count}',
+                      String(Math.min(playlistResult.videos.length, MAX_ITEMS_PLAYLIST)),
+                    )}
                   </p>
                 </div>
                 <CheckCircle size={16} className="mt-0.5 shrink-0 text-emerald-500" />
@@ -458,9 +509,9 @@ export function BatchExtractPanel({
                   className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                 />
                 <FolderPlus size={12} className="text-indigo-500" />
-                Crear carpeta{' '}
+                {ui.createFolderAutomatically}{' '}
                 <strong>&ldquo;{playlistResult.title.slice(0, 40)}&rdquo;</strong>{' '}
-                automáticamente
+                {ui.automatically}
               </label>
 
               <button
@@ -469,7 +520,10 @@ export function BatchExtractPanel({
                 className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-sm font-semibold text-white transition hover:bg-indigo-700"
               >
                 <Layers size={13} />
-                Agregar {Math.min(playlistResult.videos.length, MAX_ITEMS_PLAYLIST)} videos al lote
+                {ui.addVideosToBatch.replace(
+                  '{count}',
+                  String(Math.min(playlistResult.videos.length, MAX_ITEMS_PLAYLIST)),
+                )}
               </button>
             </div>
           )}
@@ -480,15 +534,16 @@ export function BatchExtractPanel({
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
           <label className="shrink-0 text-xs font-medium text-slate-500 dark:text-slate-400">
-            Modo:
+            {ui.mode}:
           </label>
+          <ExtractionModeGuideButton mode={mode} />
           <select
             value={mode}
             onChange={(e) => setMode(normalizeExtractionMode(e.target.value))}
             disabled={isRunning}
             className="h-8 rounded-lg border border-slate-300 bg-white px-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-200 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
           >
-            {EXTRACTION_MODE_OPTIONS.map((opt) => (
+            {localizedModeOptions.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
               </option>
@@ -499,7 +554,7 @@ export function BatchExtractPanel({
         {userFolders.length > 0 && (
           <div className="flex items-center gap-2">
             <label className="shrink-0 text-xs font-medium text-slate-500 dark:text-slate-400">
-              Carpeta:
+              {ui.folder}:
             </label>
             <select
               value={folderId}
@@ -507,7 +562,7 @@ export function BatchExtractPanel({
               disabled={isRunning}
               className="h-8 rounded-lg border border-slate-300 bg-white px-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-200 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
             >
-              <option value="">Sin carpeta</option>
+              <option value="">{ui.withoutFolder}</option>
               {userFolders.map((f) => (
                 <option key={f.id} value={f.id}>
                   {f.name}
@@ -531,7 +586,7 @@ export function BatchExtractPanel({
               value={item.url}
               onChange={(e) => updateUrl(item.id, e.target.value)}
               disabled={isRunning}
-              placeholder="https://youtube.com/watch?v=..."
+              placeholder={ui.urlPlaceholder}
               className={`h-10 flex-1 rounded-lg border px-3 text-sm outline-none transition focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-950 dark:text-slate-100 ${
                 item.status === 'error'
                   ? 'border-rose-400 bg-rose-50 focus:border-rose-400 focus:ring-rose-100 dark:border-rose-700 dark:bg-rose-950/20 dark:focus:ring-rose-900/30'
@@ -561,7 +616,7 @@ export function BatchExtractPanel({
               onClick={() => removeItem(item.id)}
               disabled={isRunning || items.length <= 1}
               className="shrink-0 rounded p-1 text-slate-300 transition hover:text-rose-500 disabled:cursor-not-allowed disabled:opacity-30 dark:text-slate-600"
-              aria-label="Eliminar URL"
+              aria-label={ui.removeUrl}
             >
               <X size={14} />
             </button>
@@ -601,7 +656,7 @@ export function BatchExtractPanel({
             className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-dashed border-slate-300 px-3 text-sm text-slate-500 transition hover:border-indigo-400 hover:text-indigo-600 disabled:opacity-50 dark:border-slate-700 dark:text-slate-400 dark:hover:border-indigo-500"
           >
             <Plus size={13} />
-            Agregar URL
+            {ui.addUrl}
           </button>
         )}
 
@@ -614,12 +669,12 @@ export function BatchExtractPanel({
           {isRunning ? (
             <>
               <Loader2 size={13} className="animate-spin" />
-              {completedCount} / {filledItems.length} completadas...
+              {completedCount} / {filledItems.length} {ui.completed}
             </>
           ) : (
             <>
               <Play size={13} />
-              Iniciar lote ({filledItems.length || 0} URL{filledItems.length !== 1 ? 's' : ''})
+              {ui.startBatch} ({filledItems.length || 0} URL{filledItems.length !== 1 ? 's' : ''})
             </>
           )}
         </button>
@@ -631,14 +686,14 @@ export function BatchExtractPanel({
             className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 px-3 text-sm text-slate-500 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
           >
             <RotateCcw size={13} />
-            Limpiar
+            {ui.clear}
           </button>
         )}
       </div>
 
       {isRunning && (
         <p className="mt-3 text-xs text-slate-400 dark:text-slate-500">
-          Procesando en orden — no cierres esta pestaña.
+          {ui.processingInOrder}
         </p>
       )}
     </div>

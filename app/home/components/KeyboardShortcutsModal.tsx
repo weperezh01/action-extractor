@@ -3,6 +3,7 @@
 import { useEffect } from 'react'
 import { X } from 'lucide-react'
 import { createPortal } from 'react-dom'
+import { useLang } from '@/app/home/hooks/useLang'
 
 interface KeyboardShortcutsModalProps {
   open: boolean
@@ -12,36 +13,80 @@ interface KeyboardShortcutsModalProps {
 const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
 const MOD = isMac ? '⌘' : 'Ctrl'
 
-const SHORTCUT_GROUPS = [
-  {
-    title: 'Navegación',
-    items: [
-      { keys: [MOD, 'K'], label: 'Enfocar el campo de entrada' },
-      { keys: [MOD, '↵'], label: 'Iniciar extracción' },
+const SHORTCUT_COPY = {
+  en: {
+    dialogLabel: 'Keyboard shortcuts',
+    title: 'Keyboard shortcuts',
+    close: 'Close',
+    footer: 'Shortcuts 1-5 only work outside text fields.',
+    groups: [
+      {
+        title: 'Navigation',
+        items: [
+          { keys: [MOD, 'K'], label: 'Focus the input field' },
+          { keys: [MOD, '↵'], label: 'Start extraction' },
+        ],
+      },
+      {
+        title: 'Extraction modes',
+        items: [
+          { keys: ['1'], label: 'Mode: Action Plan' },
+          { keys: ['2'], label: 'Mode: Executive Summary' },
+          { keys: ['3'], label: 'Mode: Business Ideas' },
+          { keys: ['4'], label: 'Mode: Key Quotes' },
+          { keys: ['5'], label: 'Mode: Concept Map' },
+        ],
+      },
+      {
+        title: 'Result',
+        items: [
+          { keys: [MOD, 'D'], label: 'Download PDF' },
+          { keys: [MOD, '⇧', 'C'], label: 'Copy as Markdown' },
+        ],
+      },
+      {
+        title: 'Help',
+        items: [{ keys: ['?'], label: 'Show this window' }],
+      },
     ],
   },
-  {
-    title: 'Modos de extracción',
-    items: [
-      { keys: ['1'], label: 'Modo: Plan de Acción' },
-      { keys: ['2'], label: 'Modo: Resumen Ejecutivo' },
-      { keys: ['3'], label: 'Modo: Ideas de Negocio' },
-      { keys: ['4'], label: 'Modo: Citas Clave' },
-      { keys: ['5'], label: 'Modo: Mapa Conceptual' },
+  es: {
+    dialogLabel: 'Atajos de teclado',
+    title: 'Atajos de teclado',
+    close: 'Cerrar',
+    footer: 'Los atajos 1-5 solo funcionan fuera de campos de texto.',
+    groups: [
+      {
+        title: 'Navegación',
+        items: [
+          { keys: [MOD, 'K'], label: 'Enfocar el campo de entrada' },
+          { keys: [MOD, '↵'], label: 'Iniciar extracción' },
+        ],
+      },
+      {
+        title: 'Modos de extracción',
+        items: [
+          { keys: ['1'], label: 'Modo: Plan de Acción' },
+          { keys: ['2'], label: 'Modo: Resumen Ejecutivo' },
+          { keys: ['3'], label: 'Modo: Ideas de Negocio' },
+          { keys: ['4'], label: 'Modo: Citas Clave' },
+          { keys: ['5'], label: 'Modo: Mapa Conceptual' },
+        ],
+      },
+      {
+        title: 'Resultado',
+        items: [
+          { keys: [MOD, 'D'], label: 'Descargar PDF' },
+          { keys: [MOD, '⇧', 'C'], label: 'Copiar como Markdown' },
+        ],
+      },
+      {
+        title: 'Ayuda',
+        items: [{ keys: ['?'], label: 'Mostrar esta ventana' }],
+      },
     ],
   },
-  {
-    title: 'Resultado',
-    items: [
-      { keys: [MOD, 'D'], label: 'Descargar PDF' },
-      { keys: [MOD, '⇧', 'C'], label: 'Copiar como Markdown' },
-    ],
-  },
-  {
-    title: 'Ayuda',
-    items: [{ keys: ['?'], label: 'Mostrar esta ventana' }],
-  },
-]
+} as const
 
 function Kbd({ children }: { children: string }) {
   return (
@@ -52,6 +97,9 @@ function Kbd({ children }: { children: string }) {
 }
 
 export function KeyboardShortcutsModal({ open, onClose }: KeyboardShortcutsModalProps) {
+  const { lang } = useLang()
+  const ui = SHORTCUT_COPY[lang]
+
   // Close on Escape
   useEffect(() => {
     if (!open) return
@@ -69,7 +117,7 @@ export function KeyboardShortcutsModal({ open, onClose }: KeyboardShortcutsModal
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Atajos de teclado"
+      aria-label={ui.dialogLabel}
       className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
       onClick={onClose}
     >
@@ -83,12 +131,12 @@ export function KeyboardShortcutsModal({ open, onClose }: KeyboardShortcutsModal
       >
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-base font-bold text-slate-800 dark:text-slate-100">
-            Atajos de teclado
+            {ui.title}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Cerrar"
+            aria-label={ui.close}
             className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
           >
             <X size={16} />
@@ -96,7 +144,7 @@ export function KeyboardShortcutsModal({ open, onClose }: KeyboardShortcutsModal
         </div>
 
         <div className="space-y-5">
-          {SHORTCUT_GROUPS.map((group) => (
+          {ui.groups.map((group) => (
             <div key={group.title}>
               <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                 {group.title}
@@ -118,7 +166,7 @@ export function KeyboardShortcutsModal({ open, onClose }: KeyboardShortcutsModal
         </div>
 
         <p className="mt-5 text-[11px] text-slate-400 dark:text-slate-500">
-          Los atajos 1–5 solo funcionan fuera de campos de texto.
+          {ui.footer}
         </p>
       </div>
     </div>,

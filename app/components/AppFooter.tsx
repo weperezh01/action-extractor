@@ -1,9 +1,8 @@
-'use client'
-
 import Link from 'next/link'
 import { Github, Linkedin, Twitter } from 'lucide-react'
 import { NotesAideLogo } from '@/app/components/NotesAideLogo'
-import { useLang } from '@/app/home/hooks/useLang'
+import type { Lang } from '@/app/home/lib/i18n'
+import { getLegalPagePath } from '@/lib/legal-links'
 
 type FooterLinkItem = {
   label: string
@@ -33,27 +32,29 @@ function FooterLink({ item }: { item: FooterLinkItem }) {
   )
 }
 
-export function AppFooter() {
-  const { lang } = useLang()
+export function AppFooter({ lang }: { lang: Lang }) {
   const isEs = lang === 'es'
+  const privacyHref = getLegalPagePath(lang, 'privacy')
+  const termsHref = getLegalPagePath(lang, 'terms')
   const copy = isEs
     ? {
         tagline: 'Convierte contenido en planes de ejecución claros en segundos.',
-        product: 'Product',
-        useCases: 'Use Cases',
-        company: 'Company',
+        product: 'Producto',
+        useCases: 'Casos de uso',
+        company: 'Compañía',
         legal: 'Legal',
         app: 'App',
-        pricing: 'Pricing',
-        integrations: 'Integrations',
-        consultants: 'Consultants',
-        contentCreators: 'Content Creators',
-        projectManagers: 'Project Managers',
-        about: 'About Us',
-        careers: 'Careers',
-        support: 'Contact Support',
-        privacy: 'Privacy Policy',
-        terms: 'Terms of Service',
+        pricing: 'Precios',
+        integrations: 'Integraciones',
+        consultants: 'Consultores',
+        students: 'Estudiantes',
+        contentCreators: 'Creadores de contenido',
+        projectManagers: 'Gerentes de proyecto',
+        about: 'Sobre nosotros',
+        careers: 'Carreras',
+        support: 'Contactar soporte',
+        privacy: 'Política de privacidad',
+        terms: 'Términos de servicio',
         rights: 'Todos los derechos reservados.',
         poweredBy: 'Powered by',
         socialSlot: 'Espacio para redes sociales',
@@ -68,6 +69,7 @@ export function AppFooter() {
         pricing: 'Pricing',
         integrations: 'Integrations',
         consultants: 'Consultants',
+        students: 'Students',
         contentCreators: 'Content Creators',
         projectManagers: 'Project Managers',
         about: 'About Us',
@@ -93,6 +95,7 @@ export function AppFooter() {
       title: copy.useCases,
       links: [
         { label: copy.consultants, href: '/#use-case-consultants' },
+        { label: copy.students, href: '/#use-case-students' },
         { label: copy.contentCreators, href: '/#use-case-content-creators' },
         { label: copy.projectManagers, href: '/#use-case-project-managers' },
       ],
@@ -102,14 +105,14 @@ export function AppFooter() {
       links: [
         { label: copy.about, href: '/about-us' },
         { label: copy.careers, href: '/careers' },
-        { label: copy.support, href: 'mailto:support@notesaide.com' },
+        { label: copy.support, href: '/contact' },
       ],
     },
     {
       title: copy.legal,
       links: [
-        { label: copy.privacy, href: '/privacy-policy' },
-        { label: copy.terms, href: '/terms-of-use' },
+        { label: copy.privacy, href: privacyHref },
+        { label: copy.terms, href: termsHref },
       ],
     },
   ]

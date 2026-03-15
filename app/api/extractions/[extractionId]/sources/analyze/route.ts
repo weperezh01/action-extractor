@@ -116,6 +116,7 @@ function buildResultPayload(extraction: DbExtraction) {
   return {
     id: extraction.id,
     shareVisibility: extraction.share_visibility,
+    clonePermission: extraction.clone_permission,
     createdAt: extraction.created_at,
     url: extraction.url,
     videoId: extraction.video_id,

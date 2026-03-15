@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react'
 import type { PresentationElement } from '@/app/home/lib/types'
+import { useLang } from '@/app/home/hooks/useLang'
 
 interface Props {
   element: PresentationElement
@@ -32,6 +33,7 @@ export function SlideElement({
   onUpdate,
   onDelete,
 }: Props) {
+  const { lang } = useLang()
   const [isTextEditing, setIsTextEditing] = useState(false)
   const [editingBulletIndex, setEditingBulletIndex] = useState<number | null>(null)
   const [bulletDraft, setBulletDraft] = useState('')
@@ -323,7 +325,7 @@ export function SlideElement({
                     setBulletDraft(item)
                   }}
                 >
-                  {item || (canEdit ? 'Click para editar' : '')}
+                  {item || (canEdit ? (lang === 'en' ? 'Click to edit' : 'Click para editar') : '')}
                 </button>
               )}
             </li>
@@ -341,7 +343,7 @@ export function SlideElement({
               onDelete()
             }}
             className="absolute -right-2 -top-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-rose-600 text-[11px] font-bold text-white"
-            title="Eliminar elemento"
+            title={lang === 'en' ? 'Delete element' : 'Eliminar elemento'}
           >
             ×
           </button>

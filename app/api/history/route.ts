@@ -33,6 +33,7 @@ export async function GET(req: NextRequest) {
     id: row.id,
     orderNumber: row.order_number ?? 0,
     shareVisibility: row.share_visibility ?? 'private',
+    clonePermission: row.clone_permission ?? 'disabled',
     url: row.url,
     videoId: row.video_id,
     videoTitle: row.video_title,

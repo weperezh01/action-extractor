@@ -1,3 +1,5 @@
+import { useLang } from '@/app/home/hooks/useLang'
+
 interface IntegrationsPanelProps {
   notionConfigured: boolean
   notionConnected: boolean
@@ -32,6 +34,37 @@ interface IntegrationsPanelProps {
   onDisconnectGoogleDocs: () => void
 }
 
+const INTEGRATIONS_COPY = {
+  en: {
+    title: 'Export connections',
+    subtitle: 'Switch accounts without signing out of the platform.',
+    connected: 'Connected',
+    activeWorkspace: 'Active workspace',
+    activeUser: 'active user',
+    activeAccount: 'active account',
+    disconnected: 'Not connected',
+    notConfigured: 'Not configured on the server',
+    connecting: 'Connecting...',
+    connect: 'Connect',
+    disconnecting: 'Disconnecting...',
+    disconnect: 'Disconnect',
+  },
+  es: {
+    title: 'Conexiones de exportación',
+    subtitle: 'Cambia cuentas sin cerrar sesión de la plataforma.',
+    connected: 'Conectado',
+    activeWorkspace: 'Workspace activo',
+    activeUser: 'usuario activo',
+    activeAccount: 'cuenta activa',
+    disconnected: 'Sin conexión',
+    notConfigured: 'No configurado en servidor',
+    connecting: 'Conectando...',
+    connect: 'Conectar',
+    disconnecting: 'Desconectando...',
+    disconnect: 'Desconectar',
+  },
+} as const
+
 export function IntegrationsPanel({
   notionConfigured,
   notionConnected,
@@ -65,12 +98,15 @@ export function IntegrationsPanel({
   onConnectGoogleDocs,
   onDisconnectGoogleDocs,
 }: IntegrationsPanelProps) {
+  const { lang } = useLang()
+  const ui = INTEGRATIONS_COPY[lang]
+
   return (
     <div className="max-w-4xl mx-auto mb-6 bg-white border border-slate-200 rounded-2xl p-4 shadow-md shadow-slate-100 dark:bg-slate-900 dark:border-slate-800">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Conexiones de Exportación</h3>
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">{ui.title}</h3>
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Cambia cuentas sin cerrar sesión de la plataforma.
+          {ui.subtitle}
         </p>
       </div>
 
@@ -79,10 +115,10 @@ export function IntegrationsPanel({
           <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Notion</p>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             {notionConnected
-              ? `Conectado: ${notionWorkspaceName ?? 'Workspace activo'}`
+              ? `${ui.connected}: ${notionWorkspaceName ?? ui.activeWorkspace}`
               : notionConfigured
-                ? 'Sin conexión'
-                : 'No configurado en servidor'}
+                ? ui.disconnected
+                : ui.notConfigured}
           </p>
           <div className="flex gap-2 mt-3">
             {!notionConnected ? (
@@ -92,7 +128,7 @@ export function IntegrationsPanel({
                 disabled={notionLoading || !notionConfigured}
                 className="text-xs bg-slate-900 hover:bg-slate-800 text-white font-medium px-3 py-1.5 rounded-md disabled:bg-slate-400 disabled:cursor-wait dark:bg-slate-700 dark:hover:bg-slate-600"
               >
-                {notionLoading ? 'Conectando...' : 'Conectar'}
+                {notionLoading ? ui.connecting : ui.connect}
               </button>
             ) : (
               <button
@@ -101,7 +137,7 @@ export function IntegrationsPanel({
                 disabled={notionDisconnectLoading}
                 className="text-xs bg-rose-600 hover:bg-rose-700 text-white font-medium px-3 py-1.5 rounded-md disabled:bg-slate-400 disabled:cursor-wait"
               >
-                {notionDisconnectLoading ? 'Desconectando...' : 'Desconectar'}
+                {notionDisconnectLoading ? ui.disconnecting : ui.disconnect}
               </button>
             )}
           </div>
@@ -111,10 +147,10 @@ export function IntegrationsPanel({
           <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Trello</p>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             {trelloConnected
-              ? `Conectado: @${trelloUsername ?? 'usuario'}`
+              ? `${ui.connected}: @${trelloUsername ?? ui.activeUser}`
               : trelloConfigured
-                ? 'Sin conexión'
-                : 'No configurado en servidor'}
+                ? ui.disconnected
+                : ui.notConfigured}
           </p>
           <div className="flex gap-2 mt-3">
             {!trelloConnected ? (
@@ -124,7 +160,7 @@ export function IntegrationsPanel({
                 disabled={trelloLoading || !trelloConfigured}
                 className="text-xs bg-sky-600 hover:bg-sky-700 text-white font-medium px-3 py-1.5 rounded-md disabled:bg-slate-400 disabled:cursor-wait"
               >
-                {trelloLoading ? 'Conectando...' : 'Conectar'}
+                {trelloLoading ? ui.connecting : ui.connect}
               </button>
             ) : (
               <button
@@ -133,7 +169,7 @@ export function IntegrationsPanel({
                 disabled={trelloDisconnectLoading}
                 className="text-xs bg-rose-600 hover:bg-rose-700 text-white font-medium px-3 py-1.5 rounded-md disabled:bg-slate-400 disabled:cursor-wait"
               >
-                {trelloDisconnectLoading ? 'Desconectando...' : 'Desconectar'}
+                {trelloDisconnectLoading ? ui.disconnecting : ui.disconnect}
               </button>
             )}
           </div>
@@ -143,10 +179,10 @@ export function IntegrationsPanel({
           <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Todoist</p>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             {todoistConnected
-              ? `Conectado: ${todoistUserLabel ?? 'usuario activo'}`
+              ? `${ui.connected}: ${todoistUserLabel ?? ui.activeUser}`
               : todoistConfigured
-                ? 'Sin conexión'
-                : 'No configurado en servidor'}
+                ? ui.disconnected
+                : ui.notConfigured}
           </p>
           <div className="flex gap-2 mt-3">
             {!todoistConnected ? (
@@ -156,7 +192,7 @@ export function IntegrationsPanel({
                 disabled={todoistLoading || !todoistConfigured}
                 className="text-xs bg-rose-600 hover:bg-rose-700 text-white font-medium px-3 py-1.5 rounded-md disabled:bg-slate-400 disabled:cursor-wait"
               >
-                {todoistLoading ? 'Conectando...' : 'Conectar'}
+                {todoistLoading ? ui.connecting : ui.connect}
               </button>
             ) : (
               <button
@@ -165,7 +201,7 @@ export function IntegrationsPanel({
                 disabled={todoistDisconnectLoading}
                 className="text-xs bg-rose-600 hover:bg-rose-700 text-white font-medium px-3 py-1.5 rounded-md disabled:bg-slate-400 disabled:cursor-wait"
               >
-                {todoistDisconnectLoading ? 'Desconectando...' : 'Desconectar'}
+                {todoistDisconnectLoading ? ui.disconnecting : ui.disconnect}
               </button>
             )}
           </div>
@@ -175,10 +211,10 @@ export function IntegrationsPanel({
           <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Google Docs</p>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             {googleDocsConnected
-              ? `Conectado: ${googleDocsUserEmail ?? 'cuenta activa'}`
+              ? `${ui.connected}: ${googleDocsUserEmail ?? ui.activeAccount}`
               : googleDocsConfigured
-                ? 'Sin conexión'
-                : 'No configurado en servidor'}
+                ? ui.disconnected
+                : ui.notConfigured}
           </p>
           <div className="flex gap-2 mt-3">
             {!googleDocsConnected ? (
@@ -188,7 +224,7 @@ export function IntegrationsPanel({
                 disabled={googleDocsLoading || !googleDocsConfigured}
                 className="text-xs bg-blue-600 hover:bg-blue-700 text-white font-medium px-3 py-1.5 rounded-md disabled:bg-slate-400 disabled:cursor-wait"
               >
-                {googleDocsLoading ? 'Conectando...' : 'Conectar'}
+                {googleDocsLoading ? ui.connecting : ui.connect}
               </button>
             ) : (
               <button
@@ -197,7 +233,7 @@ export function IntegrationsPanel({
                 disabled={googleDocsDisconnectLoading}
                 className="text-xs bg-rose-600 hover:bg-rose-700 text-white font-medium px-3 py-1.5 rounded-md disabled:bg-slate-400 disabled:cursor-wait"
               >
-                {googleDocsDisconnectLoading ? 'Desconectando...' : 'Desconectar'}
+                {googleDocsDisconnectLoading ? ui.disconnecting : ui.disconnect}
               </button>
             )}
           </div>
