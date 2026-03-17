@@ -7,7 +7,6 @@ import {
   AlertCircle,
   ArrowUp,
   BarChart2,
-  Brain,
   History,
   Layers,
   LayoutList,
@@ -4015,29 +4014,32 @@ function ActionExtractor() {
               <div className="mx-auto w-full max-w-4xl">
                 <div>
                   <div className="mb-7 text-center md:mb-9">
-                    <p className="text-3xl font-semibold tracking-tight text-zinc-900 md:text-4xl dark:text-zinc-100">
-                      Notes Aide Action Extractor
+                    <div className="mx-auto inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white/90 px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-zinc-600 shadow-sm dark:border-white/10 dark:bg-zinc-900/90 dark:text-zinc-300">
+                      <span className="flex h-5 w-5 items-center justify-center overflow-hidden rounded-md ring-1 ring-zinc-200/80 dark:ring-white/10">
+                        <NotesAideLogo variant="mark" className="h-5 w-5" title="Notes Aide" />
+                      </span>
+                      <span>Notes Aide</span>
+                    </div>
+                    <h1 className="mt-4 text-3xl font-semibold tracking-tight text-zinc-900 md:text-4xl dark:text-zinc-100">
+                      {t(lang, 'app.extractorTitle')}
+                    </h1>
+                    <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-zinc-500 dark:text-zinc-400">
+                      {t(lang, 'app.extractorSubtitle')}
                     </p>
                   </div>
-                  <div className="mb-4 flex items-center justify-center gap-3">
-                    <div className="inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-bold uppercase tracking-wider text-indigo-700">
-                      <Brain size={12} />
-                      {t(lang, 'app.activeHistory')}
+                  {isBatchMode && (
+                    <div className="mb-4 flex items-center justify-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setIsBatchMode(false)}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-100 px-3 py-1 text-xs font-bold uppercase tracking-wider text-violet-700 transition-colors dark:border-violet-800 dark:bg-violet-900/30 dark:text-violet-300"
+                        title={t(lang, 'app.batchMultipleUrls')}
+                      >
+                        <Layers size={11} />
+                        {t(lang, 'app.batchMode')}
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setIsBatchMode((prev) => !prev)}
-                      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-wider transition-colors ${
-                        isBatchMode
-                          ? 'border-violet-200 bg-violet-100 text-violet-700 dark:border-violet-800 dark:bg-violet-900/30 dark:text-violet-300'
-                          : 'border-slate-200 bg-white text-slate-500 hover:border-violet-200 hover:bg-violet-50 hover:text-violet-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
-                      }`}
-                      title={t(lang, 'app.batchMultipleUrls')}
-                    >
-                      <Layers size={11} />
-                      {isBatchMode ? t(lang, 'app.batchMode') : t(lang, 'app.batchLabel')}
-                    </button>
-                  </div>
+                  )}
 
                   {isBatchMode ? (
                     <BatchExtractPanel

@@ -1139,7 +1139,7 @@ export function HeroWorkflowPreview({ lang, mode = 'both' }: HeroWorkflowPreview
       ? {
           badge: 'Flujo animado del resultado',
           loop: 'Demo narrativa con pausas extendidas',
-          inputLabel: 'Notes Aide Action Extractor',
+          inputLabel: 'Notes Aide Workspace',
           actionCta: 'Extraer',
           recognized: 'URL reconocida',
           pdfReady: 'PDF cargado',
@@ -1237,7 +1237,7 @@ export function HeroWorkflowPreview({ lang, mode = 'both' }: HeroWorkflowPreview
       : {
           badge: 'Animated output flow',
           loop: 'Narrative demo with extended pacing',
-          inputLabel: 'Notes Aide Action Extractor',
+          inputLabel: 'Notes Aide Workspace',
           actionCta: 'Extract',
           recognized: 'URL recognized',
           pdfReady: 'PDF uploaded',

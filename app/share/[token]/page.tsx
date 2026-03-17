@@ -17,8 +17,9 @@ export const dynamic = 'force-dynamic'
 
 const DEFAULT_APP_URL = 'https://notesaide.com'
 const DEFAULT_SHARE_DESCRIPTION =
-  'Shared Result – Notes Aide Action Extractor. Convierte videos de YouTube en planes accionables.'
+  'Shared result from Notes Aide. Turn videos, documents, and notes into actionable plans.'
 const DEFAULT_SOCIAL_IMAGE = '/notes-aide-logo.png'
+const SHARE_TITLE_SUFFIX = 'Shared Result – Notes Aide'
 
 // React cache deduplica la consulta DB entre generateMetadata y el componente
 const getSharedExtraction = cache((token: string) => findSharedExtractionByToken(token))
@@ -68,8 +69,8 @@ export async function generateMetadata({
   const shareUrl = `${appUrl}/share/${token}`
   const modeLabel = getExtractionModeLabel(normalizeExtractionMode(extraction.extraction_mode))
   const title = extraction.video_title
-    ? `${modeLabel} | ${extraction.video_title} | Shared Result – Notes Aide Action Extractor`
-    : `${modeLabel} | Shared Result – Notes Aide Action Extractor`
+    ? `${modeLabel} | ${extraction.video_title} | ${SHARE_TITLE_SUFFIX}`
+    : `${modeLabel} | ${SHARE_TITLE_SUFFIX}`
   const description = extraction.objective
     ? truncateText(extraction.objective, 220)
     : DEFAULT_SHARE_DESCRIPTION
@@ -89,7 +90,7 @@ export async function generateMetadata({
       description,
       url: shareUrl,
       type: 'website',
-      siteName: 'Notes Aide Action Extractor',
+      siteName: 'Notes Aide',
       locale: 'es_ES',
       ...(imageUrl
         ? {
@@ -98,7 +99,7 @@ export async function generateMetadata({
                 url: imageUrl,
                 alt: extraction.video_title
                   ? `Miniatura del video: ${extraction.video_title}`
-                  : 'Notes Aide Action Extractor shared result',
+                  : 'Notes Aide shared result',
               },
             ],
           }

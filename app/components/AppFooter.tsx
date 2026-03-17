@@ -1,5 +1,4 @@
 import Link from 'next/link'
-import { Github, Linkedin, Twitter } from 'lucide-react'
 import { NotesAideLogo } from '@/app/components/NotesAideLogo'
 import type { Lang } from '@/app/home/lib/i18n'
 import { getLegalPagePath } from '@/lib/legal-links'
@@ -57,7 +56,6 @@ export function AppFooter({ lang }: { lang: Lang }) {
         terms: 'Términos de servicio',
         rights: 'Todos los derechos reservados.',
         poweredBy: 'Powered by',
-        socialSlot: 'Espacio para redes sociales',
       }
     : {
         tagline: 'Turn content into execution-ready plans in seconds.',
@@ -79,7 +77,6 @@ export function AppFooter({ lang }: { lang: Lang }) {
         terms: 'Terms of Service',
         rights: 'All rights reserved.',
         poweredBy: 'Powered by',
-        socialSlot: 'Social icons',
       }
 
   const columns: Array<{ title: string; links: FooterLinkItem[] }> = [
@@ -116,8 +113,6 @@ export function AppFooter({ lang }: { lang: Lang }) {
       ],
     },
   ]
-
-  const socialIcons = [Linkedin, Twitter, Github]
 
   return (
     <footer className="border-t border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
@@ -167,17 +162,7 @@ export function AppFooter({ lang }: { lang: Lang }) {
                 Well Technologies
               </a>
             </p>
-
-            <div className="flex items-center gap-2" aria-label={copy.socialSlot}>
-              {socialIcons.map((Icon, index) => (
-                <span
-                  key={index}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
-                >
-                  <Icon size={14} />
-                </span>
-              ))}
-            </div>
+            {/* Social icons are temporarily hidden until official profiles are ready. */}
           </div>
         </div>
       </div>

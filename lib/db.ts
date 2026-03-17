@@ -10,15 +10,28 @@ import {
   serializeTaskNumericFormula,
 } from '@/lib/task-numeric-formulas'
 import {
+  DEFAULT_BUSINESS_ASSUMPTIONS,
+  calculatePaymentFeeMonthlyUsd,
   calculateGrossMarginPct,
   calculateMaxVariableCostAllowed,
   calculateMonthlyRunRate,
   calculateProjectedPlanCapCost,
   calculateRecommendedChatTokensPerDay,
   calculateRecommendedExtractionsPerDay,
+  calculateRecommendedStorageLimitBytes,
+  calculateRequiredPriceForMargin,
+  calculateSharedFixedCostAllocationPerUser,
+  calculateUpgradePressureScore,
   classifyProfitabilityStatus,
+  deriveScenarioRecommendation,
+  getTotalSharedFixedCostUsd,
+  normalizeBusinessAssumptions,
   normalizeMarginPct,
+  roundUpPriceUsd,
+  type BusinessAssumptions,
   type ProfitabilityStatus,
+  type ScenarioRecommendation,
+  type SharedCostAllocationStrategy,
 } from '@/lib/profitability'
 import {
   buildSystemExtractionFolderIdForUser,
@@ -9930,6 +9943,27 @@ export async function upsertAppSetting(key: string, value: string): Promise<void
   )
 }
 
+const BUSINESS_ASSUMPTIONS_SETTING_KEY = 'business_assumptions_v1'
+
+export async function getBusinessAssumptions(): Promise<BusinessAssumptions> {
+  const raw = await getAppSetting(BUSINESS_ASSUMPTIONS_SETTING_KEY)
+  if (!raw) return DEFAULT_BUSINESS_ASSUMPTIONS
+
+  try {
+    return normalizeBusinessAssumptions(JSON.parse(raw) as Partial<BusinessAssumptions>)
+  } catch {
+    return DEFAULT_BUSINESS_ASSUMPTIONS
+  }
+}
+
+export async function upsertBusinessAssumptions(
+  input: Partial<BusinessAssumptions> | BusinessAssumptions
+): Promise<BusinessAssumptions> {
+  const normalized = normalizeBusinessAssumptions(input)
+  await upsertAppSetting(BUSINESS_ASSUMPTIONS_SETTING_KEY, JSON.stringify(normalized))
+  return normalized
+}
+
 export function mapUserForClient(user: Pick<DbUser, 'id' | 'name' | 'email'>) {
   return {
     id: user.id,
@@ -10615,6 +10649,9 @@ export interface AdminUserProfitabilitySnapshot {
   extractions_period: number
   storage_used_bytes: number
   storage_cost_monthly_usd: number
+  allocated_shared_fixed_cost_usd: number
+  shared_cost_allocation_strategy: SharedCostAllocationStrategy
+  payment_fee_monthly_usd: number
   monthly_variable_cost_run_rate_usd: number
   monthly_total_cost_run_rate_usd: number
   max_variable_cost_allowed_usd: number
@@ -10632,24 +10669,115 @@ export interface AdminPlanProfitabilityStat {
   target_gross_margin_pct: number
   profitability_alert_enabled: boolean
   estimated_monthly_fixed_cost_usd: number
+  allocated_shared_fixed_cost_per_user_usd: number
+  shared_cost_allocation_strategy: SharedCostAllocationStrategy
+  payment_fee_monthly_usd: number
   avg_monthly_ai_cost_per_user_usd: number
   avg_monthly_storage_cost_per_user_usd: number
+  avg_monthly_variable_cost_per_user_usd: number
   avg_monthly_total_cost_per_user_usd: number
   p95_monthly_total_cost_per_user_usd: number
   total_monthly_run_rate_cost_usd: number
   actual_gross_margin_pct: number | null
+  p95_gross_margin_pct: number | null
   avg_extraction_cost_usd: number
   avg_chat_cost_per_token_usd: number
+  avg_storage_used_bytes: number
+  p95_storage_used_bytes: number
+  recommended_storage_limit_bytes: number
   projected_cost_at_current_caps_usd: number
   projected_gross_margin_pct: number | null
   recommended_extractions_per_day: number | null
   recommended_chat_tokens_per_day: number | null
+  upgrade_pressure_score: number
+  scenario_recommendation: ScenarioRecommendation
+  scenario_reason: string
   current_extractions_per_day: number
   current_chat_tokens_per_day: number
   storage_limit_bytes: number
   unprofitable_users: number
   at_risk_users: number
   status: ProfitabilityStatus
+}
+
+export interface AdminPlanScenarioSnapshot {
+  preset: 'conservative' | 'recommended'
+  label: string
+  plan_id: string
+  plan_name: string
+  plan_display_name: string
+  current_price_monthly_usd: number
+  scenario_price_monthly_usd: number
+  current_extractions_per_day: number
+  scenario_extractions_per_day: number
+  current_chat_tokens_per_day: number
+  scenario_chat_tokens_per_day: number
+  current_storage_limit_bytes: number
+  scenario_storage_limit_bytes: number
+  scenario_projected_cost_usd: number
+  scenario_projected_margin_pct: number | null
+  recommendation: ScenarioRecommendation
+  reason: string
+}
+
+export interface AdminInvestorCostDriver {
+  key: 'ai' | 'storage' | 'payment_fees' | 'plan_fixed' | 'shared_fixed'
+  label: string
+  monthly_cost_usd: number
+  share_of_total_cost_pct: number
+}
+
+export interface AdminInvestorPlanSnapshot {
+  plan_id: string
+  plan_name: string
+  plan_display_name: string
+  active_users: number
+  price_monthly_usd: number
+  monthly_revenue_run_rate_usd: number
+  monthly_cost_run_rate_usd: number
+  monthly_projected_cost_at_caps_usd: number
+  actual_gross_margin_pct: number | null
+  projected_gross_margin_pct: number | null
+  share_of_mrr_pct: number
+  share_of_cost_pct: number
+  unprofitable_users: number
+  at_risk_users: number
+  upgrade_pressure_score: number
+  recommended_extractions_per_day: number | null
+  recommended_chat_tokens_per_day: number | null
+  recommended_storage_limit_bytes: number
+  scenario_recommendation: ScenarioRecommendation
+  scenario_reason: string
+}
+
+export interface AdminInvestorMetricsSummary {
+  active_users: number
+  active_paid_users: number
+  free_users: number
+  mrr_run_rate_usd: number
+  arr_run_rate_usd: number
+  monthly_cost_run_rate_usd: number
+  monthly_projected_cost_at_caps_usd: number
+  blended_gross_margin_pct: number | null
+  projected_blended_gross_margin_pct: number | null
+  at_risk_users: number
+  unprofitable_users: number
+  target_gross_margin_pct: number
+  assumed_monthly_churn_pct: number
+  implied_customer_lifetime_months: number | null
+  assumed_trial_to_paid_pct: number
+  target_payback_months: number
+}
+
+export interface AdminInvestorMetricsPack {
+  generated_at: string
+  period_days: number
+  business_assumptions: BusinessAssumptions
+  summary: AdminInvestorMetricsSummary
+  cost_drivers: AdminInvestorCostDriver[]
+  recommendation_counts: Record<ScenarioRecommendation, number>
+  plans: AdminInvestorPlanSnapshot[]
+  scenarios: AdminPlanScenarioSnapshot[]
 }
 
 interface DbProfitabilityUserPlanRow {
@@ -10688,6 +10816,91 @@ function percentileFromSorted(values: number[], percentile: number) {
     Math.max(0, Math.ceil((safePercentile / 100) * values.length) - 1)
   )
   return values[index] ?? 0
+}
+
+function midpointInteger(current: number, recommended: number, roundTo = 1) {
+  const mid = (current + recommended) / 2
+  return Math.max(recommended, Math.ceil(mid / roundTo) * roundTo)
+}
+
+function buildPlanScenarioSnapshot(input: {
+  stat: AdminPlanProfitabilityStat
+  preset: 'conservative' | 'recommended'
+  assumptions: BusinessAssumptions
+  storageCostUsdPerByteMonth: number
+}): AdminPlanScenarioSnapshot {
+  const { stat, preset, assumptions, storageCostUsdPerByteMonth } = input
+  const currentPrice = stat.price_monthly_usd
+  const currentExtractions = stat.current_extractions_per_day
+  const currentChatTokens = stat.current_chat_tokens_per_day
+  const currentStorage = stat.storage_limit_bytes
+  const recommendedExtractions = stat.recommended_extractions_per_day ?? currentExtractions
+  const recommendedChatTokens = stat.recommended_chat_tokens_per_day ?? currentChatTokens
+  const recommendedStorage = stat.recommended_storage_limit_bytes || currentStorage
+
+  const scenarioExtractions = preset === 'recommended'
+    ? recommendedExtractions
+    : midpointInteger(currentExtractions, recommendedExtractions)
+  const scenarioChatTokens = preset === 'recommended'
+    ? recommendedChatTokens
+    : midpointInteger(currentChatTokens, recommendedChatTokens, 1000)
+  const scenarioStorage = preset === 'recommended'
+    ? recommendedStorage
+    : midpointInteger(currentStorage, recommendedStorage, 100 * 1024 * 1024)
+
+  const projectedVariable = calculateProjectedPlanCapCost({
+    extractionsPerDay: scenarioExtractions,
+    avgExtractionCostUsd: stat.avg_extraction_cost_usd,
+    chatTokensPerDay: scenarioChatTokens,
+    avgChatCostPerTokenUsd: stat.avg_chat_cost_per_token_usd,
+    storageCapCostUsd: scenarioStorage * storageCostUsdPerByteMonth,
+  }).totalCostUsd
+
+  const baseNonVariableCosts =
+    stat.estimated_monthly_fixed_cost_usd + stat.allocated_shared_fixed_cost_per_user_usd
+  const targetPriceForMargin = calculateRequiredPriceForMargin(
+    projectedVariable + baseNonVariableCosts,
+    stat.target_gross_margin_pct
+  )
+
+  const shouldRaisePrice =
+    stat.scenario_recommendation === 'raise_price' ||
+    stat.scenario_recommendation === 'raise_price_and_lower_limits'
+
+  let scenarioPrice = currentPrice
+  if (shouldRaisePrice && targetPriceForMargin !== null) {
+    const multiplier = preset === 'recommended' ? 1 : 0.9
+    scenarioPrice = Math.max(currentPrice, roundUpPriceUsd(targetPriceForMargin * multiplier))
+  }
+
+  const scenarioPaymentFee = calculatePaymentFeeMonthlyUsd({
+    priceMonthlyUsd: scenarioPrice,
+    paymentFeePct: assumptions.paymentFeePct,
+    paymentFeeFixedUsd: assumptions.paymentFeeFixedUsd,
+  })
+
+  const scenarioProjectedCostUsd = projectedVariable + baseNonVariableCosts + scenarioPaymentFee
+  const scenarioProjectedMarginPct = calculateGrossMarginPct(scenarioPrice, scenarioProjectedCostUsd)
+
+  return {
+    preset,
+    label: preset === 'recommended' ? 'Recomendado' : 'Conservador',
+    plan_id: stat.plan_id,
+    plan_name: stat.plan_name,
+    plan_display_name: stat.plan_display_name,
+    current_price_monthly_usd: currentPrice,
+    scenario_price_monthly_usd: scenarioPrice,
+    current_extractions_per_day: currentExtractions,
+    scenario_extractions_per_day: scenarioExtractions,
+    current_chat_tokens_per_day: currentChatTokens,
+    scenario_chat_tokens_per_day: scenarioChatTokens,
+    current_storage_limit_bytes: currentStorage,
+    scenario_storage_limit_bytes: scenarioStorage,
+    scenario_projected_cost_usd: scenarioProjectedCostUsd,
+    scenario_projected_margin_pct: scenarioProjectedMarginPct,
+    recommendation: stat.scenario_recommendation,
+    reason: stat.scenario_reason,
+  }
 }
 
 async function listProfitabilityUserPlanRows(): Promise<DbProfitabilityUserPlanRow[]> {
@@ -10767,7 +10980,8 @@ export async function getAdminUserProfitability(
   const safeDays = Number.isFinite(periodDays) ? Math.min(90, Math.max(1, Math.trunc(periodDays))) : 30
   const storageCostUsdPerByteMonth = getEstimatedStorageCostUsdPerByteMonth()
 
-  const [userPlanRows, usageRows, extractionRows] = await Promise.all([
+  const [assumptions, userPlanRows, usageRows, extractionRows] = await Promise.all([
+    getBusinessAssumptions(),
     listProfitabilityUserPlanRows(),
     listProfitabilityUsageRows(safeDays),
     listProfitabilityExtractionCountRows(safeDays),
@@ -10775,6 +10989,9 @@ export async function getAdminUserProfitability(
 
   const planRow = userPlanRows.find((row) => row.user_id === userId)
   if (!planRow) return null
+  const totalActiveUsers = userPlanRows.length
+  const totalActivePaidUsers = userPlanRows.filter((row) => Number(row.price_monthly_usd ?? 0) > 0).length
+  const sharedFixedCostUsd = getTotalSharedFixedCostUsd(assumptions)
 
   const usage = usageRows.filter((row) => row.user_id === userId)
   const aiCostPeriodUsd = usage.reduce((sum, row) => sum + Number(row.cost_usd ?? 0), 0)
@@ -10791,15 +11008,36 @@ export async function getAdminUserProfitability(
   const extractionsPeriod = parseDbInteger(extractionCount?.extractions ?? 0)
   const storageUsedBytes = Number(planRow.used_bytes ?? 0)
   const storageCostMonthlyUsd = storageUsedBytes * storageCostUsdPerByteMonth
+  const priceMonthlyUsd = Number(planRow.price_monthly_usd ?? 0)
+  const sharedFixedAllocation = calculateSharedFixedCostAllocationPerUser({
+    sharedFixedCostUsd,
+    totalActiveUsers,
+    totalActivePaidUsers,
+    planPriceMonthlyUsd: priceMonthlyUsd,
+  })
+  const paymentFeeMonthlyUsd = calculatePaymentFeeMonthlyUsd({
+    priceMonthlyUsd,
+    paymentFeePct: assumptions.paymentFeePct,
+    paymentFeeFixedUsd: assumptions.paymentFeeFixedUsd,
+  })
   const aiCostMonthlyRunRateUsd = calculateMonthlyRunRate(aiCostPeriodUsd, safeDays)
   const monthlyVariableCostRunRateUsd = aiCostMonthlyRunRateUsd + storageCostMonthlyUsd
   const estimatedMonthlyFixedCostUsd = Number(planRow.estimated_monthly_fixed_cost_usd ?? 0)
-  const monthlyTotalCostRunRateUsd = monthlyVariableCostRunRateUsd + estimatedMonthlyFixedCostUsd
-  const priceMonthlyUsd = Number(planRow.price_monthly_usd ?? 0)
-  const targetGrossMarginPct = normalizeMarginPct(Number(planRow.target_gross_margin_pct ?? 0.75))
+  const monthlyTotalCostRunRateUsd =
+    monthlyVariableCostRunRateUsd +
+    estimatedMonthlyFixedCostUsd +
+    sharedFixedAllocation.allocatedCostPerUserUsd +
+    paymentFeeMonthlyUsd
+  const targetGrossMarginPct = normalizeMarginPct(
+    Number(planRow.target_gross_margin_pct ?? assumptions.targetGrossMarginPct),
+    assumptions.targetGrossMarginPct
+  )
   const maxVariableCostAllowedUsd = Math.max(
     0,
-    calculateMaxVariableCostAllowed(priceMonthlyUsd, targetGrossMarginPct) - estimatedMonthlyFixedCostUsd
+    calculateMaxVariableCostAllowed(priceMonthlyUsd, targetGrossMarginPct) -
+      estimatedMonthlyFixedCostUsd -
+      sharedFixedAllocation.allocatedCostPerUserUsd -
+      paymentFeeMonthlyUsd
   )
   const actualGrossMarginPct = calculateGrossMarginPct(priceMonthlyUsd, monthlyTotalCostRunRateUsd)
   const status = classifyProfitabilityStatus({
@@ -10825,6 +11063,9 @@ export async function getAdminUserProfitability(
     extractions_period: extractionsPeriod,
     storage_used_bytes: storageUsedBytes,
     storage_cost_monthly_usd: storageCostMonthlyUsd,
+    allocated_shared_fixed_cost_usd: sharedFixedAllocation.allocatedCostPerUserUsd,
+    shared_cost_allocation_strategy: sharedFixedAllocation.strategy,
+    payment_fee_monthly_usd: paymentFeeMonthlyUsd,
     monthly_variable_cost_run_rate_usd: monthlyVariableCostRunRateUsd,
     monthly_total_cost_run_rate_usd: monthlyTotalCostRunRateUsd,
     max_variable_cost_allowed_usd: maxVariableCostAllowedUsd,
@@ -10840,12 +11081,16 @@ export async function getAdminPlanProfitabilityStats(
   const safeDays = Number.isFinite(periodDays) ? Math.min(90, Math.max(1, Math.trunc(periodDays))) : 30
   const storageCostUsdPerByteMonth = getEstimatedStorageCostUsdPerByteMonth()
 
-  const [plans, userPlanRows, usageRows, extractionRows] = await Promise.all([
+  const [assumptions, plans, userPlanRows, usageRows, extractionRows] = await Promise.all([
+    getBusinessAssumptions(),
     listPlans(),
     listProfitabilityUserPlanRows(),
     listProfitabilityUsageRows(safeDays),
     listProfitabilityExtractionCountRows(safeDays),
   ])
+  const totalActiveUsers = userPlanRows.length
+  const totalActivePaidUsers = userPlanRows.filter((row) => Number(row.price_monthly_usd ?? 0) > 0).length
+  const sharedFixedCostUsd = getTotalSharedFixedCostUsd(assumptions)
 
   const usageByUser = new Map<
     string,
@@ -10887,6 +11132,7 @@ export async function getAdminPlanProfitabilityStats(
       totalMonthlyCostUsd: number
       monthlyAiCostUsd: number
       monthlyStorageCostUsd: number
+      storageUsedBytes: number
       extractionRelatedCostPeriodUsd: number
       chatCostPeriodUsd: number
       chatTokensPeriod: number
@@ -10898,9 +11144,26 @@ export async function getAdminPlanProfitabilityStats(
     const usage = usageByUser.get(row.user_id)
     const aiCostPeriodUsd = usage?.totalCostPeriodUsd ?? 0
     const monthlyAiCostUsd = calculateMonthlyRunRate(aiCostPeriodUsd, safeDays)
-    const monthlyStorageCostUsd = Number(row.used_bytes ?? 0) * storageCostUsdPerByteMonth
+    const priceMonthlyUsd = Number(row.price_monthly_usd ?? 0)
+    const storageUsedBytes = Number(row.used_bytes ?? 0)
+    const monthlyStorageCostUsd = storageUsedBytes * storageCostUsdPerByteMonth
+    const sharedFixedAllocation = calculateSharedFixedCostAllocationPerUser({
+      sharedFixedCostUsd,
+      totalActiveUsers,
+      totalActivePaidUsers,
+      planPriceMonthlyUsd: priceMonthlyUsd,
+    })
+    const paymentFeeMonthlyUsd = calculatePaymentFeeMonthlyUsd({
+      priceMonthlyUsd,
+      paymentFeePct: assumptions.paymentFeePct,
+      paymentFeeFixedUsd: assumptions.paymentFeeFixedUsd,
+    })
     const totalMonthlyCostUsd =
-      monthlyAiCostUsd + monthlyStorageCostUsd + Number(row.estimated_monthly_fixed_cost_usd ?? 0)
+      monthlyAiCostUsd +
+      monthlyStorageCostUsd +
+      Number(row.estimated_monthly_fixed_cost_usd ?? 0) +
+      sharedFixedAllocation.allocatedCostPerUserUsd +
+      paymentFeeMonthlyUsd
 
     const bucket = planUsers.get(row.plan_name) ?? []
     bucket.push({
@@ -10908,6 +11171,7 @@ export async function getAdminPlanProfitabilityStats(
       totalMonthlyCostUsd,
       monthlyAiCostUsd,
       monthlyStorageCostUsd,
+      storageUsedBytes,
       extractionRelatedCostPeriodUsd: usage?.extractionRelatedCostPeriodUsd ?? 0,
       chatCostPeriodUsd: usage?.chatCostPeriodUsd ?? 0,
       chatTokensPeriod: usage?.chatTokensPeriod ?? 0,
@@ -10919,6 +11183,17 @@ export async function getAdminPlanProfitabilityStats(
   const stats = plans.map((plan) => {
     const users = planUsers.get(plan.name) ?? []
     const activeUsers = users.length
+    const sharedFixedAllocation = calculateSharedFixedCostAllocationPerUser({
+      sharedFixedCostUsd,
+      totalActiveUsers,
+      totalActivePaidUsers,
+      planPriceMonthlyUsd: plan.price_monthly_usd,
+    })
+    const paymentFeeMonthlyUsd = calculatePaymentFeeMonthlyUsd({
+      priceMonthlyUsd: plan.price_monthly_usd,
+      paymentFeePct: assumptions.paymentFeePct,
+      paymentFeeFixedUsd: assumptions.paymentFeeFixedUsd,
+    })
     const totalMonthlyRunRateCostUsd = users.reduce((sum, user) => sum + user.totalMonthlyCostUsd, 0)
     const avgMonthlyAiCostPerUserUsd = activeUsers > 0
       ? users.reduce((sum, user) => sum + user.monthlyAiCostUsd, 0) / activeUsers
@@ -10926,11 +11201,19 @@ export async function getAdminPlanProfitabilityStats(
     const avgMonthlyStorageCostPerUserUsd = activeUsers > 0
       ? users.reduce((sum, user) => sum + user.monthlyStorageCostUsd, 0) / activeUsers
       : 0
+    const avgMonthlyVariableCostPerUserUsd = avgMonthlyAiCostPerUserUsd + avgMonthlyStorageCostPerUserUsd
     const avgMonthlyTotalCostPerUserUsd = activeUsers > 0 ? totalMonthlyRunRateCostUsd / activeUsers : 0
     const sortedMonthlyCosts = users
       .map((user) => user.totalMonthlyCostUsd)
       .sort((a, b) => a - b)
     const p95MonthlyTotalCostPerUserUsd = percentileFromSorted(sortedMonthlyCosts, 95)
+    const avgStorageUsedBytes = activeUsers > 0
+      ? users.reduce((sum, user) => sum + user.storageUsedBytes, 0) / activeUsers
+      : 0
+    const p95StorageUsedBytes = percentileFromSorted(
+      users.map((user) => user.storageUsedBytes).sort((a, b) => a - b),
+      95
+    )
     const extractionRelatedCostPeriodUsd = users.reduce(
       (sum, user) => sum + user.extractionRelatedCostPeriodUsd,
       0
@@ -10941,36 +11224,62 @@ export async function getAdminPlanProfitabilityStats(
     const avgExtractionCostUsd =
       extractionCountPeriod > 0 ? extractionRelatedCostPeriodUsd / extractionCountPeriod : 0
     const avgChatCostPerTokenUsd = chatTokensPeriod > 0 ? chatCostPeriodUsd / chatTokensPeriod : 0
+    const currentStorageCapCostUsd = plan.storage_limit_bytes * storageCostUsdPerByteMonth
     const maxVariableCostAllowedUsd = Math.max(
       0,
       calculateMaxVariableCostAllowed(plan.price_monthly_usd, plan.target_gross_margin_pct) -
-        plan.estimated_monthly_fixed_cost_usd
+        plan.estimated_monthly_fixed_cost_usd -
+        sharedFixedAllocation.allocatedCostPerUserUsd -
+        paymentFeeMonthlyUsd
     )
     const projectedCostAtCurrentCaps = calculateProjectedPlanCapCost({
       extractionsPerDay: plan.extractions_per_day,
       avgExtractionCostUsd,
       chatTokensPerDay: plan.chat_tokens_per_day,
       avgChatCostPerTokenUsd,
-      avgMonthlyStorageCostUsd: avgMonthlyStorageCostPerUserUsd,
+      storageCapCostUsd: currentStorageCapCostUsd,
     })
     const projectedTotalCostUsd =
-      projectedCostAtCurrentCaps.totalCostUsd + plan.estimated_monthly_fixed_cost_usd
+      projectedCostAtCurrentCaps.totalCostUsd +
+      plan.estimated_monthly_fixed_cost_usd +
+      sharedFixedAllocation.allocatedCostPerUserUsd +
+      paymentFeeMonthlyUsd
     const actualGrossMarginPct = calculateGrossMarginPct(
       plan.price_monthly_usd,
       avgMonthlyTotalCostPerUserUsd
     )
     const projectedGrossMarginPct = calculateGrossMarginPct(plan.price_monthly_usd, projectedTotalCostUsd)
+    const p95GrossMarginPct = calculateGrossMarginPct(plan.price_monthly_usd, p95MonthlyTotalCostPerUserUsd)
     const recommendedExtractionsPerDay = calculateRecommendedExtractionsPerDay({
       maxVariableCostAllowedUsd,
       avgExtractionCostUsd,
       currentChatCapCostUsd: projectedCostAtCurrentCaps.chatCapCostUsd,
-      currentStorageCostUsd: avgMonthlyStorageCostPerUserUsd,
+      currentStorageCostUsd: currentStorageCapCostUsd,
     })
     const recommendedChatTokensPerDay = calculateRecommendedChatTokensPerDay({
       maxVariableCostAllowedUsd,
       avgChatCostPerTokenUsd,
       currentExtractionCapCostUsd: projectedCostAtCurrentCaps.extractionCapCostUsd,
-      currentStorageCostUsd: avgMonthlyStorageCostPerUserUsd,
+      currentStorageCostUsd: currentStorageCapCostUsd,
+    })
+    const recommendedStorageLimitBytes = calculateRecommendedStorageLimitBytes({
+      currentStorageLimitBytes: plan.storage_limit_bytes,
+      avgStorageUsedBytes,
+      p95StorageUsedBytes,
+    })
+    const extractionRatio =
+      activeUsers > 0 && plan.extractions_per_day > 0
+        ? extractionCountPeriod / activeUsers / safeDays / plan.extractions_per_day
+        : 0
+    const chatRatio =
+      activeUsers > 0 && plan.chat_tokens_per_day > 0
+        ? chatTokensPeriod / activeUsers / safeDays / plan.chat_tokens_per_day
+        : 0
+    const storageRatio = plan.storage_limit_bytes > 0 ? avgStorageUsedBytes / plan.storage_limit_bytes : 0
+    const upgradePressureScore = calculateUpgradePressureScore({
+      extractionRatio,
+      chatRatio,
+      storageRatio,
     })
     const unprofitableUsers = users.filter((user) => user.totalMonthlyCostUsd > plan.price_monthly_usd).length
     const atRiskUsers = users.filter((user) => {
@@ -10981,6 +11290,22 @@ export async function getAdminPlanProfitabilityStats(
       actualMarginPct: actualGrossMarginPct,
       projectedMarginPct: projectedGrossMarginPct,
       targetGrossMarginPct: plan.target_gross_margin_pct,
+    })
+    const scenarioRecommendation = deriveScenarioRecommendation({
+      planName: plan.name,
+      targetGrossMarginPct: plan.target_gross_margin_pct,
+      actualMarginPct: actualGrossMarginPct,
+      projectedMarginPct: projectedGrossMarginPct,
+      p95MarginPct: p95GrossMarginPct,
+      currentExtractionsPerDay: plan.extractions_per_day,
+      recommendedExtractionsPerDay,
+      currentChatTokensPerDay: plan.chat_tokens_per_day,
+      recommendedChatTokensPerDay,
+      currentStorageLimitBytes: plan.storage_limit_bytes,
+      recommendedStorageLimitBytes,
+      upgradePressureScore,
+      unprofitableUsers,
+      activeUsers,
     })
 
     return {
@@ -10993,18 +11318,29 @@ export async function getAdminPlanProfitabilityStats(
       target_gross_margin_pct: plan.target_gross_margin_pct,
       profitability_alert_enabled: plan.profitability_alert_enabled,
       estimated_monthly_fixed_cost_usd: plan.estimated_monthly_fixed_cost_usd,
+      allocated_shared_fixed_cost_per_user_usd: sharedFixedAllocation.allocatedCostPerUserUsd,
+      shared_cost_allocation_strategy: sharedFixedAllocation.strategy,
+      payment_fee_monthly_usd: paymentFeeMonthlyUsd,
       avg_monthly_ai_cost_per_user_usd: avgMonthlyAiCostPerUserUsd,
       avg_monthly_storage_cost_per_user_usd: avgMonthlyStorageCostPerUserUsd,
+      avg_monthly_variable_cost_per_user_usd: avgMonthlyVariableCostPerUserUsd,
       avg_monthly_total_cost_per_user_usd: avgMonthlyTotalCostPerUserUsd,
       p95_monthly_total_cost_per_user_usd: p95MonthlyTotalCostPerUserUsd,
       total_monthly_run_rate_cost_usd: totalMonthlyRunRateCostUsd,
       actual_gross_margin_pct: actualGrossMarginPct,
+      p95_gross_margin_pct: p95GrossMarginPct,
       avg_extraction_cost_usd: avgExtractionCostUsd,
       avg_chat_cost_per_token_usd: avgChatCostPerTokenUsd,
+      avg_storage_used_bytes: avgStorageUsedBytes,
+      p95_storage_used_bytes: p95StorageUsedBytes,
+      recommended_storage_limit_bytes: recommendedStorageLimitBytes,
       projected_cost_at_current_caps_usd: projectedTotalCostUsd,
       projected_gross_margin_pct: projectedGrossMarginPct,
       recommended_extractions_per_day: recommendedExtractionsPerDay,
       recommended_chat_tokens_per_day: recommendedChatTokensPerDay,
+      upgrade_pressure_score: upgradePressureScore,
+      scenario_recommendation: scenarioRecommendation.recommendation,
+      scenario_reason: scenarioRecommendation.reason,
       current_extractions_per_day: plan.extractions_per_day,
       current_chat_tokens_per_day: plan.chat_tokens_per_day,
       storage_limit_bytes: plan.storage_limit_bytes,
@@ -11017,6 +11353,226 @@ export async function getAdminPlanProfitabilityStats(
   return {
     period_days: safeDays,
     plans: stats,
+  }
+}
+
+export async function getAdminPlanProfitabilityScenarios(
+  periodDays = 30
+): Promise<{ period_days: number; assumptions: BusinessAssumptions; scenarios: AdminPlanScenarioSnapshot[] }> {
+  const safeDays = Number.isFinite(periodDays) ? Math.min(90, Math.max(1, Math.trunc(periodDays))) : 30
+  const storageCostUsdPerByteMonth = getEstimatedStorageCostUsdPerByteMonth()
+  const [assumptions, profitability] = await Promise.all([
+    getBusinessAssumptions(),
+    getAdminPlanProfitabilityStats(safeDays),
+  ])
+
+  const scenarios = profitability.plans.flatMap((stat) => [
+    buildPlanScenarioSnapshot({
+      stat,
+      preset: 'conservative',
+      assumptions,
+      storageCostUsdPerByteMonth,
+    }),
+    buildPlanScenarioSnapshot({
+      stat,
+      preset: 'recommended',
+      assumptions,
+      storageCostUsdPerByteMonth,
+    }),
+  ])
+
+  return {
+    period_days: profitability.period_days,
+    assumptions,
+    scenarios,
+  }
+}
+
+export async function getAdminInvestorMetricsPack(
+  periodDays = 30
+): Promise<AdminInvestorMetricsPack> {
+  const safeDays = Number.isFinite(periodDays) ? Math.min(90, Math.max(1, Math.trunc(periodDays))) : 30
+  const storageCostUsdPerByteMonth = getEstimatedStorageCostUsdPerByteMonth()
+  const [assumptions, profitability] = await Promise.all([
+    getBusinessAssumptions(),
+    getAdminPlanProfitabilityStats(safeDays),
+  ])
+
+  const scenarios = profitability.plans.flatMap((stat) => [
+    buildPlanScenarioSnapshot({
+      stat,
+      preset: 'conservative',
+      assumptions,
+      storageCostUsdPerByteMonth,
+    }),
+    buildPlanScenarioSnapshot({
+      stat,
+      preset: 'recommended',
+      assumptions,
+      storageCostUsdPerByteMonth,
+    }),
+  ])
+
+  const plans = profitability.plans
+    .map((stat) => {
+      const monthlyRevenueRunRateUsd = stat.active_users * stat.price_monthly_usd
+      const monthlyCostRunRateUsd = stat.total_monthly_run_rate_cost_usd
+      const monthlyProjectedCostAtCapsUsd = stat.projected_cost_at_current_caps_usd * stat.active_users
+
+      return {
+        plan_id: stat.plan_id,
+        plan_name: stat.plan_name,
+        plan_display_name: stat.plan_display_name,
+        active_users: stat.active_users,
+        price_monthly_usd: stat.price_monthly_usd,
+        monthly_revenue_run_rate_usd: monthlyRevenueRunRateUsd,
+        monthly_cost_run_rate_usd: monthlyCostRunRateUsd,
+        monthly_projected_cost_at_caps_usd: monthlyProjectedCostAtCapsUsd,
+        actual_gross_margin_pct: calculateGrossMarginPct(monthlyRevenueRunRateUsd, monthlyCostRunRateUsd),
+        projected_gross_margin_pct: calculateGrossMarginPct(
+          monthlyRevenueRunRateUsd,
+          monthlyProjectedCostAtCapsUsd
+        ),
+        share_of_mrr_pct: 0,
+        share_of_cost_pct: 0,
+        unprofitable_users: stat.unprofitable_users,
+        at_risk_users: stat.at_risk_users,
+        upgrade_pressure_score: stat.upgrade_pressure_score,
+        recommended_extractions_per_day: stat.recommended_extractions_per_day,
+        recommended_chat_tokens_per_day: stat.recommended_chat_tokens_per_day,
+        recommended_storage_limit_bytes: stat.recommended_storage_limit_bytes,
+        scenario_recommendation: stat.scenario_recommendation,
+        scenario_reason: stat.scenario_reason,
+      } satisfies AdminInvestorPlanSnapshot
+    })
+    .sort((a, b) => b.monthly_revenue_run_rate_usd - a.monthly_revenue_run_rate_usd)
+
+  const mrrRunRateUsd = plans.reduce((sum, plan) => sum + plan.monthly_revenue_run_rate_usd, 0)
+  const monthlyCostRunRateUsd = plans.reduce((sum, plan) => sum + plan.monthly_cost_run_rate_usd, 0)
+
+  for (const plan of plans) {
+    plan.share_of_mrr_pct = mrrRunRateUsd > 0 ? plan.monthly_revenue_run_rate_usd / mrrRunRateUsd : 0
+    plan.share_of_cost_pct = monthlyCostRunRateUsd > 0 ? plan.monthly_cost_run_rate_usd / monthlyCostRunRateUsd : 0
+  }
+
+  const activeUsers = profitability.plans.reduce((sum, plan) => sum + plan.active_users, 0)
+  const activePaidUsers = profitability.plans
+    .filter((plan) => plan.price_monthly_usd > 0)
+    .reduce((sum, plan) => sum + plan.active_users, 0)
+  const freeUsers = activeUsers - activePaidUsers
+  const arrRunRateUsd = mrrRunRateUsd * 12
+  const monthlyProjectedCostAtCapsUsd = profitability.plans.reduce(
+    (sum, plan) => sum + plan.projected_cost_at_current_caps_usd * plan.active_users,
+    0
+  )
+  const atRiskUsers = profitability.plans.reduce((sum, plan) => sum + plan.at_risk_users, 0)
+  const unprofitableUsers = profitability.plans.reduce((sum, plan) => sum + plan.unprofitable_users, 0)
+  const impliedCustomerLifetimeMonths = assumptions.assumedMonthlyChurnPct > 0
+    ? 1 / assumptions.assumedMonthlyChurnPct
+    : null
+
+  const totalAiCostUsd = profitability.plans.reduce(
+    (sum, plan) => sum + plan.avg_monthly_ai_cost_per_user_usd * plan.active_users,
+    0
+  )
+  const totalStorageCostUsd = profitability.plans.reduce(
+    (sum, plan) => sum + plan.avg_monthly_storage_cost_per_user_usd * plan.active_users,
+    0
+  )
+  const totalPaymentFeesUsd = profitability.plans.reduce(
+    (sum, plan) => sum + plan.payment_fee_monthly_usd * plan.active_users,
+    0
+  )
+  const totalPlanFixedCostUsd = profitability.plans.reduce(
+    (sum, plan) => sum + plan.estimated_monthly_fixed_cost_usd * plan.active_users,
+    0
+  )
+  const totalSharedFixedCostUsd = profitability.plans.reduce(
+    (sum, plan) => sum + plan.allocated_shared_fixed_cost_per_user_usd * plan.active_users,
+    0
+  )
+
+  const baseCostDrivers = [
+    {
+      key: 'ai',
+      label: 'AI',
+      monthly_cost_usd: totalAiCostUsd,
+      share_of_total_cost_pct: 0,
+    },
+    {
+      key: 'storage',
+      label: 'Storage',
+      monthly_cost_usd: totalStorageCostUsd,
+      share_of_total_cost_pct: 0,
+    },
+    {
+      key: 'payment_fees',
+      label: 'Payment fees',
+      monthly_cost_usd: totalPaymentFeesUsd,
+      share_of_total_cost_pct: 0,
+    },
+    {
+      key: 'plan_fixed',
+      label: 'Fixed by plan',
+      monthly_cost_usd: totalPlanFixedCostUsd,
+      share_of_total_cost_pct: 0,
+    },
+    {
+      key: 'shared_fixed',
+      label: 'Shared fixed',
+      monthly_cost_usd: totalSharedFixedCostUsd,
+      share_of_total_cost_pct: 0,
+    },
+  ] satisfies AdminInvestorCostDriver[]
+
+  const costDrivers = baseCostDrivers
+    .map<AdminInvestorCostDriver>((driver) => ({
+      ...driver,
+      share_of_total_cost_pct: monthlyCostRunRateUsd > 0 ? driver.monthly_cost_usd / monthlyCostRunRateUsd : 0,
+    }))
+    .sort((a, b) => b.monthly_cost_usd - a.monthly_cost_usd)
+
+  const recommendationCounts: Record<ScenarioRecommendation, number> = {
+    keep: 0,
+    raise_price: 0,
+    lower_limits: 0,
+    raise_price_and_lower_limits: 0,
+    acquisition_mode: 0,
+  }
+
+  for (const plan of profitability.plans) {
+    recommendationCounts[plan.scenario_recommendation] += 1
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    period_days: profitability.period_days,
+    business_assumptions: assumptions,
+    summary: {
+      active_users: activeUsers,
+      active_paid_users: activePaidUsers,
+      free_users: freeUsers,
+      mrr_run_rate_usd: mrrRunRateUsd,
+      arr_run_rate_usd: arrRunRateUsd,
+      monthly_cost_run_rate_usd: monthlyCostRunRateUsd,
+      monthly_projected_cost_at_caps_usd: monthlyProjectedCostAtCapsUsd,
+      blended_gross_margin_pct: calculateGrossMarginPct(mrrRunRateUsd, monthlyCostRunRateUsd),
+      projected_blended_gross_margin_pct: calculateGrossMarginPct(
+        mrrRunRateUsd,
+        monthlyProjectedCostAtCapsUsd
+      ),
+      at_risk_users: atRiskUsers,
+      unprofitable_users: unprofitableUsers,
+      target_gross_margin_pct: assumptions.targetGrossMarginPct,
+      assumed_monthly_churn_pct: assumptions.assumedMonthlyChurnPct,
+      implied_customer_lifetime_months: impliedCustomerLifetimeMonths,
+      assumed_trial_to_paid_pct: assumptions.assumedTrialToPaidPct,
+      target_payback_months: assumptions.targetPaybackMonths,
+    },
+    cost_drivers: costDrivers,
+    recommendation_counts: recommendationCounts,
+    plans,
+    scenarios,
   }
 }
 

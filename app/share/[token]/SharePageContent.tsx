@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import Image from 'next/image'
+import { NotesAideLogo } from '@/app/components/NotesAideLogo'
 import { useLang } from '@/app/home/hooks/useLang'
 import { t } from '@/app/home/lib/i18n'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
@@ -96,9 +97,12 @@ export function SharePageContent({ extraction, token, tasks, attachments }: Shar
             <div className="flex flex-col">
               <Link
                 href="/"
-                className="text-lg font-black tracking-tight text-slate-900 transition-colors hover:text-indigo-600 dark:text-slate-100 dark:hover:text-indigo-300"
+                className="inline-flex w-fit transition-opacity hover:opacity-85"
               >
-                Notes Aide Action Extractor
+                <NotesAideLogo
+                  className="h-10 text-slate-900 dark:text-slate-100"
+                  title="Notes Aide"
+                />
               </Link>
               <p className="text-sm text-slate-500 dark:text-slate-400">{t(lang, 'share.sharedResult')}</p>
             </div>

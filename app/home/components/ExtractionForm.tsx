@@ -9,6 +9,7 @@ import {
   Globe,
   History,
   ImageIcon,
+  Layers,
   Paperclip,
   PenLine,
   Play,
@@ -613,16 +614,32 @@ export function ExtractionForm({
           </div>
         </div>
 
-        {/* Right: History (only if exists) */}
-        {hasHistory && (
-          <button
-            type="button"
-            onClick={onScrollToHistory}
-            aria-label={ui.viewHistory}
-            className="group inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-indigo-200 bg-gradient-to-r from-indigo-50 to-sky-50 text-indigo-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-indigo-300 hover:from-indigo-100 hover:to-sky-100 hover:shadow-md dark:border-indigo-800/70 dark:from-indigo-950/40 dark:to-sky-950/40 dark:text-indigo-300 dark:hover:border-indigo-700"
-          >
-            <History size={15} className="transition-transform duration-200 group-hover:-translate-y-0.5" />
-          </button>
+        {(onOpenBatchMode || hasHistory) && (
+          <div className="flex items-center gap-2">
+            {onOpenBatchMode && (
+              <button
+                type="button"
+                onClick={onOpenBatchMode}
+                disabled={isProcessing || isUploading}
+                aria-label={t(lang, 'app.batchMultipleUrls')}
+                title={t(lang, 'app.batchMultipleUrls')}
+                className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-violet-200 bg-gradient-to-r from-violet-50 to-indigo-50 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-violet-300 hover:from-violet-100 hover:to-indigo-100 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-800/70 dark:from-violet-950/40 dark:to-indigo-950/40 dark:text-violet-300 dark:hover:border-violet-700"
+              >
+                <Layers size={14} />
+                <span>{t(lang, 'app.batchLabel')}</span>
+              </button>
+            )}
+            {hasHistory && (
+              <button
+                type="button"
+                onClick={onScrollToHistory}
+                aria-label={ui.viewHistory}
+                className="group inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-indigo-200 bg-gradient-to-r from-indigo-50 to-sky-50 text-indigo-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-indigo-300 hover:from-indigo-100 hover:to-sky-100 hover:shadow-md dark:border-indigo-800/70 dark:from-indigo-950/40 dark:to-sky-950/40 dark:text-indigo-300 dark:hover:border-indigo-700"
+              >
+                <History size={15} className="transition-transform duration-200 group-hover:-translate-y-0.5" />
+              </button>
+            )}
+          </div>
         )}
       </div>
 

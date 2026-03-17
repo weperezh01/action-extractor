@@ -1,9 +1,14 @@
 'use client'
 
 import Link from 'next/link'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Check, X, Plus, Pencil, Trash2, Save, RotateCcw } from 'lucide-react'
 import { formatStorageBytes } from '@/lib/storage-limits'
+import {
+  DEFAULT_BUSINESS_ASSUMPTIONS,
+  type BusinessAssumptions,
+  type ScenarioRecommendation,
+} from '@/lib/profitability'
 
 // ── Feature definitions ──────────────────────────────────────────────────────
 
@@ -60,24 +65,55 @@ interface PlanProfitabilityStat {
   target_gross_margin_pct: number
   profitability_alert_enabled: boolean
   estimated_monthly_fixed_cost_usd: number
+  allocated_shared_fixed_cost_per_user_usd: number
+  shared_cost_allocation_strategy: 'none' | 'paid_only' | 'all_active'
+  payment_fee_monthly_usd: number
   avg_monthly_ai_cost_per_user_usd: number
   avg_monthly_storage_cost_per_user_usd: number
+  avg_monthly_variable_cost_per_user_usd: number
   avg_monthly_total_cost_per_user_usd: number
   p95_monthly_total_cost_per_user_usd: number
   total_monthly_run_rate_cost_usd: number
   actual_gross_margin_pct: number | null
+  p95_gross_margin_pct: number | null
   avg_extraction_cost_usd: number
   avg_chat_cost_per_token_usd: number
+  avg_storage_used_bytes: number
+  p95_storage_used_bytes: number
+  recommended_storage_limit_bytes: number
   projected_cost_at_current_caps_usd: number
   projected_gross_margin_pct: number | null
   recommended_extractions_per_day: number | null
   recommended_chat_tokens_per_day: number | null
+  upgrade_pressure_score: number
+  scenario_recommendation: ScenarioRecommendation
+  scenario_reason: string
   current_extractions_per_day: number
   current_chat_tokens_per_day: number
   storage_limit_bytes: number
   unprofitable_users: number
   at_risk_users: number
   status: 'healthy' | 'at_risk' | 'unprofitable'
+}
+
+interface PlanScenarioSnapshot {
+  preset: 'conservative' | 'recommended'
+  label: string
+  plan_id: string
+  plan_name: string
+  plan_display_name: string
+  current_price_monthly_usd: number
+  scenario_price_monthly_usd: number
+  current_extractions_per_day: number
+  scenario_extractions_per_day: number
+  current_chat_tokens_per_day: number
+  scenario_chat_tokens_per_day: number
+  current_storage_limit_bytes: number
+  scenario_storage_limit_bytes: number
+  scenario_projected_cost_usd: number
+  scenario_projected_margin_pct: number | null
+  recommendation: ScenarioRecommendation
+  reason: string
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -100,11 +136,48 @@ function formatMarginPct(value: number | null) {
   return `${(value * 100).toFixed(1)}%`
 }
 
+function calcMarginPct(revenueUsd: number, costUsd: number): number | null {
+  if (!Number.isFinite(revenueUsd) || revenueUsd <= 0) {
+    return costUsd > 0 ? -1 : 0
+  }
+  return (revenueUsd - costUsd) / revenueUsd
+}
+
 function profitabilityBadge(status: PlanProfitabilityStat['status']) {
   if (status === 'healthy') {
     return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'
   }
   if (status === 'at_risk') {
+    return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
+  }
+  return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300'
+}
+
+function recommendationLabel(value: ScenarioRecommendation) {
+  switch (value) {
+    case 'keep':
+      return 'Mantener'
+    case 'raise_price':
+      return 'Subir precio'
+    case 'lower_limits':
+      return 'Bajar límites'
+    case 'raise_price_and_lower_limits':
+      return 'Subir precio + bajar límites'
+    case 'acquisition_mode':
+      return 'Adquisición'
+    default:
+      return value
+  }
+}
+
+function recommendationBadge(value: ScenarioRecommendation) {
+  if (value === 'keep') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'
+  }
+  if (value === 'acquisition_mode') {
+    return 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300'
+  }
+  if (value === 'raise_price' || value === 'lower_limits') {
     return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
   }
   return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300'
@@ -143,7 +216,12 @@ function ToggleCell({
 export default function AdminPlansPage() {
   const [plans, setPlans] = useState<DbPlan[]>([])
   const [profitability, setProfitability] = useState<PlanProfitabilityStat[]>([])
+  const [scenarios, setScenarios] = useState<PlanScenarioSnapshot[]>([])
+  const [businessAssumptions, setBusinessAssumptions] = useState<BusinessAssumptions>(DEFAULT_BUSINESS_ASSUMPTIONS)
+  const [assumptionsDraft, setAssumptionsDraft] = useState<BusinessAssumptions>(DEFAULT_BUSINESS_ASSUMPTIONS)
   const [profitabilityLoading, setProfitabilityLoading] = useState(true)
+  const [assumptionsLoading, setAssumptionsLoading] = useState(true)
+  const [savingAssumptions, setSavingAssumptions] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -230,9 +308,37 @@ export default function AdminPlansPage() {
     }
   }, [])
 
+  const loadScenarios = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/plans/profitability/scenarios?days=30', { cache: 'no-store' })
+      const data = (await res.json().catch(() => null)) as { scenarios?: PlanScenarioSnapshot[] } | null
+      if (res.ok && data?.scenarios) {
+        setScenarios(data.scenarios)
+      }
+    } catch {
+      // silent: core pricing editor should still work
+    }
+  }, [])
+
+  const loadBusinessAssumptions = useCallback(async () => {
+    setAssumptionsLoading(true)
+    try {
+      const res = await fetch('/api/admin/settings', { cache: 'no-store' })
+      const data = (await res.json().catch(() => null)) as { businessAssumptions?: BusinessAssumptions } | null
+      if (res.ok && data?.businessAssumptions) {
+        setBusinessAssumptions(data.businessAssumptions)
+        setAssumptionsDraft(data.businessAssumptions)
+      }
+    } catch {
+      // silent: defaults remain visible
+    } finally {
+      setAssumptionsLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
-    void Promise.all([loadPlans(), loadProfitability()])
-  }, [loadPlans, loadProfitability])
+    void Promise.all([loadPlans(), loadProfitability(), loadScenarios(), loadBusinessAssumptions()])
+  }, [loadPlans, loadProfitability, loadScenarios, loadBusinessAssumptions])
 
   // ── Value ladder editing ───────────────────────────────────────────────────
 
@@ -285,7 +391,7 @@ export default function AdminPlansPage() {
       if (!res.ok) { setError(data?.error ?? 'Error al guardar.'); return }
       if (data?.plan) {
         setPlans((prev) => prev.map((p) => (p.id === planId ? data.plan! : p)))
-        void loadProfitability()
+        void Promise.all([loadProfitability(), loadScenarios()])
         setNotice('Plan actualizado correctamente.')
         setTimeout(() => setNotice(null), 3000)
       }
@@ -305,7 +411,7 @@ export default function AdminPlansPage() {
       const data = (await res.json().catch(() => null)) as { error?: string } | null
       if (!res.ok) { setError(data?.error ?? 'Error al eliminar.'); return }
       setPlans((prev) => prev.filter((p) => p.id !== planId))
-      void loadProfitability()
+      void Promise.all([loadProfitability(), loadScenarios()])
       setNotice('Plan eliminado.')
       setTimeout(() => setNotice(null), 3000)
     } catch {
@@ -340,7 +446,7 @@ export default function AdminPlansPage() {
       if (data?.plan) {
         setPlans((prev) => [...prev, data.plan!].sort((a, b) => a.display_order - b.display_order))
         setFeatureEdits((prev) => ({ ...prev, [data.plan!.id]: parseFeatures(data.plan!.features_json) }))
-        void loadProfitability()
+        void Promise.all([loadProfitability(), loadScenarios()])
         setNotice('Plan creado correctamente.')
         setTimeout(() => setNotice(null), 3000)
       }
@@ -412,7 +518,76 @@ export default function AdminPlansPage() {
     return FEATURE_KEYS.some(({ key }) => current[key] !== original[key])
   }
 
+  async function saveBusinessAssumptions() {
+    setSavingAssumptions(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/admin/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ businessAssumptions: assumptionsDraft }),
+      })
+      const data = (await res.json().catch(() => null)) as { businessAssumptions?: BusinessAssumptions; error?: string } | null
+      if (!res.ok) {
+        setError(data?.error ?? 'No se pudieron guardar los supuestos.')
+        return
+      }
+      if (data?.businessAssumptions) {
+        setBusinessAssumptions(data.businessAssumptions)
+        setAssumptionsDraft(data.businessAssumptions)
+      } else {
+        setBusinessAssumptions(assumptionsDraft)
+      }
+      await Promise.all([loadProfitability(), loadScenarios()])
+      setNotice('Supuestos de negocio actualizados.')
+      setTimeout(() => setNotice(null), 3000)
+    } catch {
+      setError('Error de conexión.')
+    } finally {
+      setSavingAssumptions(false)
+    }
+  }
+
+  const assumptionsDirty = JSON.stringify(assumptionsDraft) !== JSON.stringify(businessAssumptions)
   const profitabilityByPlanId = new Map(profitability.map((item) => [item.plan_id, item]))
+  const investorSummary = useMemo(() => {
+    const activeUsers = profitability.reduce((sum, plan) => sum + plan.active_users, 0)
+    const activePaidUsers = profitability
+      .filter((plan) => plan.price_monthly_usd > 0)
+      .reduce((sum, plan) => sum + plan.active_users, 0)
+    const freeUsers = profitability
+      .filter((plan) => plan.price_monthly_usd === 0)
+      .reduce((sum, plan) => sum + plan.active_users, 0)
+    const mrrRunRateUsd = profitability.reduce(
+      (sum, plan) => sum + plan.active_users * plan.price_monthly_usd,
+      0
+    )
+    const arrRunRateUsd = mrrRunRateUsd * 12
+    const costRunRateUsd = profitability.reduce(
+      (sum, plan) => sum + plan.total_monthly_run_rate_cost_usd,
+      0
+    )
+    const projectedCostAtCapsUsd = profitability.reduce(
+      (sum, plan) => sum + plan.projected_cost_at_current_caps_usd * plan.active_users,
+      0
+    )
+    const atRiskUsers = profitability.reduce((sum, plan) => sum + plan.at_risk_users, 0)
+    const unprofitableUsers = profitability.reduce((sum, plan) => sum + plan.unprofitable_users, 0)
+
+    return {
+      activeUsers,
+      activePaidUsers,
+      freeUsers,
+      mrrRunRateUsd,
+      arrRunRateUsd,
+      costRunRateUsd,
+      projectedCostAtCapsUsd,
+      blendedGrossMarginPct: calcMarginPct(mrrRunRateUsd, costRunRateUsd),
+      projectedBlendedGrossMarginPct: calcMarginPct(mrrRunRateUsd, projectedCostAtCapsUsd),
+      atRiskUsers,
+      unprofitableUsers,
+    }
+  }, [profitability])
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -472,6 +647,211 @@ export default function AdminPlansPage() {
             </button>
           </div>
         )}
+
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+            <div>
+              <h2 className="text-base font-semibold">Supuestos de negocio</h2>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Costos compartidos y supuestos externos usados para calcular rentabilidad y escenarios.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Fijo compartido/mes {formatUsd(
+                  assumptionsDraft.monthlyInfraFixedUsd +
+                    assumptionsDraft.monthlyPayrollUsd +
+                    assumptionsDraft.monthlySupportUsd +
+                    assumptionsDraft.monthlyToolingUsd
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={() => setAssumptionsDraft(businessAssumptions)}
+                disabled={!assumptionsDirty || savingAssumptions}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              >
+                <RotateCcw size={13} />
+                Reset
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveBusinessAssumptions()}
+                disabled={!assumptionsDirty || savingAssumptions || assumptionsLoading}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+              >
+                <Save size={13} />
+                {savingAssumptions ? 'Guardando...' : 'Guardar supuestos'}
+              </button>
+            </div>
+          </div>
+
+          <div className="grid gap-3 px-5 py-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <label className="mb-1 block text-xs text-slate-500">Margen objetivo global (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={99}
+                value={Math.round(assumptionsDraft.targetGrossMarginPct * 100)}
+                onChange={(e) =>
+                  setAssumptionsDraft((prev) => ({
+                    ...prev,
+                    targetGrossMarginPct: Number(e.target.value) / 100,
+                  }))
+                }
+                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-slate-500">Fee de pago (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={99}
+                step={0.1}
+                value={(assumptionsDraft.paymentFeePct * 100).toFixed(1)}
+                onChange={(e) =>
+                  setAssumptionsDraft((prev) => ({
+                    ...prev,
+                    paymentFeePct: Number(e.target.value) / 100,
+                  }))
+                }
+                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-slate-500">Fee fijo por cobro (USD)</label>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={assumptionsDraft.paymentFeeFixedUsd}
+                onChange={(e) =>
+                  setAssumptionsDraft((prev) => ({
+                    ...prev,
+                    paymentFeeFixedUsd: Number(e.target.value),
+                  }))
+                }
+                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-slate-500">Payback meta (meses)</label>
+              <input
+                type="number"
+                min={1}
+                max={36}
+                value={assumptionsDraft.targetPaybackMonths}
+                onChange={(e) =>
+                  setAssumptionsDraft((prev) => ({
+                    ...prev,
+                    targetPaybackMonths: Number(e.target.value),
+                  }))
+                }
+                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-slate-500">Infra fija mensual (USD)</label>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={assumptionsDraft.monthlyInfraFixedUsd}
+                onChange={(e) =>
+                  setAssumptionsDraft((prev) => ({
+                    ...prev,
+                    monthlyInfraFixedUsd: Number(e.target.value),
+                  }))
+                }
+                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-slate-500">Payroll mensual (USD)</label>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={assumptionsDraft.monthlyPayrollUsd}
+                onChange={(e) =>
+                  setAssumptionsDraft((prev) => ({
+                    ...prev,
+                    monthlyPayrollUsd: Number(e.target.value),
+                  }))
+                }
+                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-slate-500">Soporte mensual (USD)</label>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={assumptionsDraft.monthlySupportUsd}
+                onChange={(e) =>
+                  setAssumptionsDraft((prev) => ({
+                    ...prev,
+                    monthlySupportUsd: Number(e.target.value),
+                  }))
+                }
+                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-slate-500">Tooling mensual (USD)</label>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={assumptionsDraft.monthlyToolingUsd}
+                onChange={(e) =>
+                  setAssumptionsDraft((prev) => ({
+                    ...prev,
+                    monthlyToolingUsd: Number(e.target.value),
+                  }))
+                }
+                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-slate-500">Churn mensual asumido (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={99}
+                step={0.1}
+                value={(assumptionsDraft.assumedMonthlyChurnPct * 100).toFixed(1)}
+                onChange={(e) =>
+                  setAssumptionsDraft((prev) => ({
+                    ...prev,
+                    assumedMonthlyChurnPct: Number(e.target.value) / 100,
+                  }))
+                }
+                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-slate-500">Trial → Paid asumido (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={99}
+                step={0.1}
+                value={(assumptionsDraft.assumedTrialToPaidPct * 100).toFixed(1)}
+                onChange={(e) =>
+                  setAssumptionsDraft((prev) => ({
+                    ...prev,
+                    assumedTrialToPaidPct: Number(e.target.value) / 100,
+                  }))
+                }
+                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+          </div>
+        </section>
 
         {/* ── Tabla 1: Escalera de Valor ──────────────────────────────────── */}
         <section className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -1000,16 +1380,66 @@ export default function AdminPlansPage() {
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+            <div>
+              <h2 className="text-base font-semibold">Investor Metrics Pack</h2>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Resumen blended de revenue, costo y margen para revisión de pricing y futura narrativa de fundraising.
+              </p>
+            </div>
+            <a
+              href="/api/admin/plans/profitability/investor-pack?days=30&format=json"
+              className="inline-flex h-9 items-center rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            >
+              Descargar JSON
+            </a>
+          </div>
+
+          <div className="grid gap-3 px-5 py-4 sm:grid-cols-2 xl:grid-cols-6">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Usuarios activos</p>
+              <p className="mt-1 text-2xl font-bold">{investorSummary.activeUsers}</p>
+              <p className="mt-1 text-[11px] text-slate-400">{investorSummary.activePaidUsers} pagados · {investorSummary.freeUsers} free</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+              <p className="text-xs text-slate-500 dark:text-slate-400">MRR run-rate</p>
+              <p className="mt-1 text-2xl font-bold">{formatUsd(investorSummary.mrrRunRateUsd)}</p>
+              <p className="mt-1 text-[11px] text-slate-400">ARR {formatUsd(investorSummary.arrRunRateUsd)}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Costo mensual run-rate</p>
+              <p className="mt-1 text-2xl font-bold">{formatUsd(investorSummary.costRunRateUsd)}</p>
+              <p className="mt-1 text-[11px] text-slate-400">a tope {formatUsd(investorSummary.projectedCostAtCapsUsd)}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Margen blended</p>
+              <p className="mt-1 text-2xl font-bold">{formatMarginPct(investorSummary.blendedGrossMarginPct)}</p>
+              <p className="mt-1 text-[11px] text-slate-400">meta {formatMarginPct(businessAssumptions.targetGrossMarginPct)}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Margen blended a tope</p>
+              <p className="mt-1 text-2xl font-bold">{formatMarginPct(investorSummary.projectedBlendedGrossMarginPct)}</p>
+              <p className="mt-1 text-[11px] text-slate-400">churn {formatMarginPct(businessAssumptions.assumedMonthlyChurnPct)}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Usuarios en alerta</p>
+              <p className="mt-1 text-2xl font-bold">{investorSummary.atRiskUsers}</p>
+              <p className="mt-1 text-[11px] text-slate-400">{investorSummary.unprofitableUsers} no rentables · payback {businessAssumptions.targetPaybackMonths}m</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800">
             <div>
               <h2 className="text-base font-semibold">Rentabilidad por Plan</h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Costos reales mensualizados vs. precio y topes actuales del plan.
+                Costos mensualizados, fee de cobro, fijo compartido y recomendaciones concretas por plan.
               </p>
             </div>
             <button
               type="button"
-              onClick={() => void loadProfitability()}
+              onClick={() => void Promise.all([loadProfitability(), loadScenarios()])}
               disabled={profitabilityLoading}
               className="h-9 px-3 rounded-lg border border-slate-300 bg-white text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
             >
@@ -1034,12 +1464,12 @@ export default function AdminPlansPage() {
                     <th className="px-4 py-3 text-right font-semibold">Usuarios</th>
                     <th className="px-4 py-3 text-right font-semibold">Precio</th>
                     <th className="px-4 py-3 text-right font-semibold">Costo prom./mes</th>
-                    <th className="px-4 py-3 text-right font-semibold">P95 costo/mes</th>
                     <th className="px-4 py-3 text-right font-semibold">Margen actual</th>
-                    <th className="px-4 py-3 text-right font-semibold">Margen proyectado</th>
+                    <th className="px-4 py-3 text-right font-semibold">Margen P95</th>
+                    <th className="px-4 py-3 text-right font-semibold">Proyección a tope</th>
                     <th className="px-4 py-3 text-right font-semibold">Límites recomendados</th>
-                    <th className="px-4 py-3 text-right font-semibold">Costo a tope</th>
                     <th className="px-4 py-3 text-center font-semibold">Estado</th>
+                    <th className="px-4 py-3 text-left font-semibold">Recomendación</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -1056,15 +1486,24 @@ export default function AdminPlansPage() {
                       <td className="px-4 py-3 text-right">
                         <p className="tabular-nums font-semibold">{formatUsd(plan.avg_monthly_total_cost_per_user_usd)}</p>
                         <p className="text-[10px] text-slate-400">
-                          IA {formatUsd(plan.avg_monthly_ai_cost_per_user_usd)} + storage {formatUsd(plan.avg_monthly_storage_cost_per_user_usd)}
+                          var {formatUsd(plan.avg_monthly_variable_cost_per_user_usd)} · fee {formatUsd(plan.payment_fee_monthly_usd)}
+                        </p>
+                        <p className="text-[10px] text-slate-400">
+                          fijo plan {formatUsd(plan.estimated_monthly_fixed_cost_usd)} · compartido {formatUsd(plan.allocated_shared_fixed_cost_per_user_usd)}
                         </p>
                       </td>
-                      <td className="px-4 py-3 text-right tabular-nums">{formatUsd(plan.p95_monthly_total_cost_per_user_usd)}</td>
                       <td className="px-4 py-3 text-right">
                         <p className="tabular-nums font-semibold">{formatMarginPct(plan.actual_gross_margin_pct)}</p>
                         <p className="text-[10px] text-slate-400">meta {formatMarginPct(plan.target_gross_margin_pct)}</p>
                       </td>
-                      <td className="px-4 py-3 text-right tabular-nums">{formatMarginPct(plan.projected_gross_margin_pct)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <p className="tabular-nums font-semibold">{formatMarginPct(plan.p95_gross_margin_pct)}</p>
+                        <p className="text-[10px] text-slate-400">{formatUsd(plan.p95_monthly_total_cost_per_user_usd)} costo/mes</p>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <p className="tabular-nums font-semibold">{formatMarginPct(plan.projected_gross_margin_pct)}</p>
+                        <p className="text-[10px] text-slate-400">{formatUsd(plan.projected_cost_at_current_caps_usd)} costo a tope</p>
+                      </td>
                       <td className="px-4 py-3 text-right">
                         <p className="tabular-nums">
                           {plan.recommended_extractions_per_day ?? 'N/A'} extr./día
@@ -1072,11 +1511,8 @@ export default function AdminPlansPage() {
                         <p className="text-[10px] text-slate-400">
                           {plan.recommended_chat_tokens_per_day?.toLocaleString('es-MX') ?? 'N/A'} tok./día
                         </p>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <p className="tabular-nums font-semibold">{formatUsd(plan.projected_cost_at_current_caps_usd)}</p>
                         <p className="text-[10px] text-slate-400">
-                          actual {plan.current_extractions_per_day} extr. / {plan.current_chat_tokens_per_day.toLocaleString('es-MX')} tok.
+                          {formatStorageBytes(plan.recommended_storage_limit_bytes)} storage · presión {plan.upgrade_pressure_score}/100
                         </p>
                       </td>
                       <td className="px-4 py-3 text-center">
@@ -1090,6 +1526,101 @@ export default function AdminPlansPage() {
                           </span>
                           <p className="text-[10px] text-slate-400">
                             {plan.unprofitable_users} no rent. · {plan.at_risk_users} riesgo
+                          </p>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="space-y-1.5">
+                          <span className={cls('inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold', recommendationBadge(plan.scenario_recommendation))}>
+                            {recommendationLabel(plan.scenario_recommendation)}
+                          </span>
+                          <p className="max-w-xs text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                            {plan.scenario_reason}
+                          </p>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+            <div>
+              <h2 className="text-base font-semibold">Escenarios sugeridos</h2>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Comparativa de ajustes conservadores y recomendados para precio, tokens, extracciones y storage.
+              </p>
+            </div>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              Churn asumido {(businessAssumptions.assumedMonthlyChurnPct * 100).toFixed(1)}% · Trial→Paid {(businessAssumptions.assumedTrialToPaidPct * 100).toFixed(1)}%
+            </span>
+          </div>
+
+          {scenarios.length === 0 ? (
+            <div className="px-5 py-8 text-sm text-slate-500 dark:text-slate-400">
+              No hay escenarios calculados todavía.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 text-xs uppercase tracking-wider text-slate-400 dark:border-slate-800 dark:text-slate-500">
+                    <th className="px-5 py-3 text-left font-semibold">Plan</th>
+                    <th className="px-4 py-3 text-left font-semibold">Preset</th>
+                    <th className="px-4 py-3 text-right font-semibold">Precio</th>
+                    <th className="px-4 py-3 text-right font-semibold">Extr./día</th>
+                    <th className="px-4 py-3 text-right font-semibold">Chat/día</th>
+                    <th className="px-4 py-3 text-right font-semibold">Storage</th>
+                    <th className="px-4 py-3 text-right font-semibold">Costo proj.</th>
+                    <th className="px-4 py-3 text-right font-semibold">Margen proj.</th>
+                    <th className="px-4 py-3 text-left font-semibold">Acción</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {scenarios.map((scenario) => (
+                    <tr key={`${scenario.plan_id}-${scenario.preset}`}>
+                      <td className="px-5 py-3">
+                        <div>
+                          <p className="font-semibold text-slate-900 dark:text-slate-100">{scenario.plan_display_name}</p>
+                          <p className="text-xs font-mono text-slate-400">{scenario.plan_name}</p>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                          {scenario.label}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <p className="tabular-nums font-semibold">{formatUsd(scenario.scenario_price_monthly_usd)}</p>
+                        <p className="text-[10px] text-slate-400">actual {formatUsd(scenario.current_price_monthly_usd)}</p>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <p className="tabular-nums font-semibold">{scenario.scenario_extractions_per_day}</p>
+                        <p className="text-[10px] text-slate-400">actual {scenario.current_extractions_per_day}</p>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <p className="tabular-nums font-semibold">{scenario.scenario_chat_tokens_per_day.toLocaleString('es-MX')}</p>
+                        <p className="text-[10px] text-slate-400">actual {scenario.current_chat_tokens_per_day.toLocaleString('es-MX')}</p>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <p className="tabular-nums font-semibold">{formatStorageBytes(scenario.scenario_storage_limit_bytes)}</p>
+                        <p className="text-[10px] text-slate-400">actual {formatStorageBytes(scenario.current_storage_limit_bytes)}</p>
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums font-semibold">{formatUsd(scenario.scenario_projected_cost_usd)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <p className="tabular-nums font-semibold">{formatMarginPct(scenario.scenario_projected_margin_pct)}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="space-y-1.5">
+                          <span className={cls('inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold', recommendationBadge(scenario.recommendation))}>
+                            {recommendationLabel(scenario.recommendation)}
+                          </span>
+                          <p className="max-w-xs text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                            {scenario.reason}
                           </p>
                         </div>
                       </td>

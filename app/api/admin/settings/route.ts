@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest, isAdminEmail } from '@/lib/auth'
-import { getAppSetting, upsertAppSetting } from '@/lib/db'
+import { getAppSetting, getBusinessAssumptions, upsertAppSetting, upsertBusinessAssumptions } from '@/lib/db'
 import {
   type AiProvider,
   PROVIDER_MODELS,
@@ -9,6 +9,7 @@ import {
   MODEL_LABELS,
   isValidProviderModel,
 } from '@/lib/ai-client'
+import { type BusinessAssumptions, normalizeBusinessAssumptions } from '@/lib/profitability'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -41,11 +42,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Acceso denegado.' }, { status: 403 })
   }
 
-  const [extractionProvider, extractionModel, chatProvider, chatModel] = await Promise.all([
+  const [extractionProvider, extractionModel, chatProvider, chatModel, businessAssumptions] = await Promise.all([
     getAppSetting('extraction_provider'),
     getAppSetting('extraction_model'),
     getAppSetting('chat_provider'),
     getAppSetting('chat_model'),
+    getBusinessAssumptions(),
   ])
 
   const resolvedExtractionProvider = isValidProvider(extractionProvider)
@@ -74,6 +76,7 @@ export async function GET(req: NextRequest) {
       chatProvider: DEFAULT_CHAT_PROVIDER,
       chatModel: DEFAULT_CHAT_MODEL,
     },
+    businessAssumptions,
   })
 }
 
@@ -93,11 +96,12 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'Body JSON inválido.' }, { status: 400 })
   }
 
-  const { extractionProvider, extractionModel, chatProvider, chatModel } = body as {
+  const { extractionProvider, extractionModel, chatProvider, chatModel, businessAssumptions } = body as {
     extractionProvider?: unknown
     extractionModel?: unknown
     chatProvider?: unknown
     chatModel?: unknown
+    businessAssumptions?: unknown
   }
 
   const updates: Array<Promise<void>> = []
@@ -164,18 +168,30 @@ export async function PATCH(req: NextRequest) {
     updates.push(upsertAppSetting('chat_model', newChatModel))
   }
 
+  if (businessAssumptions !== undefined) {
+    if (!businessAssumptions || typeof businessAssumptions !== 'object' || Array.isArray(businessAssumptions)) {
+      return NextResponse.json({ error: 'businessAssumptions debe ser un objeto.' }, { status: 400 })
+    }
+    updates.push(
+      upsertBusinessAssumptions(
+        normalizeBusinessAssumptions(businessAssumptions as Partial<BusinessAssumptions>)
+      ).then(() => undefined)
+    )
+  }
+
   if (updates.length === 0) {
     return NextResponse.json({ error: 'No se proporcionó ningún cambio.' }, { status: 400 })
   }
 
   await Promise.all(updates)
 
-  const [savedExtractionProvider, savedExtractionModel, savedChatProvider, savedChatModel] =
+  const [savedExtractionProvider, savedExtractionModel, savedChatProvider, savedChatModel, savedBusinessAssumptions] =
     await Promise.all([
       getAppSetting('extraction_provider'),
       getAppSetting('extraction_model'),
       getAppSetting('chat_provider'),
       getAppSetting('chat_model'),
+      getBusinessAssumptions(),
     ])
 
   return NextResponse.json({
@@ -183,5 +199,6 @@ export async function PATCH(req: NextRequest) {
     extractionModel: savedExtractionModel || DEFAULT_EXTRACTION_MODEL,
     chatProvider: savedChatProvider || DEFAULT_CHAT_PROVIDER,
     chatModel: savedChatModel || DEFAULT_CHAT_MODEL,
+    businessAssumptions: savedBusinessAssumptions,
   })
 }
