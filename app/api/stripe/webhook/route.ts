@@ -3,7 +3,9 @@ import type Stripe from 'stripe'
 import { stripe, planFromPriceId, PLAN_LIMITS, CREDIT_PACK_AMOUNTS } from '@/lib/stripe'
 import {
   getUserByStripeCustomerId,
-  logStripeEvent,
+  claimStripeEventProcessing,
+  markStripeEventProcessed,
+  releaseStripeEventProcessing,
   setUserStripeCustomerId,
   upsertUserActivePlan,
   deactivateUserPlan,
@@ -26,6 +28,11 @@ function extractPeriodDates(sub: any): { periodStart: Date | null; periodEnd: Da
   }
 }
 
+async function acknowledgeProcessedEvent(eventId: string) {
+  await markStripeEventProcessed(eventId)
+  return NextResponse.json({ received: true })
+}
+
 export async function POST(req: NextRequest) {
   const rawBody = await req.text()
   const sig = req.headers.get('stripe-signature') ?? ''
@@ -39,8 +46,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Webhook error: ${message}` }, { status: 400 })
   }
 
-  // Idempotency guard — skip already-processed events
-  await logStripeEvent(event.id, event.type, null, rawBody)
+  const claimed = await claimStripeEventProcessing(event.id, event.type, null, rawBody)
+  if (!claimed) {
+    return NextResponse.json({ received: true })
+  }
 
   try {
     if (event.type === 'checkout.session.completed') {
@@ -48,7 +57,7 @@ export async function POST(req: NextRequest) {
       const userId = session.metadata?.userId
 
       if (!userId) {
-        return NextResponse.json({ received: true })
+        return acknowledgeProcessedEvent(event.id)
       }
 
       // Credit pack purchase (one-time payment)
@@ -56,15 +65,19 @@ export async function POST(req: NextRequest) {
         const packId = session.metadata?.packId ?? ''
         const amount = CREDIT_PACK_AMOUNTS[packId] ?? 0
         if (amount > 0) {
-          await addUserCredits(userId, amount, 'purchase', session.id)
-          console.log(`[Stripe] checkout.session.completed — user ${userId} → ${amount} credits (${packId})`)
+          const creditResult = await addUserCredits(userId, amount, 'purchase', session.id)
+          if (creditResult.applied) {
+            console.log(`[Stripe] checkout.session.completed — user ${userId} → ${amount} credits (${packId})`)
+          } else {
+            console.log(`[Stripe] checkout.session.completed duplicate ignored — session ${session.id}`)
+          }
         }
-        return NextResponse.json({ received: true })
+        return acknowledgeProcessedEvent(event.id)
       }
 
       // Subscription purchase
       if (!session.subscription || !session.customer) {
-        return NextResponse.json({ received: true })
+        return acknowledgeProcessedEvent(event.id)
       }
 
       const subscriptionId =
@@ -78,7 +91,7 @@ export async function POST(req: NextRequest) {
       const plan = planFromPriceId(priceId)
       if (!plan) {
         console.error(`[Stripe] checkout.session.completed — unrecognized price ID: ${priceId} for user ${userId} — no plan assigned`)
-        return NextResponse.json({ received: true })
+        return acknowledgeProcessedEvent(event.id)
       }
       const extractionsPerHour = PLAN_LIMITS[plan] ?? 40
       const { periodStart, periodEnd } = extractPeriodDates(subscription)
@@ -103,14 +116,14 @@ export async function POST(req: NextRequest) {
 
       const user = await getUserByStripeCustomerId(customerId)
       if (!user) {
-        return NextResponse.json({ received: true })
+        return acknowledgeProcessedEvent(event.id)
       }
 
       const priceId = subscription.items?.data[0]?.price?.id ?? ''
       const plan = planFromPriceId(priceId)
       if (!plan) {
         console.error(`[Stripe] subscription.updated — unrecognized price ID: ${priceId} for customer ${customerId} — no plan assigned`)
-        return NextResponse.json({ received: true })
+        return acknowledgeProcessedEvent(event.id)
       }
       const extractionsPerHour = PLAN_LIMITS[plan] ?? 40
       const status: string = subscription.status
@@ -139,14 +152,16 @@ export async function POST(req: NextRequest) {
 
       const user = await getUserByStripeCustomerId(customerId)
       if (!user) {
-        return NextResponse.json({ received: true })
+        return acknowledgeProcessedEvent(event.id)
       }
 
       await deactivateUserPlan(user.id, subscription.id)
       console.log(`[Stripe] subscription.deleted — user ${user.id} downgraded to free`)
     }
+    await markStripeEventProcessed(event.id)
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
+    await releaseStripeEventProcessing(event.id, message)
     console.error('[Stripe] Webhook handler error:', message)
     return NextResponse.json({ error: 'Webhook handler error' }, { status: 500 })
   }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { Pool } from 'pg'
+import { Pool, type PoolClient } from 'pg'
 import {
   writeTaskStatusCatalogToMetadataJson,
   type BuiltInTaskStatus,
@@ -1917,9 +1917,15 @@ const INIT_SQL = `
     event_type TEXT NOT NULL,
     user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
     processed BOOLEAN NOT NULL DEFAULT FALSE,
+    processing BOOLEAN NOT NULL DEFAULT FALSE,
+    processed_at TIMESTAMPTZ,
+    last_error TEXT,
     raw_json TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
+  ALTER TABLE stripe_events ADD COLUMN IF NOT EXISTS processing BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE stripe_events ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ;
+  ALTER TABLE stripe_events ADD COLUMN IF NOT EXISTS last_error TEXT;
   CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_events(event_type);
 
   -- Plan catalog (admin-managed)
@@ -2057,6 +2063,8 @@ const INIT_SQL = `
   );
   CREATE INDEX IF NOT EXISTS idx_credit_transactions_user ON credit_transactions(user_id);
   CREATE INDEX IF NOT EXISTS idx_credit_transactions_created ON credit_transactions(created_at DESC);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_transactions_stripe_session_id
+    ON credit_transactions(stripe_session_id) WHERE stripe_session_id IS NOT NULL;
 
   -- ── Schema migrations for daily limits ───────────────────────────────────
   ALTER TABLE plans ADD COLUMN IF NOT EXISTS extractions_per_day INT NOT NULL DEFAULT 3;
@@ -2174,7 +2182,7 @@ const INIT_SQL = `
   ALTER TABLE user_storage ADD COLUMN IF NOT EXISTS storage_limit_override_bytes BIGINT;
 `
 
-const DB_INIT_SIGNATURE = '2026-03-14-playbook-clone-permission-v1'
+const DB_INIT_SIGNATURE = '2026-03-17-hardening-v1'
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -4204,7 +4212,8 @@ export async function findExtractionAccessForUser(input: { id: string; userId: s
               AND fm.folder_id IN (SELECT id FROM folder_ancestors)
             LIMIT 1
           ) THEN 'viewer'
-          WHEN e.share_visibility = 'circle' THEN m.role
+          WHEN e.share_visibility = 'circle' AND m.role IS NOT NULL THEN m.role
+          WHEN e.share_visibility IN ('public', 'unlisted') THEN 'viewer'
           ELSE NULL
         END AS access_role
       FROM extractions e
@@ -11953,22 +11962,106 @@ export async function getUserStripeCustomerId(userId: string): Promise<string | 
   return rows[0]?.stripe_customer_id ?? null
 }
 
-export async function logStripeEvent(
+export async function claimStripeEventProcessing(
   id: string,
   eventType: string,
   userId: string | null,
   rawJson: string
-): Promise<void> {
+): Promise<boolean> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ id: string }>(
+    `
+      INSERT INTO stripe_events (id, event_type, user_id, raw_json, processing, processed, last_error)
+      VALUES ($1, $2, $3, $4, TRUE, FALSE, NULL)
+      ON CONFLICT (id) DO UPDATE
+      SET
+        event_type = EXCLUDED.event_type,
+        user_id = COALESCE(EXCLUDED.user_id, stripe_events.user_id),
+        raw_json = EXCLUDED.raw_json,
+        processing = CASE
+          WHEN stripe_events.processed = FALSE AND stripe_events.processing = FALSE THEN TRUE
+          ELSE stripe_events.processing
+        END,
+        last_error = CASE
+          WHEN stripe_events.processed = FALSE AND stripe_events.processing = FALSE THEN NULL
+          ELSE stripe_events.last_error
+        END
+      WHERE stripe_events.processed = FALSE AND stripe_events.processing = FALSE
+      RETURNING id
+    `,
+    [id, eventType, userId, rawJson]
+  )
+  return rows.length > 0
+}
+
+export async function markStripeEventProcessed(id: string): Promise<void> {
   await ensureDbReady()
   await pool.query(
-    `INSERT INTO stripe_events (id, event_type, user_id, raw_json)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (id) DO NOTHING`,
-    [id, eventType, userId, rawJson]
+    `UPDATE stripe_events
+     SET processed = TRUE, processing = FALSE, processed_at = NOW(), last_error = NULL
+     WHERE id = $1`,
+    [id]
+  )
+}
+
+export async function releaseStripeEventProcessing(id: string, message: string): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `UPDATE stripe_events
+     SET processing = FALSE, last_error = $2
+     WHERE id = $1`,
+    [id, message.slice(0, 2000)]
   )
 }
 
 // ── Daily extraction limits + credits ──────────────────────────────────────
+
+function getUtcDateParts(reference = new Date()) {
+  const year = reference.getUTCFullYear()
+  const month = String(reference.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(reference.getUTCDate()).padStart(2, '0')
+  const today = `${year}-${month}-${day}`
+  const resetDate = new Date(Date.UTC(year, reference.getUTCMonth(), reference.getUTCDate() + 1))
+  return {
+    today,
+    reset_at: resetDate.toISOString(),
+  }
+}
+
+async function getActivePlanSnapshotForUpdate(client: PoolClient, userId: string) {
+  const [planResult, activePlanResult] = await Promise.all([
+    client.query<{ extractions_per_day: number | string | null }>(
+      `
+        SELECT p.extractions_per_day
+        FROM user_plans up
+        LEFT JOIN plans p ON p.name = up.plan
+        WHERE up.user_id = $1 AND up.status = 'active'
+        LIMIT 1
+      `,
+      [userId]
+    ),
+    client.query<{ id: string; extra_credits: number | string | null }>(
+      `
+        SELECT id, extra_credits
+        FROM user_plans
+        WHERE user_id = $1 AND status = 'active'
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [userId]
+    ),
+  ])
+
+  return {
+    limit: planResult.rows[0]?.extractions_per_day != null
+      ? parseDbInteger(planResult.rows[0].extractions_per_day)
+      : 3,
+    activePlanId: activePlanResult.rows[0]?.id ?? null,
+    extraCredits: activePlanResult.rows[0]
+      ? parseDbInteger(activePlanResult.rows[0].extra_credits ?? 0)
+      : 0,
+  }
+}
 
 export async function getUserDailyLimit(userId: string): Promise<number> {
   await ensureDbReady()
@@ -11988,7 +12081,7 @@ export async function getUserDailyLimit(userId: string): Promise<number> {
 export async function getDailyExtractionSnapshot(userId: string): Promise<DailyExtractionSnapshot> {
   await ensureDbReady()
   const limit = await getUserDailyLimit(userId)
-  const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD in UTC
+  const { today, reset_at } = getUtcDateParts()
 
   const [countResult, creditsResult] = await Promise.all([
     pool.query<DbDailyExtractionCountRow>(
@@ -12003,11 +12096,6 @@ export async function getDailyExtractionSnapshot(userId: string): Promise<DailyE
 
   const used = countResult.rows[0] ? parseDbInteger(countResult.rows[0].count) : 0
   const extra_credits = creditsResult.rows[0] ? parseDbInteger(creditsResult.rows[0].extra_credits ?? 0) : 0
-
-  // Reset is next UTC midnight
-  const resetDate = new Date(today)
-  resetDate.setUTCDate(resetDate.getUTCDate() + 1)
-  const reset_at = resetDate.toISOString()
 
   return {
     limit,
@@ -12024,30 +12112,110 @@ export async function consumeDailyExtraction(userId: string): Promise<{
   snapshot: DailyExtractionSnapshot
 }> {
   await ensureDbReady()
-  const snapshot = await getDailyExtractionSnapshot(userId)
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
 
-  if (snapshot.used < snapshot.limit) {
-    // Within daily quota — increment count
-    const today = new Date().toISOString().slice(0, 10)
-    await pool.query(
+    const { today, reset_at } = getUtcDateParts()
+    const planSnapshot = await getActivePlanSnapshotForUpdate(client, userId)
+
+    await client.query(
       `INSERT INTO daily_extraction_counts (user_id, date, count)
-       VALUES ($1, $2, 1)
-       ON CONFLICT (user_id, date)
-       DO UPDATE SET count = daily_extraction_counts.count + 1, updated_at = NOW()`,
+       VALUES ($1, $2, 0)
+       ON CONFLICT (user_id, date) DO NOTHING`,
       [userId, today]
     )
-    const updatedSnapshot = { ...snapshot, used: snapshot.used + 1, remaining: Math.max(0, snapshot.remaining - 1) }
-    return { allowed: true, used_credit: false, snapshot: updatedSnapshot }
-  }
 
-  if (snapshot.extra_credits > 0) {
-    // Use a credit
-    await consumeUserCredit(userId)
-    const updatedSnapshot = { ...snapshot, extra_credits: snapshot.extra_credits - 1 }
-    return { allowed: true, used_credit: true, snapshot: updatedSnapshot }
-  }
+    const countResult = await client.query<DbDailyExtractionCountRow>(
+      `
+        SELECT date, count
+        FROM daily_extraction_counts
+        WHERE user_id = $1 AND date = $2
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [userId, today]
+    )
 
-  return { allowed: false, used_credit: false, snapshot }
+    const used = countResult.rows[0] ? parseDbInteger(countResult.rows[0].count) : 0
+
+    if (used < planSnapshot.limit) {
+      const updatedCountResult = await client.query<{ count: number | string }>(
+        `
+          UPDATE daily_extraction_counts
+          SET count = count + 1, updated_at = NOW()
+          WHERE user_id = $1 AND date = $2
+          RETURNING count
+        `,
+        [userId, today]
+      )
+
+      const nextUsed = parseDbInteger(updatedCountResult.rows[0]?.count ?? used + 1)
+      await client.query('COMMIT')
+      return {
+        allowed: true,
+        used_credit: false,
+        snapshot: {
+          limit: planSnapshot.limit,
+          used: nextUsed,
+          remaining: Math.max(0, planSnapshot.limit - nextUsed),
+          extra_credits: planSnapshot.extraCredits,
+          reset_at,
+        },
+      }
+    }
+
+    if (planSnapshot.activePlanId && planSnapshot.extraCredits > 0) {
+      const updatedCreditsResult = await client.query<{ extra_credits: number | string }>(
+        `
+          UPDATE user_plans
+          SET extra_credits = extra_credits - 1, updated_at = NOW()
+          WHERE id = $1 AND extra_credits > 0
+          RETURNING extra_credits
+        `,
+        [planSnapshot.activePlanId]
+      )
+
+      if (updatedCreditsResult.rows[0]) {
+        const remainingCredits = parseDbInteger(updatedCreditsResult.rows[0].extra_credits)
+        await client.query(
+          `INSERT INTO credit_transactions (id, user_id, amount, reason)
+           VALUES ($1, $2, -1, 'consumed')`,
+          [randomUUID(), userId]
+        )
+        await client.query('COMMIT')
+        return {
+          allowed: true,
+          used_credit: true,
+          snapshot: {
+            limit: planSnapshot.limit,
+            used,
+            remaining: 0,
+            extra_credits: remainingCredits,
+            reset_at,
+          },
+        }
+      }
+    }
+
+    await client.query('COMMIT')
+    return {
+      allowed: false,
+      used_credit: false,
+      snapshot: {
+        limit: planSnapshot.limit,
+        used,
+        remaining: Math.max(0, planSnapshot.limit - used),
+        extra_credits: planSnapshot.extraCredits,
+        reset_at,
+      },
+    }
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined)
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 export async function getUserCreditBalance(userId: string): Promise<number> {
@@ -12061,18 +12229,46 @@ export async function getUserCreditBalance(userId: string): Promise<number> {
 
 export async function consumeUserCredit(userId: string): Promise<void> {
   await ensureDbReady()
-  const txId = randomUUID()
-  await pool.query(
-    `UPDATE user_plans
-     SET extra_credits = GREATEST(0, extra_credits - 1), updated_at = NOW()
-     WHERE user_id = $1 AND status = 'active' AND extra_credits > 0`,
-    [userId]
-  )
-  await pool.query(
-    `INSERT INTO credit_transactions (id, user_id, amount, reason)
-     VALUES ($1, $2, -1, 'consumed')`,
-    [txId, userId]
-  )
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const { rows } = await client.query<{ id: string; extra_credits: number | string | null }>(
+      `
+        SELECT id, extra_credits
+        FROM user_plans
+        WHERE user_id = $1 AND status = 'active'
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [userId]
+    )
+
+    const activePlanId = rows[0]?.id ?? null
+    const balance = rows[0] ? parseDbInteger(rows[0].extra_credits ?? 0) : 0
+    if (!activePlanId || balance <= 0) {
+      throw new Error('No hay créditos disponibles para consumir.')
+    }
+
+    await client.query(
+      `
+        UPDATE user_plans
+        SET extra_credits = extra_credits - 1, updated_at = NOW()
+        WHERE id = $1
+      `,
+      [activePlanId]
+    )
+    await client.query(
+      `INSERT INTO credit_transactions (id, user_id, amount, reason)
+       VALUES ($1, $2, -1, 'consumed')`,
+      [randomUUID(), userId]
+    )
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined)
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 export async function addUserCredits(
@@ -12080,24 +12276,55 @@ export async function addUserCredits(
   amount: number,
   reason: string,
   stripeSessionId?: string
-): Promise<void> {
+): Promise<{ applied: boolean }> {
   await ensureDbReady()
-  const txId = randomUUID()
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
 
-  // Ensure user has a plan row (upsert free plan if missing)
-  await pool.query(
-    `INSERT INTO user_plans (id, user_id, plan, extractions_per_hour, extra_credits, status)
-     VALUES ($1, $2, 'free', 12, $3, 'active')
-     ON CONFLICT (user_id) WHERE status = 'active'
-     DO UPDATE SET extra_credits = user_plans.extra_credits + $3, updated_at = NOW()`,
-    [randomUUID(), userId, amount]
-  )
+    const txId = randomUUID()
+    let transactionInserted = true
 
-  await pool.query(
-    `INSERT INTO credit_transactions (id, user_id, amount, reason, stripe_session_id)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [txId, userId, amount, reason, stripeSessionId ?? null]
-  )
+    if (stripeSessionId) {
+      const insertTxResult = await client.query<{ id: string }>(
+        `
+          INSERT INTO credit_transactions (id, user_id, amount, reason, stripe_session_id)
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (stripe_session_id) WHERE stripe_session_id IS NOT NULL DO NOTHING
+          RETURNING id
+        `,
+        [txId, userId, amount, reason, stripeSessionId]
+      )
+      transactionInserted = insertTxResult.rows.length > 0
+    } else {
+      await client.query(
+        `INSERT INTO credit_transactions (id, user_id, amount, reason, stripe_session_id)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [txId, userId, amount, reason, null]
+      )
+    }
+
+    if (!transactionInserted) {
+      await client.query('ROLLBACK')
+      return { applied: false }
+    }
+
+    await client.query(
+      `INSERT INTO user_plans (id, user_id, plan, extractions_per_hour, extra_credits, status)
+       VALUES ($1, $2, 'free', 12, $3, 'active')
+       ON CONFLICT (user_id) WHERE status = 'active'
+       DO UPDATE SET extra_credits = user_plans.extra_credits + $3, updated_at = NOW()`,
+      [randomUUID(), userId, amount]
+    )
+
+    await client.query('COMMIT')
+    return { applied: true }
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined)
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 export async function listUserCreditTransactions(userId: string, limit = 10): Promise<DbCreditTransaction[]> {

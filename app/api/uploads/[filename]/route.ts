@@ -14,9 +14,6 @@ export async function GET(
   { params }: { params: { filename: string } }
 ) {
   const user = await getUserFromRequest(req)
-  if (!user) {
-    return NextResponse.json({ error: 'No autorizado.' }, { status: 401 })
-  }
 
   const filename = params.filename
   // Prevent path traversal
@@ -26,46 +23,62 @@ export async function GET(
 
   // Verify the file belongs to this user
   await ensureDbReady()
-  const { rows } = await pool.query<{ source_file_mime_type: string | null; source_file_name: string | null }>(
+  const { rows } = await pool.query<{
+    source_file_mime_type: string | null
+    source_file_name: string | null
+    share_visibility: string | null
+  }>(
     `
-      SELECT source_file_mime_type, source_file_name
+      SELECT source_file_mime_type, source_file_name, share_visibility
       FROM (
         SELECT
           e.source_file_mime_type,
-          e.source_file_name
+          e.source_file_name,
+          e.share_visibility
         FROM extractions e
         WHERE
           e.source_file_url = $2
           AND (
-            e.user_id = $1
-            OR e.share_visibility IN ('public', 'unlisted')
-            OR EXISTS (
-              SELECT 1
-              FROM extraction_members m
-              WHERE m.extraction_id = e.id AND m.user_id = $1
+            e.share_visibility IN ('public', 'unlisted')
+            OR (
+              $1 IS NOT NULL
+              AND (
+                e.user_id = $1
+                OR EXISTS (
+                  SELECT 1
+                  FROM extraction_members m
+                  WHERE m.extraction_id = e.id AND m.user_id = $1
+                )
+              )
             )
           )
         UNION ALL
         SELECT
           s.source_file_mime_type,
-          s.source_file_name
+          s.source_file_name,
+          e.share_visibility
         FROM extraction_additional_sources s
         INNER JOIN extractions e ON e.id = s.extraction_id
         WHERE
           s.source_file_url = $2
           AND (
-            e.user_id = $1
-            OR e.share_visibility IN ('public', 'unlisted')
-            OR EXISTS (
-              SELECT 1
-              FROM extraction_members m
-              WHERE m.extraction_id = e.id AND m.user_id = $1
+            e.share_visibility IN ('public', 'unlisted')
+            OR (
+              $1 IS NOT NULL
+              AND (
+                e.user_id = $1
+                OR EXISTS (
+                  SELECT 1
+                  FROM extraction_members m
+                  WHERE m.extraction_id = e.id AND m.user_id = $1
+                )
+              )
             )
           )
       ) AS files
       LIMIT 1
     `,
-    [user.id, `/api/uploads/${filename}`]
+    [user?.id ?? null, `/api/uploads/${filename}`]
   )
 
   if (!rows[0]) {
@@ -80,6 +93,7 @@ export async function GET(
   const fileBuffer = fs.readFileSync(filePath)
   const mimeType = rows[0].source_file_mime_type ?? 'application/octet-stream'
   const originalName = rows[0].source_file_name ?? filename
+  const isPublicFile = rows[0].share_visibility === 'public' || rows[0].share_visibility === 'unlisted'
 
   return new NextResponse(fileBuffer, {
     status: 200,
@@ -87,7 +101,7 @@ export async function GET(
       'Content-Type': mimeType,
       'Content-Disposition': `attachment; filename="${encodeURIComponent(originalName)}"`,
       'Content-Length': String(fileBuffer.length),
-      'Cache-Control': 'private, max-age=3600',
+      'Cache-Control': isPublicFile ? 'public, max-age=3600' : 'private, max-age=3600',
     },
   })
 }

@@ -18,6 +18,8 @@ const CREDIT_PACKS: Array<{ id: string; label: string; credits: number; price: s
   { id: 'pack_l', label: 'Pack L', credits: 50, price: '$12.99' },
 ]
 
+type CreditPackAvailability = Record<'pack_s' | 'pack_m' | 'pack_l', boolean>
+
 function formatDate(iso: string | null) {
   if (!iso) return ''
   return new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium' }).format(new Date(iso))
@@ -30,6 +32,11 @@ function PricingContent() {
   const { lang } = useLang()
 
   const [plans, setPlans] = useState<DbPlan[]>([])
+  const [creditPackAvailability, setCreditPackAvailability] = useState<CreditPackAvailability>({
+    pack_s: false,
+    pack_m: false,
+    pack_l: false,
+  })
   const [loadingPlans, setLoadingPlans] = useState(true)
   const [currentPlan, setCurrentPlan] = useState<PlanSnapshot | null>(null)
   const [checkingOut, setCheckingOut] = useState<string | null>(null)
@@ -40,8 +47,15 @@ function PricingContent() {
   useEffect(() => {
     fetch('/api/plans', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: { plans: DbPlan[] } | null) => {
+      .then((d: { plans: DbPlan[]; creditPacks?: Partial<CreditPackAvailability> } | null) => {
         if (d?.plans) setPlans(d.plans)
+        if (d?.creditPacks) {
+          setCreditPackAvailability({
+            pack_s: d.creditPacks.pack_s === true,
+            pack_m: d.creditPacks.pack_m === true,
+            pack_l: d.creditPacks.pack_l === true,
+          })
+        }
       })
       .catch(() => undefined)
       .finally(() => setLoadingPlans(false))
@@ -193,55 +207,68 @@ function PricingContent() {
           </div>
 
           <div className="grid gap-4 sm:grid-cols-3 max-w-2xl mx-auto">
-            {CREDIT_PACKS.map((pack) => (
-              <div
-                key={pack.id}
-                className={`relative flex flex-col rounded-2xl border bg-white p-5 shadow-sm dark:bg-slate-900 ${
-                  pack.popular
-                    ? 'border-indigo-400 ring-2 ring-indigo-500/20 dark:border-indigo-500'
-                    : 'border-slate-200 dark:border-slate-800'
-                }`}
-              >
-                {pack.popular && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                    <span className="rounded-full bg-indigo-600 px-3 py-0.5 text-xs font-semibold text-white">
-                      {t(lang, 'pricing.mostPopular')}
-                    </span>
-                  </div>
-                )}
+            {CREDIT_PACKS.map((pack) => {
+              const isAvailable = creditPackAvailability[pack.id as keyof CreditPackAvailability] === true
 
-                <div className="mb-3 flex items-center gap-2">
-                  <Zap size={16} className="text-amber-500 shrink-0" />
-                  <h3 className="font-bold text-sm">{pack.label}</h3>
-                </div>
-
-                <div className="mb-1 flex items-end gap-1">
-                  <span className="text-2xl font-extrabold">{pack.price}</span>
-                  <span className="mb-1 text-xs text-slate-500 dark:text-slate-400">{t(lang, 'pricing.oneTime')}</span>
-                </div>
-
-                <p className="mb-4 text-xs text-slate-500 dark:text-slate-400 flex-1">
-                  {pack.credits} {t(lang, 'pricing.creditsSuffix')}
-                </p>
-
-                <button
-                  type="button"
-                  onClick={() => void handleBuyCreditPack(pack.id)}
-                  disabled={!!buyingPack || !!checkingOut}
-                  className={`w-full rounded-lg py-2 text-xs font-semibold text-white transition-colors disabled:opacity-60 ${
-                    pack.popular ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-slate-700 hover:bg-slate-800'
+              return (
+                <div
+                  key={pack.id}
+                  className={`relative flex flex-col rounded-2xl border bg-white p-5 shadow-sm dark:bg-slate-900 ${
+                    pack.popular
+                      ? 'border-indigo-400 ring-2 ring-indigo-500/20 dark:border-indigo-500'
+                      : 'border-slate-200 dark:border-slate-800'
                   }`}
                 >
-                  {buyingPack === pack.id ? (
-                    <span className="inline-flex items-center gap-1.5 justify-center">
-                      <Loader2 size={12} className="animate-spin" /> {t(lang, 'pricing.redirecting')}
-                    </span>
-                  ) : (
-                    `${t(lang, 'pricing.buyCredits')} ${pack.credits} ${t(lang, 'pricing.creditsSuffix')}`
+                  {pack.popular && (
+                    <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                      <span className="rounded-full bg-indigo-600 px-3 py-0.5 text-xs font-semibold text-white">
+                        {t(lang, 'pricing.mostPopular')}
+                      </span>
+                    </div>
                   )}
-                </button>
-              </div>
-            ))}
+
+                  <div className="mb-3 flex items-center gap-2">
+                    <Zap size={16} className="text-amber-500 shrink-0" />
+                    <h3 className="font-bold text-sm">{pack.label}</h3>
+                  </div>
+
+                  <div className="mb-1 flex items-end gap-1">
+                    <span className="text-2xl font-extrabold">{pack.price}</span>
+                    <span className="mb-1 text-xs text-slate-500 dark:text-slate-400">{t(lang, 'pricing.oneTime')}</span>
+                  </div>
+
+                  <p className="mb-4 flex-1 text-xs text-slate-500 dark:text-slate-400">
+                    {pack.credits} {t(lang, 'pricing.creditsSuffix')}
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleBuyCreditPack(pack.id)}
+                    disabled={!isAvailable || !!buyingPack || !!checkingOut}
+                    className={`w-full rounded-lg py-2 text-xs font-semibold text-white transition-colors disabled:opacity-60 ${
+                      pack.popular ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-slate-700 hover:bg-slate-800'
+                    }`}
+                    title={!isAvailable ? t(lang, 'pricing.unavailable') : undefined}
+                  >
+                    {buyingPack === pack.id ? (
+                      <span className="inline-flex items-center justify-center gap-1.5">
+                        <Loader2 size={12} className="animate-spin" /> {t(lang, 'pricing.redirecting')}
+                      </span>
+                    ) : !isAvailable ? (
+                      t(lang, 'pricing.unavailable')
+                    ) : (
+                      `${t(lang, 'pricing.buyCredits')} ${pack.credits} ${t(lang, 'pricing.creditsSuffix')}`
+                    )}
+                  </button>
+
+                  {!isAvailable && (
+                    <p className="mt-2 text-center text-[11px] text-slate-400 dark:text-slate-500">
+                      {t(lang, 'pricing.creditPackNotConfigured')}
+                    </p>
+                  )}
+                </div>
+              )
+            })}
           </div>
 
           <p className="mt-6 text-center text-xs text-slate-400 dark:text-slate-500">

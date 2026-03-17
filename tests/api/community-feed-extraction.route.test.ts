@@ -68,11 +68,11 @@ describe('GET /api/community/feed/extractions/[extractionId]', () => {
     expect(dbMocks.listCommunityPostsByExtractionForUser).not.toHaveBeenCalled()
   })
 
-  it('permite acceso sin rol cuando la extracción es public/unlisted', async () => {
+  it('permite acceso viewer cuando la extracción es public/unlisted', async () => {
     authMocks.getUserFromRequest.mockResolvedValue({ id: 'u1' })
     dbMocks.findExtractionAccessForUser.mockResolvedValue({
       extraction: { id: 'ext-1', share_visibility: 'public' },
-      role: null,
+      role: 'viewer',
     })
     dbMocks.listCommunityPostsByExtractionForUser.mockResolvedValue([])
 

@@ -143,10 +143,7 @@ async function resolveCommunityAccess(input: {
     return { ok: false as const, status: 404 as const, error: 'No se encontró la extracción solicitada.' }
   }
 
-  const isPublicLinkVisibility =
-    extraction.share_visibility === 'public' || extraction.share_visibility === 'unlisted'
-  const hasCircleAccess = access.role !== null
-  if (!hasCircleAccess && !isPublicLinkVisibility) {
+  if (!access.role) {
     return { ok: false as const, status: 403 as const, error: 'No tienes acceso a esta extracción.' }
   }
 

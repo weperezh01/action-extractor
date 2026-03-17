@@ -82,10 +82,7 @@ export async function GET(
     if (!access.extraction) {
       return NextResponse.json({ error: 'No se encontró la extracción solicitada.' }, { status: 404 })
     }
-
-    const hasPublicLinkVisibility =
-      access.extraction.share_visibility === 'public' || access.extraction.share_visibility === 'unlisted'
-    if (!access.role && !hasPublicLinkVisibility) {
+    if (!access.role) {
       return NextResponse.json({ error: 'No tienes acceso a esta extracción.' }, { status: 403 })
     }
 
