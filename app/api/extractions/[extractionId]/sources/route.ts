@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
-  createExtractionAdditionalSourceForUser,
   findExtractionAccessForUser,
+} from '@/lib/db'
+import {
+  createExtractionAdditionalSourceForUser,
   getExtractionSourceData,
   listExtractionAdditionalSources,
-} from '@/lib/db'
+} from '@/lib/db/extractions'
 import { detectSourceType } from '@/lib/source-detector'
 
 export const runtime = 'nodejs'

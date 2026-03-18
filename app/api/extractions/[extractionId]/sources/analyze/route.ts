@@ -6,19 +6,19 @@ import { extractVideoId } from '@/lib/extract-core'
 import { extractWebContent } from '@/lib/content-extractor'
 import { resolveYoutubeTranscriptWithFallback } from '@/lib/youtube-transcript-fallback'
 import {
-  createExtractionAdditionalSourceForUser,
   findExtractionAccessForUser,
-  listExtractionAdditionalSources,
-  markExtractionAdditionalSourcesAnalyzedForUser,
   syncExtractionTasksForUser,
-  updateExtractionGeneratedContentForUser,
   type DbExtraction,
   type DbExtractionAdditionalSource,
 } from '@/lib/db'
 import {
   createExtraction,
+  createExtractionAdditionalSourceForUser,
   getExtractionSourceData,
   getVideoCacheTranscript,
+  listExtractionAdditionalSources,
+  markExtractionAdditionalSourcesAnalyzedForUser,
+  updateExtractionGeneratedContentForUser,
 } from '@/lib/db/extractions'
 import { getUserFromRequest } from '@/lib/auth'
 import {

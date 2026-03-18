@@ -3,6 +3,7 @@ import {
   ensureDbReady,
   ensureDefaultExtractionFoldersForUser,
   pool,
+  type DbExtractionAdditionalSource,
   type DbExtraction,
   type DbExtractionTag,
   type DbVideoCache,
@@ -56,6 +57,23 @@ interface DbVideoCacheRow {
   created_at: Date | string
   updated_at: Date | string
   last_used_at: Date | string
+}
+
+interface DbExtractionAdditionalSourceRow {
+  id: string
+  extraction_id: string
+  created_by_user_id: string
+  source_type: 'youtube' | 'web_url' | 'pdf' | 'docx' | 'text'
+  source_label: string | null
+  url: string | null
+  source_text: string | null
+  source_file_url: string | null
+  source_file_name: string | null
+  source_file_size_bytes: number | string | null
+  source_file_mime_type: string | null
+  analysis_status: string | null
+  analyzed_at: Date | string | null
+  created_at: Date | string
 }
 
 interface DbExtractionOrderNumberRow {
@@ -140,6 +158,25 @@ function mapVideoCacheRow(row: DbVideoCacheRow): DbVideoCache {
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
     last_used_at: toIso(row.last_used_at),
+  }
+}
+
+function mapExtractionAdditionalSourceRow(row: DbExtractionAdditionalSourceRow): DbExtractionAdditionalSource {
+  return {
+    id: row.id,
+    extraction_id: row.extraction_id,
+    created_by_user_id: row.created_by_user_id,
+    source_type: row.source_type,
+    source_label: row.source_label ?? null,
+    url: row.url ?? null,
+    source_text: row.source_text ?? null,
+    source_file_url: row.source_file_url ?? null,
+    source_file_name: row.source_file_name ?? null,
+    source_file_size_bytes: row.source_file_size_bytes != null ? Number(row.source_file_size_bytes) : null,
+    source_file_mime_type: row.source_file_mime_type ?? null,
+    analysis_status: row.analysis_status === 'analyzed' ? 'analyzed' : 'pending',
+    analyzed_at: row.analyzed_at ? toIso(row.analyzed_at) : null,
+    created_at: toIso(row.created_at),
   }
 }
 
@@ -430,6 +467,202 @@ export async function findExtractionByIdForUser(input: { id: string; userId: str
   return rows[0] ? mapExtractionRow(rows[0]) : null
 }
 
+export async function listExtractionAdditionalSources(input: {
+  extractionId: string
+  requestingUserId: string | null
+}): Promise<DbExtractionAdditionalSource[] | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<
+    DbExtractionAdditionalSourceRow & { has_access: boolean }
+  >(
+    `
+      SELECT
+        s.id,
+        s.extraction_id,
+        s.created_by_user_id,
+        s.source_type,
+        s.source_label,
+        s.url,
+        s.source_text,
+        s.source_file_url,
+        s.source_file_name,
+        s.source_file_size_bytes,
+        s.source_file_mime_type,
+        s.analysis_status,
+        s.analyzed_at,
+        s.created_at,
+        (
+          e.user_id = $2
+          OR e.share_visibility IN ('public', 'unlisted')
+          OR EXISTS (
+            SELECT 1 FROM extraction_members m
+            WHERE m.extraction_id = e.id AND m.user_id = $2
+          )
+        ) AS has_access
+      FROM extraction_additional_sources s
+      INNER JOIN extractions e ON e.id = s.extraction_id
+      WHERE s.extraction_id = $1
+      ORDER BY s.created_at ASC
+    `,
+    [input.extractionId, input.requestingUserId ?? '']
+  )
+
+  if (rows.length === 0) {
+    const accessCheck = await pool.query<{ has_access: boolean }>(
+      `
+        SELECT (
+          e.user_id = $2
+          OR e.share_visibility IN ('public', 'unlisted')
+          OR EXISTS (
+            SELECT 1 FROM extraction_members m
+            WHERE m.extraction_id = e.id AND m.user_id = $2
+          )
+        ) AS has_access
+        FROM extractions e
+        WHERE e.id = $1
+        LIMIT 1
+      `,
+      [input.extractionId, input.requestingUserId ?? '']
+    )
+
+    if (!accessCheck.rows[0]?.has_access) return null
+    return []
+  }
+
+  if (!rows[0].has_access) return null
+  return rows.map(mapExtractionAdditionalSourceRow)
+}
+
+export async function createExtractionAdditionalSourceForUser(input: {
+  extractionId: string
+  userId: string
+  sourceType: 'youtube' | 'web_url' | 'pdf' | 'docx' | 'text'
+  sourceLabel: string | null
+  url: string | null
+  sourceText?: string | null
+  sourceFileUrl?: string | null
+  sourceFileName?: string | null
+  sourceFileSizeBytes?: number | null
+  sourceFileMimeType?: string | null
+  analysisStatus?: 'pending' | 'analyzed'
+  analyzedAt?: string | null
+}): Promise<DbExtractionAdditionalSource | null> {
+  await ensureDbReady()
+  const id = randomUUID()
+  const resolvedAnalysisStatus = input.analysisStatus ?? 'pending'
+  const { rows } = await pool.query<DbExtractionAdditionalSourceRow>(
+    `
+      INSERT INTO extraction_additional_sources (
+        id,
+        extraction_id,
+        created_by_user_id,
+        source_type,
+        source_label,
+        url,
+        source_text,
+        source_file_url,
+        source_file_name,
+        source_file_size_bytes,
+        source_file_mime_type,
+        analysis_status,
+        analyzed_at
+      )
+      SELECT
+        $1,
+        e.id,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12
+      FROM extractions e
+      WHERE e.id = $13 AND e.user_id = $2
+      ON CONFLICT (extraction_id, url) DO NOTHING
+      RETURNING
+        id,
+        extraction_id,
+        created_by_user_id,
+        source_type,
+        source_label,
+        url,
+        source_text,
+        source_file_url,
+        source_file_name,
+        source_file_size_bytes,
+        source_file_mime_type,
+        analysis_status,
+        analyzed_at,
+        created_at
+    `,
+    [
+      id,
+      input.userId,
+      input.sourceType,
+      input.sourceLabel ?? null,
+      input.url ?? null,
+      input.sourceText ?? null,
+      input.sourceFileUrl ?? null,
+      input.sourceFileName ?? null,
+      input.sourceFileSizeBytes ?? null,
+      input.sourceFileMimeType ?? null,
+      resolvedAnalysisStatus,
+      resolvedAnalysisStatus === 'analyzed' ? (input.analyzedAt ?? new Date().toISOString()) : null,
+      input.extractionId,
+    ]
+  )
+
+  return rows[0] ? mapExtractionAdditionalSourceRow(rows[0]) : null
+}
+
+export async function markExtractionAdditionalSourcesAnalyzedForUser(input: {
+  extractionId: string
+  userId: string
+  sourceIds: string[]
+}) {
+  await ensureDbReady()
+  const normalizedIds = Array.from(new Set(input.sourceIds.map((value) => value.trim()).filter(Boolean)))
+  if (normalizedIds.length === 0) return []
+
+  const { rows } = await pool.query<DbExtractionAdditionalSourceRow>(
+    `
+      UPDATE extraction_additional_sources s
+      SET
+        analysis_status = 'analyzed',
+        analyzed_at = COALESCE(s.analyzed_at, NOW())
+      FROM extractions e
+      WHERE
+        s.extraction_id = $1
+        AND s.id = ANY($2::text[])
+        AND e.id = s.extraction_id
+        AND e.user_id = $3
+      RETURNING
+        s.id,
+        s.extraction_id,
+        s.created_by_user_id,
+        s.source_type,
+        s.source_label,
+        s.url,
+        s.source_text,
+        s.source_file_url,
+        s.source_file_name,
+        s.source_file_size_bytes,
+        s.source_file_mime_type,
+        s.analysis_status,
+        s.analyzed_at,
+        s.created_at
+    `,
+    [input.extractionId, normalizedIds, input.userId]
+  )
+
+  return rows.map(mapExtractionAdditionalSourceRow)
+}
+
 export async function findVideoCacheByVideoId(input: {
   videoId: string
   promptVersion: string
@@ -608,4 +841,61 @@ export async function upsertVideoCache(input: {
   )
 
   return mapVideoCacheRow(rows[0])
+}
+
+export async function updateExtractionGeneratedContentForUser(input: {
+  id: string
+  userId: string
+  objective: string
+  phasesJson: string
+  proTip: string
+  metadataJson: string
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionRow>(
+    `
+      UPDATE extractions e
+      SET
+        objective = $1,
+        phases_json = $2,
+        pro_tip = $3,
+        metadata_json = $4
+      WHERE e.id = $5 AND e.user_id = $6
+      RETURNING
+        id,
+        user_id,
+        parent_extraction_id,
+        url,
+        video_id,
+        video_title,
+        thumbnail_url,
+        extraction_mode,
+        objective,
+        phases_json,
+        pro_tip,
+        metadata_json,
+        share_visibility,
+        clone_permission,
+        created_at,
+        source_type,
+        source_label,
+        folder_id,
+        source_text,
+        source_file_url,
+        source_file_name,
+        source_file_size_bytes,
+        source_file_mime_type,
+        transcript_source
+    `,
+    [
+      input.objective,
+      input.phasesJson,
+      input.proTip,
+      input.metadataJson,
+      input.id,
+      input.userId,
+    ]
+  )
+
+  return rows[0] ? mapExtractionRow(rows[0]) : null
 }
