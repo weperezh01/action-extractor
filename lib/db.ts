@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { Pool, type PoolClient } from 'pg'
 import {
-  writeTaskStatusCatalogToMetadataJson,
   type BuiltInTaskStatus,
 } from '@/lib/task-statuses'
 import {
@@ -4343,18 +4342,10 @@ export async function updateExtractionTaskScheduleForUser(input: {
 export async function listExtractionTaskDependencies(
   extractionId: string
 ): Promise<Map<string, string[]>> {
-  await ensureDbReady()
-  const { rows } = await pool.query<{ task_id: string; predecessor_task_id: string }>(
-    `SELECT task_id, predecessor_task_id FROM extraction_task_dependencies WHERE extraction_id = $1`,
-    [extractionId]
-  )
-  const map = new Map<string, string[]>()
-  for (const row of rows) {
-    const existing = map.get(row.task_id) ?? []
-    existing.push(row.predecessor_task_id)
-    map.set(row.task_id, existing)
-  }
-  return map
+  const {
+    listExtractionTaskDependencies: listExtractionTaskDependenciesInModule,
+  } = await import('@/lib/db/extractions')
+  return listExtractionTaskDependenciesInModule(extractionId)
 }
 
 export async function updateExtractionTaskPlanningForUser(input: {
@@ -4363,96 +4354,20 @@ export async function updateExtractionTaskPlanningForUser(input: {
   durationDays: number
   predecessorIds: string[]
 }): Promise<{ ok: boolean; error?: string }> {
-  await ensureDbReady()
-
-  if (!Number.isInteger(input.durationDays) || input.durationDays < 1) {
-    return { ok: false, error: 'durationDays debe ser un entero >= 1.' }
-  }
-  if (input.predecessorIds.includes(input.taskId)) {
-    return { ok: false, error: 'Una tarea no puede ser su propio predecesor.' }
-  }
-
-  if (input.predecessorIds.length > 0) {
-    const { rows } = await pool.query<{ id: string }>(
-      `SELECT id FROM extraction_tasks WHERE extraction_id = $1 AND id = ANY($2::text[])`,
-      [input.extractionId, input.predecessorIds]
-    )
-    if (rows.length !== input.predecessorIds.length) {
-      return { ok: false, error: 'Uno o más predecesores no existen en esta extracción.' }
-    }
-  }
-
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN')
-    await client.query(
-      `UPDATE extraction_tasks SET duration_days = $1, updated_at = NOW() WHERE id = $2 AND extraction_id = $3`,
-      [input.durationDays, input.taskId, input.extractionId]
-    )
-    await client.query(
-      `DELETE FROM extraction_task_dependencies WHERE task_id = $1`,
-      [input.taskId]
-    )
-    if (input.predecessorIds.length > 0) {
-      const placeholders = input.predecessorIds.map((_, i) => `($1, $2, $${i + 3})`).join(', ')
-      await client.query(
-        `INSERT INTO extraction_task_dependencies (extraction_id, task_id, predecessor_task_id) VALUES ${placeholders}`,
-        [input.extractionId, input.taskId, ...input.predecessorIds]
-      )
-    }
-    await client.query('COMMIT')
-    return { ok: true }
-  } catch (err) {
-    await client.query('ROLLBACK')
-    throw err
-  } finally {
-    client.release()
-  }
+  const {
+    updateExtractionTaskPlanningForUser: updateExtractionTaskPlanningForUserInModule,
+  } = await import('@/lib/db/extractions')
+  return updateExtractionTaskPlanningForUserInModule(input)
 }
 
 export async function updateExtractionTaskStatusCatalogById(input: {
   extractionId: string
   taskStatusCatalog: string[]
 }) {
-  await ensureDbReady()
-
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN')
-
-    const { rows } = await client.query<{ metadata_json: string }>(
-      `SELECT metadata_json
-       FROM extractions
-       WHERE id = $1
-       FOR UPDATE`,
-      [input.extractionId]
-    )
-
-    if (!rows[0]) {
-      await client.query('ROLLBACK')
-      return false
-    }
-
-    const nextMetadataJson = writeTaskStatusCatalogToMetadataJson(
-      rows[0].metadata_json,
-      input.taskStatusCatalog
-    )
-
-    await client.query(
-      `UPDATE extractions
-       SET metadata_json = $1
-       WHERE id = $2`,
-      [nextMetadataJson, input.extractionId]
-    )
-
-    await client.query('COMMIT')
-    return true
-  } catch (error) {
-    await client.query('ROLLBACK')
-    throw error
-  } finally {
-    client.release()
-  }
+  const {
+    updateExtractionTaskStatusCatalogById: updateExtractionTaskStatusCatalogByIdInModule,
+  } = await import('@/lib/db/extractions')
+  return updateExtractionTaskStatusCatalogByIdInModule(input)
 }
 
 export async function replaceExtractionTaskStatusForExtraction(input: {
@@ -4460,26 +4375,10 @@ export async function replaceExtractionTaskStatusForExtraction(input: {
   previousStatus: ExtractionTaskStatus
   nextStatus: ExtractionTaskStatus
 }) {
-  await ensureDbReady()
-  await pool.query(
-    `
-      UPDATE extraction_tasks
-      SET
-        checked = CASE
-          WHEN $3 = 'completed' THEN TRUE
-          ELSE FALSE
-        END,
-        status = $3,
-        completed_at = CASE
-          WHEN $3 = 'completed' THEN COALESCE(completed_at, NOW())
-          ELSE NULL
-        END,
-        updated_at = NOW()
-      WHERE extraction_id = $1
-        AND status = $2
-    `,
-    [input.extractionId, input.previousStatus, input.nextStatus]
-  )
+  const {
+    replaceExtractionTaskStatusForExtraction: replaceExtractionTaskStatusForExtractionInModule,
+  } = await import('@/lib/db/extractions')
+  return replaceExtractionTaskStatusForExtractionInModule(input)
 }
 
 export async function createExtractionTaskEventForUser(input: {
@@ -10367,29 +10266,13 @@ function mapEdgeRow(row: DbExtractionTaskEdgeRow): DbExtractionTaskEdge {
 }
 
 export async function listExtractionTaskEdges(extractionId: string): Promise<DbExtractionTaskEdge[]> {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionTaskEdgeRow>(
-    `SELECT id, extraction_id, from_task_id, to_task_id, edge_type, label, expected_extra_days, sort_order, created_at, updated_at
-     FROM extraction_task_edges WHERE extraction_id = $1 ORDER BY sort_order, created_at`,
-    [extractionId]
-  )
-  return rows.map(mapEdgeRow)
+  const { listExtractionTaskEdges: listExtractionTaskEdgesInModule } = await import('@/lib/db/extractions')
+  return listExtractionTaskEdgesInModule(extractionId)
 }
 
 export async function listDecisionSelections(extractionId: string): Promise<DbExtractionTaskDecisionSelection[]> {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbDecisionSelectionRow>(
-    `SELECT extraction_id, decision_task_id, selected_to_task_id, created_at, updated_at
-     FROM extraction_task_decision_selection WHERE extraction_id = $1`,
-    [extractionId]
-  )
-  return rows.map((row) => ({
-    extraction_id: row.extraction_id,
-    decision_task_id: row.decision_task_id,
-    selected_to_task_id: row.selected_to_task_id,
-    created_at: toIso(row.created_at),
-    updated_at: toIso(row.updated_at),
-  }))
+  const { listDecisionSelections: listDecisionSelectionsInModule } = await import('@/lib/db/extractions')
+  return listDecisionSelectionsInModule(extractionId)
 }
 
 export async function upsertTaskEdge(input: {
@@ -10457,11 +10340,10 @@ export async function updateExtractionTaskFlowNodeType(input: {
   extractionId: string
   flowNodeType: 'process' | 'decision'
 }): Promise<void> {
-  await ensureDbReady()
-  await pool.query(
-    `UPDATE extraction_tasks SET flow_node_type = $1, updated_at = NOW() WHERE id = $2 AND extraction_id = $3`,
-    [input.flowNodeType, input.taskId, input.extractionId]
-  )
+  const {
+    updateExtractionTaskFlowNodeType: updateExtractionTaskFlowNodeTypeInModule,
+  } = await import('@/lib/db/extractions')
+  return updateExtractionTaskFlowNodeTypeInModule(input)
 }
 
 // ── Presentation Deck ─────────────────────────────────────────────────────────
