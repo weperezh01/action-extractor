@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { getUserStripeCustomerId, getPlanByName } from '@/lib/db'
+import { getUserStripeCustomerId, getPlanByName } from '@/lib/db/billing'
 import { stripe, PLAN_PRICE_IDS, CREDIT_PACK_PRICE_IDS, CREDIT_PACK_AMOUNTS } from '@/lib/stripe'
 
 export const runtime = 'nodejs'

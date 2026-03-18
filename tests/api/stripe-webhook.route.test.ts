@@ -35,7 +35,7 @@ vi.mock('@/lib/stripe', () => ({
   },
 }))
 
-vi.mock('@/lib/db', () => ({
+vi.mock('@/lib/db/billing', () => ({
   claimStripeEventProcessing: dbMocks.claimStripeEventProcessing,
   markStripeEventProcessed: dbMocks.markStripeEventProcessed,
   releaseStripeEventProcessing: dbMocks.releaseStripeEventProcessing,

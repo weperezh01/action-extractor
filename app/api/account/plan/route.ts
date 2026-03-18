@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { getUserActivePlan, getUserStripeCustomerId, getUserDailyLimit, getUserCreditBalance } from '@/lib/db'
+import {
+  getUserActivePlan,
+  getUserStripeCustomerId,
+  getUserDailyLimit,
+  getUserCreditBalance,
+} from '@/lib/db/billing'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

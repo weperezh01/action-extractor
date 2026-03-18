@@ -9,11 +9,14 @@ const dbMocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/lib/db', () => ({
-  consumeDailyExtraction: dbMocks.consumeDailyExtraction,
-  getDailyExtractionSnapshot: dbMocks.getDailyExtractionSnapshot,
   consumeCommunityActionRateLimitByUser: dbMocks.consumeCommunityActionRateLimitByUser,
   getCommunityActionRateLimitUsageByUser: dbMocks.getCommunityActionRateLimitUsageByUser,
   consumeGuestExtractionRateLimit: dbMocks.consumeGuestExtractionRateLimit,
+}))
+
+vi.mock('@/lib/db/billing', () => ({
+  consumeDailyExtraction: dbMocks.consumeDailyExtraction,
+  getDailyExtractionSnapshot: dbMocks.getDailyExtractionSnapshot,
 }))
 
 import {

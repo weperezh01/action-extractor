@@ -4,9 +4,9 @@ import {
   adminGetCreditStats,
   adminListUsersWithCredits,
   adminListRecentCreditTransactions,
-  addUserCredits,
   findUserById,
 } from '@/lib/db'
+import { addUserCredits } from '@/lib/db/billing'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

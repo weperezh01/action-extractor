@@ -10,7 +10,7 @@ import {
   upsertUserActivePlan,
   deactivateUserPlan,
   addUserCredits,
-} from '@/lib/db'
+} from '@/lib/db/billing'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

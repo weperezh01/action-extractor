@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { listPlans } from '@/lib/db'
+import { listPlans } from '@/lib/db/billing'
 import { CREDIT_PACK_PRICE_IDS } from '@/lib/stripe'
 
 export const runtime = 'nodejs'

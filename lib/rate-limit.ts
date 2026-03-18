@@ -2,9 +2,8 @@ import {
   consumeCommunityActionRateLimitByUser,
   consumeGuestExtractionRateLimit,
   getCommunityActionRateLimitUsageByUser,
-  consumeDailyExtraction,
-  getDailyExtractionSnapshot,
 } from '@/lib/db'
+import { consumeDailyExtraction, getDailyExtractionSnapshot } from '@/lib/db/billing'
 
 const DEFAULT_COMMUNITY_POSTS_PER_HOUR = 30
 const DEFAULT_COMMUNITY_COMMENTS_PER_HOUR = 120

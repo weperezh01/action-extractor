@@ -4,7 +4,7 @@ const dbMocks = vi.hoisted(() => ({
   listPlans: vi.fn(),
 }))
 
-vi.mock('@/lib/db', () => ({
+vi.mock('@/lib/db/billing', () => ({
   listPlans: dbMocks.listPlans,
 }))
 
