@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
-  findUserById,
   followCommunityUser,
   isCommunityUserFollowedBy,
   unfollowCommunityUser,
+} from '@/lib/db/community'
+import {
+  findUserById,
 } from '@/lib/db'
 import {
   buildCommunityActionRateLimitMessage,

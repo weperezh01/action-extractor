@@ -3,7 +3,7 @@ import { getUserFromRequest } from '@/lib/auth'
 import {
   deleteCommunityPostCommentByIdForUser,
   getCommunityPostAccessForUser,
-} from '@/lib/db'
+} from '@/lib/db/community'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -58,4 +58,3 @@ export async function DELETE(
     return NextResponse.json({ error: 'No se pudo eliminar el comentario.' }, { status: 500 })
   }
 }
-

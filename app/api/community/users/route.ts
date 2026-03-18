@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { searchCommunityUsers } from '@/lib/db'
+import { searchCommunityUsers } from '@/lib/db/community'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

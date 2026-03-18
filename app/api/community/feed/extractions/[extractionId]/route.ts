@@ -3,6 +3,8 @@ import { getUserFromRequest } from '@/lib/auth'
 import {
   listCommunityPostsByExtractionForUser,
   recordCommunityPostViewsForUser,
+} from '@/lib/db/community'
+import {
   type DbCommunityPost,
 } from '@/lib/db'
 import { findExtractionAccessForUser } from '@/lib/db/extractions'

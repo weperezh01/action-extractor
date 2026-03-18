@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
+import { createCommunityPostForUser } from '@/lib/db/community'
 import {
-  createCommunityPostForUser,
   type CommunityPostAttachmentStorageProvider,
   type CommunityPostAttachmentType,
   type CommunityPostVisibility,

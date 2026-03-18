@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { listCommunityUserPosts, type DbCommunityPost } from '@/lib/db'
+import { type DbCommunityPost } from '@/lib/db'
+import { listCommunityUserPosts } from '@/lib/db/community'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

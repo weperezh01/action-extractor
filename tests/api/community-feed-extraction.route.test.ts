@@ -15,7 +15,7 @@ vi.mock('@/lib/auth', () => ({
   getUserFromRequest: authMocks.getUserFromRequest,
 }))
 
-vi.mock('@/lib/db', () => ({
+vi.mock('@/lib/db/community', () => ({
   listCommunityPostsByExtractionForUser: dbMocks.listCommunityPostsByExtractionForUser,
   recordCommunityPostViewsForUser: dbMocks.recordCommunityPostViewsForUser,
 }))

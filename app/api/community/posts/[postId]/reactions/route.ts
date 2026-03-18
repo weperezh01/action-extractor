@@ -4,6 +4,8 @@ import {
   findCommunityPostByIdForUser,
   getCommunityPostAccessForUser,
   toggleCommunityPostReactionForUser,
+} from '@/lib/db/community'
+import {
   type CommunityPostReactionType,
 } from '@/lib/db'
 
@@ -120,4 +122,3 @@ export async function POST(
     return NextResponse.json({ error: 'No se pudo actualizar la reacción.' }, { status: 500 })
   }
 }
-

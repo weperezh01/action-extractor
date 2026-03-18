@@ -9,9 +9,12 @@ const dbMocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/lib/db', () => ({
+  consumeGuestExtractionRateLimit: dbMocks.consumeGuestExtractionRateLimit,
+}))
+
+vi.mock('@/lib/db/community', () => ({
   consumeCommunityActionRateLimitByUser: dbMocks.consumeCommunityActionRateLimitByUser,
   getCommunityActionRateLimitUsageByUser: dbMocks.getCommunityActionRateLimitUsageByUser,
-  consumeGuestExtractionRateLimit: dbMocks.consumeGuestExtractionRateLimit,
 }))
 
 vi.mock('@/lib/db/billing', () => ({
