@@ -2,11 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
   deleteGoogleDocsConnectionByUserId,
-  findExtractionByIdForUser,
   findGoogleDocsConnectionByUserId,
   upsertGoogleDocsConnection,
 } from '@/lib/db'
 import {
+  findExtractionByIdForUser,
   listExtractionTaskDependencies,
   listExtractionTasksWithEventsForUser,
 } from '@/lib/db/extractions'

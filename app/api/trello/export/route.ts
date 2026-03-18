@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
   deleteTrelloConnectionByUserId,
-  findExtractionByIdForUser,
   findTrelloConnectionByUserId,
 } from '@/lib/db'
+import { findExtractionByIdForUser } from '@/lib/db/extractions'
 import { parseExtractionMetadata, parseExtractionPhases } from '@/lib/export-parsers'
 import { createTrelloCardFromExtraction, TrelloApiError } from '@/lib/trello'
 

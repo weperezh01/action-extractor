@@ -3016,139 +3016,18 @@ export async function getExtractionSourceData(input: {
   shareVisibility: ExtractionShareVisibility
   userId: string
 } | null> {
-  await ensureDbReady()
-  const { rows } = await pool.query<{
-    id: string
-    user_id: string
-    url: string | null
-    video_id: string | null
-    video_title: string | null
-    thumbnail_url: string | null
-    share_visibility: string | null
-    source_type: string | null
-    source_label: string | null
-    source_text: string | null
-    source_file_url: string | null
-    source_file_name: string | null
-    source_file_size_bytes: number | null
-    source_file_mime_type: string | null
-    has_access: boolean
-  }>(
-    `
-      SELECT
-        e.id,
-        e.user_id,
-        e.url,
-        e.video_id,
-        e.video_title,
-        e.thumbnail_url,
-        e.share_visibility,
-        e.source_type,
-        e.source_label,
-        e.source_text,
-        e.source_file_url,
-        e.source_file_name,
-        e.source_file_size_bytes,
-        e.source_file_mime_type,
-        (
-          e.user_id = $2
-          OR e.share_visibility IN ('public', 'unlisted')
-          OR EXISTS (
-            SELECT 1 FROM extraction_members m
-            WHERE m.extraction_id = e.id AND m.user_id = $2
-          )
-        ) AS has_access
-      FROM extractions e
-      WHERE e.id = $1
-      LIMIT 1
-    `,
-    [input.extractionId, input.requestingUserId ?? '']
-  )
-
-  if (!rows[0] || !rows[0].has_access) return null
-
-  const row = rows[0]
-  return {
-    sourceType: row.source_type ?? 'youtube',
-    sourceLabel: row.source_label ?? null,
-    url: row.url ?? null,
-    videoId: row.video_id ?? null,
-    thumbnailUrl: row.thumbnail_url ?? null,
-    videoTitle: row.video_title ?? null,
-    sourceText: row.source_text ?? null,
-    sourceFileUrl: row.source_file_url ?? null,
-    sourceFileName: row.source_file_name ?? null,
-    sourceFileSizeBytes: row.source_file_size_bytes != null ? Number(row.source_file_size_bytes) : null,
-    sourceFileMimeType: row.source_file_mime_type ?? null,
-    shareVisibility: normalizeExtractionShareVisibility(row.share_visibility),
-    userId: row.user_id,
-  }
+  const { getExtractionSourceData: getExtractionSourceDataInModule } = await import('@/lib/db/extractions')
+  return getExtractionSourceDataInModule(input)
 }
 
 export async function listExtractionAdditionalSources(input: {
   extractionId: string
   requestingUserId: string | null
 }): Promise<DbExtractionAdditionalSource[] | null> {
-  await ensureDbReady()
-  const { rows } = await pool.query<
-    DbExtractionAdditionalSourceRow & { has_access: boolean }
-  >(
-    `
-      SELECT
-        s.id,
-        s.extraction_id,
-        s.created_by_user_id,
-        s.source_type,
-        s.source_label,
-        s.url,
-        s.source_text,
-        s.source_file_url,
-        s.source_file_name,
-        s.source_file_size_bytes,
-        s.source_file_mime_type,
-        s.analysis_status,
-        s.analyzed_at,
-        s.created_at,
-        (
-          e.user_id = $2
-          OR e.share_visibility IN ('public', 'unlisted')
-          OR EXISTS (
-            SELECT 1 FROM extraction_members m
-            WHERE m.extraction_id = e.id AND m.user_id = $2
-          )
-        ) AS has_access
-      FROM extraction_additional_sources s
-      INNER JOIN extractions e ON e.id = s.extraction_id
-      WHERE s.extraction_id = $1
-      ORDER BY s.created_at ASC
-    `,
-    [input.extractionId, input.requestingUserId ?? '']
+  const { listExtractionAdditionalSources: listExtractionAdditionalSourcesInModule } = await import(
+    '@/lib/db/extractions'
   )
-
-  if (rows.length === 0) {
-    const accessCheck = await pool.query<{ has_access: boolean }>(
-      `
-        SELECT (
-          e.user_id = $2
-          OR e.share_visibility IN ('public', 'unlisted')
-          OR EXISTS (
-            SELECT 1 FROM extraction_members m
-            WHERE m.extraction_id = e.id AND m.user_id = $2
-          )
-        ) AS has_access
-        FROM extractions e
-        WHERE e.id = $1
-        LIMIT 1
-      `,
-      [input.extractionId, input.requestingUserId ?? '']
-    )
-
-    if (!accessCheck.rows[0]?.has_access) return null
-    return []
-  }
-
-  if (!rows[0].has_access) return null
-  return rows.map(mapExtractionAdditionalSourceRow)
+  return listExtractionAdditionalSourcesInModule(input)
 }
 
 export async function createExtractionAdditionalSourceForUser(input: {
@@ -3165,77 +3044,9 @@ export async function createExtractionAdditionalSourceForUser(input: {
   analysisStatus?: 'pending' | 'analyzed'
   analyzedAt?: string | null
 }): Promise<DbExtractionAdditionalSource | null> {
-  await ensureDbReady()
-  const id = randomUUID()
-  const resolvedAnalysisStatus = input.analysisStatus ?? 'pending'
-  const { rows } = await pool.query<DbExtractionAdditionalSourceRow>(
-    `
-      INSERT INTO extraction_additional_sources (
-        id,
-        extraction_id,
-        created_by_user_id,
-        source_type,
-        source_label,
-        url,
-        source_text,
-        source_file_url,
-        source_file_name,
-        source_file_size_bytes,
-        source_file_mime_type,
-        analysis_status,
-        analyzed_at
-      )
-      SELECT
-        $1,
-        e.id,
-        $2,
-        $3,
-        $4,
-        $5,
-        $6,
-        $7,
-        $8,
-        $9,
-        $10,
-        $11,
-        $12
-      FROM extractions e
-      WHERE e.id = $13 AND e.user_id = $2
-      ON CONFLICT (extraction_id, url) DO NOTHING
-      RETURNING
-        id,
-        extraction_id,
-        created_by_user_id,
-        source_type,
-        source_label,
-        url,
-        source_text,
-        source_file_url,
-        source_file_name,
-        source_file_size_bytes,
-        source_file_mime_type,
-        analysis_status,
-        analyzed_at,
-        created_at
-    `,
-    [
-      id,
-      input.userId,
-      input.sourceType,
-      input.sourceLabel ?? null,
-      input.url ?? null,
-      input.sourceText ?? null,
-      input.sourceFileUrl ?? null,
-      input.sourceFileName ?? null,
-      input.sourceFileSizeBytes ?? null,
-      input.sourceFileMimeType ?? null,
-      resolvedAnalysisStatus,
-      resolvedAnalysisStatus === 'analyzed' ? (input.analyzedAt ?? new Date().toISOString()) : null,
-      input.extractionId,
-    ]
-  )
-
-  return rows[0] ? mapExtractionAdditionalSourceRow(rows[0]) : null
+  const { createExtractionAdditionalSourceForUser: createExtractionAdditionalSourceForUserInModule } =
+    await import('@/lib/db/extractions')
+  return createExtractionAdditionalSourceForUserInModule(input)
 }
 
 export async function deleteExtractionAdditionalSourceForUser(input: {
@@ -3253,42 +3064,10 @@ export async function markExtractionAdditionalSourcesAnalyzedForUser(input: {
   userId: string
   sourceIds: string[]
 }) {
-  await ensureDbReady()
-  const normalizedIds = Array.from(new Set(input.sourceIds.map((value) => value.trim()).filter(Boolean)))
-  if (normalizedIds.length === 0) return []
-
-  const { rows } = await pool.query<DbExtractionAdditionalSourceRow>(
-    `
-      UPDATE extraction_additional_sources s
-      SET
-        analysis_status = 'analyzed',
-        analyzed_at = COALESCE(s.analyzed_at, NOW())
-      FROM extractions e
-      WHERE
-        s.extraction_id = $1
-        AND s.id = ANY($2::text[])
-        AND e.id = s.extraction_id
-        AND e.user_id = $3
-      RETURNING
-        s.id,
-        s.extraction_id,
-        s.created_by_user_id,
-        s.source_type,
-        s.source_label,
-        s.url,
-        s.source_text,
-        s.source_file_url,
-        s.source_file_name,
-        s.source_file_size_bytes,
-        s.source_file_mime_type,
-        s.analysis_status,
-        s.analyzed_at,
-        s.created_at
-    `,
-    [input.extractionId, normalizedIds, input.userId]
-  )
-
-  return rows.map(mapExtractionAdditionalSourceRow)
+  const {
+    markExtractionAdditionalSourcesAnalyzedForUser: markExtractionAdditionalSourcesAnalyzedForUserInModule,
+  } = await import('@/lib/db/extractions')
+  return markExtractionAdditionalSourcesAnalyzedForUserInModule(input)
 }
 
 // Returns the full transcript for a YouTube video from the shared cache.
@@ -3349,28 +3128,10 @@ export async function listExtractionsSharedViaFoldersForMember(userId: string, l
 }
 
 export async function findExtractionOrderNumberForUser(input: { id: string; userId: string }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionOrderNumberRow>(
-    `
-      SELECT ranked.order_number
-      FROM (
-        SELECT
-          id,
-          ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC)::int AS order_number
-        FROM extractions
-        WHERE user_id = $1
-      ) AS ranked
-      WHERE ranked.id = $2
-      LIMIT 1
-    `,
-    [input.userId, input.id]
+  const { findExtractionOrderNumberForUser: findExtractionOrderNumberForUserInModule } = await import(
+    '@/lib/db/extractions'
   )
-
-  if (!rows[0]) {
-    return null
-  }
-
-  return parseDbInteger(rows[0].order_number)
+  return findExtractionOrderNumberForUserInModule(input)
 }
 
 export async function deleteExtractionByIdForUser(input: { id: string; userId: string }) {
@@ -3405,151 +3166,17 @@ export async function listPublicExtractionsForSearch(input: { query: string; lim
 }
 
 export async function findExtractionAccessForUser(input: { id: string; userId: string }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionAccessRow>(
-    `
-      SELECT
-        e.id,
-        e.user_id,
-        e.url,
-        e.video_id,
-        e.video_title,
-        e.thumbnail_url,
-        e.extraction_mode,
-        e.objective,
-        e.phases_json,
-        e.pro_tip,
-        e.metadata_json,
-        e.share_visibility,
-        e.created_at,
-        e.source_type,
-        e.source_label,
-        e.folder_id,
-        CASE
-          WHEN e.user_id = $2 THEN 'owner'
-          WHEN EXISTS (
-            WITH RECURSIVE folder_ancestors AS (
-              SELECT f.id, f.parent_id
-              FROM extraction_folders f
-              WHERE
-                e.folder_id IS NOT NULL
-                AND f.id = e.folder_id
-                AND f.user_id = e.user_id
-              UNION ALL
-              SELECT parent.id, parent.parent_id
-              FROM extraction_folders parent
-              INNER JOIN folder_ancestors fa
-                ON fa.parent_id = parent.id
-              WHERE parent.user_id = e.user_id
-            )
-            SELECT 1
-            FROM extraction_folder_members fm
-            WHERE
-              fm.member_user_id = $2
-              AND fm.owner_user_id = e.user_id
-              AND fm.folder_id IN (SELECT id FROM folder_ancestors)
-            LIMIT 1
-          ) THEN 'viewer'
-          WHEN e.share_visibility = 'circle' AND m.role IS NOT NULL THEN m.role
-          WHEN e.share_visibility IN ('public', 'unlisted') THEN 'viewer'
-          ELSE NULL
-        END AS access_role
-      FROM extractions e
-      LEFT JOIN extraction_members m
-        ON m.extraction_id = e.id
-        AND m.user_id = $2
-      WHERE e.id = $1
-      LIMIT 1
-    `,
-    [input.id, input.userId]
+  const { findExtractionAccessForUser: findExtractionAccessForUserInModule } = await import(
+    '@/lib/db/extractions'
   )
-
-  if (!rows[0]) {
-    return { extraction: null, role: null as ExtractionAccessRole | null }
-  }
-
-  return {
-    extraction: mapExtractionRow(rows[0]),
-    role: normalizeExtractionAccessRole(rows[0].access_role),
-  }
+  return findExtractionAccessForUserInModule(input)
 }
 
 export async function findCloneableExtractionAccessForUser(input: { id: string; userId: string }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionAccessRow>(
-    `
-      SELECT
-        e.id,
-        e.user_id,
-        e.parent_extraction_id,
-        e.url,
-        e.video_id,
-        e.video_title,
-        e.thumbnail_url,
-        e.extraction_mode,
-        e.objective,
-        e.phases_json,
-        e.pro_tip,
-        e.metadata_json,
-        e.share_visibility,
-        e.clone_permission,
-        e.created_at,
-        e.source_type,
-        e.source_label,
-        e.folder_id,
-        e.source_text,
-        e.source_file_url,
-        e.source_file_name,
-        e.source_file_size_bytes,
-        e.source_file_mime_type,
-        e.transcript_source,
-        CASE
-          WHEN e.user_id = $2 THEN 'owner'
-          WHEN EXISTS (
-            WITH RECURSIVE folder_ancestors AS (
-              SELECT f.id, f.parent_id
-              FROM extraction_folders f
-              WHERE
-                e.folder_id IS NOT NULL
-                AND f.id = e.folder_id
-                AND f.user_id = e.user_id
-              UNION ALL
-              SELECT parent.id, parent.parent_id
-              FROM extraction_folders parent
-              INNER JOIN folder_ancestors fa
-                ON fa.parent_id = parent.id
-              WHERE parent.user_id = e.user_id
-            )
-            SELECT 1
-            FROM extraction_folder_members fm
-            WHERE
-              fm.member_user_id = $2
-              AND fm.owner_user_id = e.user_id
-              AND fm.folder_id IN (SELECT id FROM folder_ancestors)
-            LIMIT 1
-          ) THEN 'viewer'
-          WHEN e.share_visibility = 'circle' AND m.role IS NOT NULL THEN m.role
-          WHEN e.share_visibility IN ('public', 'unlisted') THEN 'viewer'
-          ELSE NULL
-        END AS access_role
-      FROM extractions e
-      LEFT JOIN extraction_members m
-        ON m.extraction_id = e.id
-        AND m.user_id = $2
-      WHERE e.id = $1
-      LIMIT 1
-    `,
-    [input.id, input.userId]
-  )
-
-  if (!rows[0]) {
-    return { extraction: null, role: null as ExtractionAccessRole | null }
-  }
-
-  return {
-    extraction: mapExtractionRow(rows[0]),
-    role: normalizeExtractionAccessRole(rows[0].access_role),
-  }
+  const {
+    findCloneableExtractionAccessForUser: findCloneableExtractionAccessForUserInModule,
+  } = await import('@/lib/db/extractions')
+  return findCloneableExtractionAccessForUserInModule(input)
 }
 
 export interface DbPlaybookLineageNode {
@@ -3596,52 +3223,8 @@ export async function buildExtractionLineageForUser(input: {
 }
 
 export async function findExtractionByIdForUser(input: { id: string; userId: string }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionRow>(
-    `
-      SELECT
-        id,
-        user_id,
-        parent_extraction_id,
-        url,
-        video_id,
-        video_title,
-        thumbnail_url,
-        extraction_mode,
-        objective,
-        phases_json,
-        pro_tip,
-        metadata_json,
-        share_visibility,
-        created_at,
-        clone_permission,
-        source_type,
-        source_label,
-        folder_id,
-        is_starred,
-        source_text,
-        source_file_url,
-        source_file_name,
-        source_file_size_bytes,
-        source_file_mime_type,
-        (source_text IS NOT NULL AND source_text <> '') AS has_source_text,
-        transcript_source,
-        (
-          SELECT COALESCE(
-            jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'color', t.color) ORDER BY t.name),
-            '[]'::jsonb
-          )
-          FROM extraction_tag_assignments eta
-          JOIN extraction_tags t ON t.id = eta.tag_id
-          WHERE eta.extraction_id = extractions.id
-        )::text AS tags_json
-      FROM extractions
-      WHERE id = $1 AND user_id = $2
-      LIMIT 1
-    `,
-    [input.id, input.userId]
-  )
-  return rows[0] ? mapExtractionRow(rows[0]) : null
+  const { findExtractionByIdForUser: findExtractionByIdForUserInModule } = await import('@/lib/db/extractions')
+  return findExtractionByIdForUserInModule(input)
 }
 
 export async function listExtractionMembersForOwner(input: { extractionId: string; ownerUserId: string }) {
@@ -3755,53 +3338,10 @@ export async function updateExtractionGeneratedContentForUser(input: {
   proTip: string
   metadataJson: string
 }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionRow>(
-    `
-      UPDATE extractions e
-      SET
-        objective = $1,
-        phases_json = $2,
-        pro_tip = $3,
-        metadata_json = $4
-      WHERE e.id = $5 AND e.user_id = $6
-      RETURNING
-        id,
-        user_id,
-        parent_extraction_id,
-        url,
-        video_id,
-        video_title,
-        thumbnail_url,
-        extraction_mode,
-        objective,
-        phases_json,
-        pro_tip,
-        metadata_json,
-        share_visibility,
-        clone_permission,
-        created_at,
-        source_type,
-        source_label,
-        folder_id,
-        source_text,
-        source_file_url,
-        source_file_name,
-        source_file_size_bytes,
-        source_file_mime_type,
-        transcript_source
-    `,
-    [
-      input.objective,
-      input.phasesJson,
-      input.proTip,
-      input.metadataJson,
-      input.id,
-      input.userId,
-    ]
-  )
-
-  return rows[0] ? mapExtractionRow(rows[0]) : null
+  const {
+    updateExtractionGeneratedContentForUser: updateExtractionGeneratedContentForUserInModule,
+  } = await import('@/lib/db/extractions')
+  return updateExtractionGeneratedContentForUserInModule(input)
 }
 
 export async function updateExtractionMetaForUser(input: {
