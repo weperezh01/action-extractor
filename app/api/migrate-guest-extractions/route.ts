@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { createExtraction } from '@/lib/db'
+import { createExtraction } from '@/lib/db/extractions'
 import { extractYoutubeVideoId } from '@/lib/youtube'
 import { normalizeExtractionMode } from '@/lib/extraction-modes'
 

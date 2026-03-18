@@ -5,9 +5,9 @@ import {
   findCloneableExtractionAccessForUser,
   findExtractionByIdForUser,
   findExtractionFolderByIdForUser,
-  findExtractionOrderNumberForUser,
   type ExtractionClonePermission,
 } from '@/lib/db'
+import { findExtractionOrderNumberForUser } from '@/lib/db/extractions'
 import { normalizeExtractionMode } from '@/lib/extraction-modes'
 import { normalizePlaybookPhases } from '@/lib/playbook-tree'
 import { buildYoutubeThumbnailUrl } from '@/lib/video-preview'

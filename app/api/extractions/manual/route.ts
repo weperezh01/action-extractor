@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { createExtraction, findExtractionOrderNumberForUser } from '@/lib/db'
+import { createExtraction, findExtractionOrderNumberForUser } from '@/lib/db/extractions'
 import { normalizeExtractionMode } from '@/lib/extraction-modes'
 import { normalizePlaybookPhases } from '@/lib/playbook-tree'
 
