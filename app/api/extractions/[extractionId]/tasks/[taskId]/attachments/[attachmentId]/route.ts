@@ -3,10 +3,10 @@ import { getUserFromRequest } from '@/lib/auth'
 import { deleteCloudinaryAsset } from '@/lib/cloudinary'
 import {
   decrementUserStorageUsed,
-  deleteExtractionTaskAttachmentByIdForUser,
   type ExtractionAccessRole,
 } from '@/lib/db'
 import {
+  deleteExtractionTaskAttachmentByIdForUser,
   findExtractionAccessForUser,
   findExtractionTaskByIdForUser,
 } from '@/lib/db/extractions'

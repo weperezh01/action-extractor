@@ -3,6 +3,8 @@ import { getUserFromRequest } from '@/lib/auth'
 import {
   createExtractionTaskCommentForUser,
   deleteExtractionTaskCommentByIdForUser,
+  findExtractionAccessForUser,
+  findExtractionTaskByIdForUser,
   getExtractionTaskLikeSummaryForUser,
   listExtractionTaskCommentsForUser,
   recordExtractionTaskShareForUser,
@@ -10,10 +12,6 @@ import {
   setExtractionTaskCommentHiddenByOwner,
   toggleExtractionTaskFollowForUser,
   toggleExtractionTaskLikeForUser,
-} from '@/lib/db'
-import {
-  findExtractionAccessForUser,
-  findExtractionTaskByIdForUser,
 } from '@/lib/db/extractions'
 import { notifyNewComment } from '@/lib/email-notifications'
 import {

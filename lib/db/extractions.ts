@@ -8,11 +8,16 @@ import {
   type DbExtractionFolder,
   type DbExtractionTag,
   type DbExtractionTask,
+  type DbExtractionTaskAttachment,
+  type DbExtractionTaskComment,
   type DbExtractionTaskEvent,
+  type DbExtractionTaskLikeSummary,
   type DbVideoCache,
   type ExtractionAccessRole,
   type ExtractionClonePermission,
   type ExtractionShareVisibility,
+  type ExtractionTaskAttachmentStorageProvider,
+  type ExtractionTaskAttachmentType,
   type ExtractionTaskEventType,
   type ExtractionTaskStatus,
 } from '@/lib/db'
@@ -181,6 +186,17 @@ interface DbExtractionTaskCommentRow {
   user_email: string | null
 }
 
+interface DbExtractionTaskLikeSummaryRow {
+  likes_count: number | string
+  liked_by_me: boolean
+  shares_count: number | string
+  shared_by_me: boolean
+  followers_count: number | string
+  following_by_me: boolean
+  views_count: number | string
+  viewed_by_me: boolean
+}
+
 interface DbExtractionTaskEdgeRow {
   id: string
   extraction_id: string
@@ -239,6 +255,12 @@ function parseDbInteger(value: unknown) {
 function parseDbNullableFloat(value: unknown) {
   if (value === null || value === undefined || value === '') return null
   const parsed = Number.parseFloat(String(value))
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function parseDbNullableInteger(value: unknown) {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number.parseInt(String(value), 10)
   return Number.isFinite(parsed) ? parsed : null
 }
 
@@ -413,6 +435,58 @@ function mapExtractionTaskEventRow(row: DbExtractionTaskEventRow): DbExtractionT
     created_at: toIso(row.created_at),
     user_name: row.user_name ?? null,
     user_email: row.user_email ?? null,
+  }
+}
+
+function normalizeAttachmentType(value: unknown): ExtractionTaskAttachmentType {
+  if (value === 'image' || value === 'audio' || value === 'youtube_link' || value === 'note') {
+    return value
+  }
+  return 'pdf'
+}
+
+function normalizeAttachmentStorageProvider(
+  value: unknown
+): ExtractionTaskAttachmentStorageProvider {
+  return value === 'cloudinary' ? 'cloudinary' : 'external'
+}
+
+function mapExtractionTaskAttachmentRow(
+  row: DbExtractionTaskAttachmentRow
+): DbExtractionTaskAttachment {
+  return {
+    id: row.id,
+    task_id: row.task_id,
+    extraction_id: row.extraction_id,
+    user_id: row.user_id,
+    attachment_type: normalizeAttachmentType(row.attachment_type),
+    storage_provider: normalizeAttachmentStorageProvider(row.storage_provider),
+    url: row.url,
+    thumbnail_url: row.thumbnail_url,
+    title: row.title,
+    mime_type: row.mime_type,
+    size_bytes: parseDbNullableInteger(row.size_bytes),
+    metadata_json: row.metadata_json || '{}',
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+    user_name: row.user_name ?? null,
+    user_email: row.user_email ?? null,
+  }
+}
+
+function mapExtractionTaskCommentRow(row: DbExtractionTaskCommentRow): DbExtractionTaskComment {
+  return {
+    id: row.id,
+    task_id: row.task_id,
+    extraction_id: row.extraction_id,
+    user_id: row.user_id,
+    parent_comment_id: row.parent_comment_id ?? null,
+    is_hidden: row.is_hidden === true,
+    content: row.content,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+    user_name: row.user_name,
+    user_email: row.user_email,
   }
 }
 
@@ -1801,6 +1875,760 @@ export async function createExtractionTaskEventForUser(input: {
   )
 
   return rows[0] ? mapExtractionTaskEventRow(rows[0]) : null
+}
+
+export async function listExtractionTaskAttachmentsForUser(input: {
+  taskId: string
+  extractionId: string
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskAttachmentRow>(
+    `
+      SELECT
+        a.id,
+        a.task_id,
+        a.extraction_id,
+        a.user_id,
+        a.attachment_type,
+        a.storage_provider,
+        a.url,
+        a.thumbnail_url,
+        a.title,
+        a.mime_type,
+        a.size_bytes,
+        a.metadata_json,
+        a.created_at,
+        a.updated_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM extraction_task_attachments a
+      INNER JOIN extraction_tasks t ON t.id = a.task_id
+      LEFT JOIN users u ON u.id = a.user_id
+      WHERE
+        a.task_id = $1
+        AND a.extraction_id = $2
+        AND t.extraction_id = $2
+      ORDER BY a.created_at DESC
+    `,
+    [input.taskId, input.extractionId]
+  )
+
+  return rows.map(mapExtractionTaskAttachmentRow)
+}
+
+export async function listExtractionTaskAttachmentsForSharedExtraction(extractionId: string) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskAttachmentRow>(
+    `
+      SELECT
+        a.id,
+        a.task_id,
+        a.extraction_id,
+        a.user_id,
+        a.attachment_type,
+        a.storage_provider,
+        a.url,
+        a.thumbnail_url,
+        a.title,
+        a.mime_type,
+        a.size_bytes,
+        a.metadata_json,
+        a.created_at,
+        a.updated_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM extraction_task_attachments a
+      INNER JOIN extraction_tasks t ON t.id = a.task_id
+      LEFT JOIN users u ON u.id = a.user_id
+      WHERE
+        a.extraction_id = $1
+        AND t.extraction_id = $1
+      ORDER BY t.phase_id ASC, string_to_array(t.position_path, '.')::int[] ASC, t.item_index ASC, a.created_at DESC
+    `,
+    [extractionId]
+  )
+
+  return rows.map(mapExtractionTaskAttachmentRow)
+}
+
+export async function createExtractionTaskAttachmentForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+  attachmentType: ExtractionTaskAttachmentType
+  storageProvider: ExtractionTaskAttachmentStorageProvider
+  url: string
+  thumbnailUrl?: string | null
+  title?: string | null
+  mimeType?: string | null
+  sizeBytes?: number | null
+  metadataJson?: string
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskAttachmentRow>(
+    `
+      WITH target_task AS (
+        SELECT id
+        FROM extraction_tasks
+        WHERE id = $1 AND extraction_id = $2
+        LIMIT 1
+      )
+      INSERT INTO extraction_task_attachments (
+        id,
+        task_id,
+        extraction_id,
+        user_id,
+        attachment_type,
+        storage_provider,
+        url,
+        thumbnail_url,
+        title,
+        mime_type,
+        size_bytes,
+        metadata_json
+      )
+      SELECT
+        $4,
+        target_task.id,
+        $2,
+        $3,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12
+      FROM target_task
+      RETURNING
+        id,
+        task_id,
+        extraction_id,
+        user_id,
+        attachment_type,
+        storage_provider,
+        url,
+        thumbnail_url,
+        title,
+        mime_type,
+        size_bytes,
+        metadata_json,
+        created_at,
+        updated_at
+    `,
+    [
+      input.taskId,
+      input.extractionId,
+      input.userId,
+      randomUUID(),
+      input.attachmentType,
+      input.storageProvider,
+      input.url,
+      input.thumbnailUrl ?? null,
+      input.title ?? null,
+      input.mimeType ?? null,
+      input.sizeBytes ?? null,
+      input.metadataJson ?? '{}',
+    ]
+  )
+
+  return rows[0] ? mapExtractionTaskAttachmentRow(rows[0]) : null
+}
+
+export async function deleteExtractionTaskAttachmentByIdForUser(input: {
+  attachmentId: string
+  taskId: string
+  extractionId: string
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskAttachmentRow>(
+    `
+      DELETE FROM extraction_task_attachments a
+      USING extraction_tasks t
+      WHERE
+        a.id = $1
+        AND a.task_id = $2
+        AND a.extraction_id = $3
+        AND t.id = a.task_id
+        AND t.extraction_id = $3
+      RETURNING
+        a.id,
+        a.task_id,
+        a.extraction_id,
+        a.user_id,
+        a.attachment_type,
+        a.storage_provider,
+        a.url,
+        a.thumbnail_url,
+        a.title,
+        a.mime_type,
+        a.size_bytes,
+        a.metadata_json,
+        a.created_at,
+        a.updated_at
+    `,
+    [input.attachmentId, input.taskId, input.extractionId]
+  )
+
+  return rows[0] ? mapExtractionTaskAttachmentRow(rows[0]) : null
+}
+
+export async function listExtractionTaskCommentsForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskCommentRow>(
+    `
+      SELECT
+        c.id,
+        c.task_id,
+        c.extraction_id,
+        c.user_id,
+        c.parent_comment_id,
+        c.is_hidden,
+        c.content,
+        c.created_at,
+        c.updated_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM extraction_task_comments c
+      INNER JOIN extraction_tasks t ON t.id = c.task_id
+      INNER JOIN users u ON u.id = c.user_id
+      WHERE
+        c.task_id = $1
+        AND c.extraction_id = $2
+        AND t.extraction_id = $2
+      ORDER BY c.created_at ASC
+    `,
+    [input.taskId, input.extractionId]
+  )
+
+  return rows.map(mapExtractionTaskCommentRow)
+}
+
+export async function createExtractionTaskCommentForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+  content: string
+  parentCommentId?: string | null
+}) {
+  await ensureDbReady()
+  const parentCommentId = typeof input.parentCommentId === 'string' ? input.parentCommentId.trim() : null
+  const { rows } = await pool.query<DbExtractionTaskCommentRow>(
+    `
+      WITH target_task AS (
+        SELECT id
+        FROM extraction_tasks
+        WHERE id = $1 AND extraction_id = $2
+        LIMIT 1
+      ),
+      parent_comment AS (
+        SELECT c.id
+        FROM extraction_task_comments c
+        WHERE
+          c.id = $6
+          AND c.task_id = $1
+          AND c.extraction_id = $2
+        LIMIT 1
+      ),
+      inserted AS (
+        INSERT INTO extraction_task_comments (
+          id,
+          task_id,
+          extraction_id,
+          user_id,
+          parent_comment_id,
+          content
+        )
+        SELECT
+          $4,
+          target_task.id,
+          $2,
+          $3,
+          parent_comment.id,
+          $5
+        FROM target_task
+        LEFT JOIN parent_comment ON TRUE
+        WHERE $6::text IS NULL OR parent_comment.id IS NOT NULL
+        RETURNING
+          id,
+          task_id,
+          extraction_id,
+          user_id,
+          parent_comment_id,
+          is_hidden,
+          content,
+          created_at,
+          updated_at
+      )
+      SELECT
+        i.id,
+        i.task_id,
+        i.extraction_id,
+        i.user_id,
+        i.parent_comment_id,
+        i.is_hidden,
+        i.content,
+        i.created_at,
+        i.updated_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM inserted i
+      INNER JOIN users u ON u.id = i.user_id
+    `,
+    [input.taskId, input.extractionId, input.userId, randomUUID(), input.content, parentCommentId]
+  )
+
+  return rows[0] ? mapExtractionTaskCommentRow(rows[0]) : null
+}
+
+export async function deleteExtractionTaskCommentByIdForUser(input: {
+  commentId: string
+  taskId: string
+  extractionId: string
+  userId: string
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskCommentRow>(
+    `
+      WITH target AS (
+        SELECT
+          c.id,
+          c.parent_comment_id
+        FROM extraction_task_comments c
+        INNER JOIN extraction_tasks t ON t.id = c.task_id
+        WHERE
+          c.id = $1
+          AND c.task_id = $2
+          AND c.extraction_id = $3
+          AND t.extraction_id = $3
+          AND c.user_id = $4
+        LIMIT 1
+      ),
+      reparented AS (
+        UPDATE extraction_task_comments child
+        SET parent_comment_id = target.parent_comment_id
+        FROM target
+        WHERE
+          child.parent_comment_id = target.id
+          AND child.task_id = $2
+          AND child.extraction_id = $3
+        RETURNING child.id
+      ),
+      deleted AS (
+        DELETE FROM extraction_task_comments c
+        USING target
+        WHERE c.id = target.id
+        RETURNING
+          c.id,
+          c.task_id,
+          c.extraction_id,
+          c.user_id,
+          c.parent_comment_id,
+          c.is_hidden,
+          c.content,
+          c.created_at,
+          c.updated_at
+      )
+      SELECT
+        d.id,
+        d.task_id,
+        d.extraction_id,
+        d.user_id,
+        d.parent_comment_id,
+        d.is_hidden,
+        d.content,
+        d.created_at,
+        d.updated_at,
+        $5::text AS user_name,
+        $6::text AS user_email
+      FROM deleted d
+    `,
+    [input.commentId, input.taskId, input.extractionId, input.userId, null, null]
+  )
+
+  return rows[0] ? mapExtractionTaskCommentRow(rows[0]) : null
+}
+
+export async function setExtractionTaskCommentHiddenByOwner(input: {
+  commentId: string
+  taskId: string
+  extractionId: string
+  ownerUserId: string
+  hidden: boolean
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionTaskCommentRow>(
+    `
+      WITH target AS (
+        SELECT c.id
+        FROM extraction_task_comments c
+        INNER JOIN extraction_tasks t ON t.id = c.task_id
+        INNER JOIN extractions e ON e.id = t.extraction_id
+        WHERE
+          c.id = $1
+          AND c.task_id = $2
+          AND c.extraction_id = $3
+          AND t.extraction_id = $3
+          AND e.user_id = $4
+        LIMIT 1
+      ),
+      updated AS (
+        UPDATE extraction_task_comments c
+        SET
+          is_hidden = $5,
+          updated_at = NOW()
+        FROM target
+        WHERE c.id = target.id
+        RETURNING
+          c.id,
+          c.task_id,
+          c.extraction_id,
+          c.user_id,
+          c.parent_comment_id,
+          c.is_hidden,
+          c.content,
+          c.created_at,
+          c.updated_at
+      )
+      SELECT
+        u2.id,
+        u2.task_id,
+        u2.extraction_id,
+        u2.user_id,
+        u2.parent_comment_id,
+        u2.is_hidden,
+        u2.content,
+        u2.created_at,
+        u2.updated_at,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM updated u2
+      INNER JOIN users u ON u.id = u2.user_id
+    `,
+    [input.commentId, input.taskId, input.extractionId, input.ownerUserId, input.hidden]
+  )
+
+  return rows[0] ? mapExtractionTaskCommentRow(rows[0]) : null
+}
+
+export async function getExtractionTaskLikeSummaryForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+}) {
+  await ensureDbReady()
+
+  const { rows } = await pool.query<DbExtractionTaskLikeSummaryRow>(
+    `
+      SELECT
+        (
+          SELECT COUNT(*)::int
+          FROM extraction_task_likes l
+          WHERE
+            l.task_id = t.id
+            AND l.extraction_id = t.extraction_id
+        ) AS likes_count,
+        EXISTS (
+          SELECT 1
+          FROM extraction_task_likes l
+          WHERE
+            l.task_id = t.id
+            AND l.extraction_id = t.extraction_id
+            AND l.user_id = $3
+        ) AS liked_by_me,
+        (
+          SELECT COUNT(*)::int
+          FROM extraction_task_shares s
+          WHERE
+            s.task_id = t.id
+            AND s.extraction_id = t.extraction_id
+        ) AS shares_count,
+        EXISTS (
+          SELECT 1
+          FROM extraction_task_shares s
+          WHERE
+            s.task_id = t.id
+            AND s.extraction_id = t.extraction_id
+            AND s.user_id = $3
+        ) AS shared_by_me,
+        (
+          SELECT COUNT(*)::int
+          FROM extraction_task_follows f
+          WHERE
+            f.task_id = t.id
+            AND f.extraction_id = t.extraction_id
+        ) AS followers_count,
+        EXISTS (
+          SELECT 1
+          FROM extraction_task_follows f
+          WHERE
+            f.task_id = t.id
+            AND f.extraction_id = t.extraction_id
+            AND f.user_id = $3
+        ) AS following_by_me,
+        (
+          SELECT COUNT(*)::int
+          FROM extraction_task_views v
+          WHERE
+            v.task_id = t.id
+            AND v.extraction_id = t.extraction_id
+        ) AS views_count,
+        EXISTS (
+          SELECT 1
+          FROM extraction_task_views v
+          WHERE
+            v.task_id = t.id
+            AND v.extraction_id = t.extraction_id
+            AND v.user_id = $3
+        ) AS viewed_by_me
+      FROM extraction_tasks t
+      WHERE
+        t.id = $1
+        AND t.extraction_id = $2
+      LIMIT 1
+    `,
+    [input.taskId, input.extractionId, input.userId]
+  )
+
+  const row = rows[0]
+  return {
+    task_id: input.taskId,
+    extraction_id: input.extractionId,
+    likes_count: row ? parseDbInteger(row.likes_count) : 0,
+    liked_by_me: row?.liked_by_me === true,
+    shares_count: row ? parseDbInteger(row.shares_count) : 0,
+    shared_by_me: row?.shared_by_me === true,
+    followers_count: row ? parseDbInteger(row.followers_count) : 0,
+    following_by_me: row?.following_by_me === true,
+    views_count: row ? parseDbInteger(row.views_count) : 0,
+    viewed_by_me: row?.viewed_by_me === true,
+  } satisfies DbExtractionTaskLikeSummary
+}
+
+export async function toggleExtractionTaskLikeForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+}) {
+  await ensureDbReady()
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const taskOwnershipCheck = await client.query(
+      `
+        SELECT id
+        FROM extraction_tasks
+        WHERE id = $1 AND extraction_id = $2
+        LIMIT 1
+      `,
+      [input.taskId, input.extractionId]
+    )
+
+    if (!taskOwnershipCheck.rows[0]) {
+      await client.query('ROLLBACK')
+      return null
+    }
+
+    const existing = await client.query(
+      `
+        SELECT id
+        FROM extraction_task_likes
+        WHERE task_id = $1 AND extraction_id = $2 AND user_id = $3
+        LIMIT 1
+      `,
+      [input.taskId, input.extractionId, input.userId]
+    )
+
+    if (existing.rows[0]) {
+      await client.query(
+        `
+          DELETE FROM extraction_task_likes
+          WHERE id = $1
+        `,
+        [existing.rows[0].id]
+      )
+    } else {
+      await client.query(
+        `
+          INSERT INTO extraction_task_likes (
+            id,
+            task_id,
+            extraction_id,
+            user_id
+          )
+          VALUES ($1, $2, $3, $4)
+        `,
+        [randomUUID(), input.taskId, input.extractionId, input.userId]
+      )
+    }
+
+    await client.query('COMMIT')
+    return getExtractionTaskLikeSummaryForUser(input)
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function toggleExtractionTaskFollowForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+}) {
+  await ensureDbReady()
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const taskOwnershipCheck = await client.query(
+      `
+        SELECT id
+        FROM extraction_tasks
+        WHERE id = $1 AND extraction_id = $2
+        LIMIT 1
+      `,
+      [input.taskId, input.extractionId]
+    )
+
+    if (!taskOwnershipCheck.rows[0]) {
+      await client.query('ROLLBACK')
+      return null
+    }
+
+    const existing = await client.query(
+      `
+        SELECT id
+        FROM extraction_task_follows
+        WHERE task_id = $1 AND extraction_id = $2 AND user_id = $3
+        LIMIT 1
+      `,
+      [input.taskId, input.extractionId, input.userId]
+    )
+
+    if (existing.rows[0]) {
+      await client.query(
+        `
+          DELETE FROM extraction_task_follows
+          WHERE id = $1
+        `,
+        [existing.rows[0].id]
+      )
+    } else {
+      await client.query(
+        `
+          INSERT INTO extraction_task_follows (
+            id,
+            task_id,
+            extraction_id,
+            user_id
+          )
+          VALUES ($1, $2, $3, $4)
+        `,
+        [randomUUID(), input.taskId, input.extractionId, input.userId]
+      )
+    }
+
+    await client.query('COMMIT')
+    return getExtractionTaskLikeSummaryForUser(input)
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function recordExtractionTaskShareForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+}) {
+  await ensureDbReady()
+
+  const taskOwnershipCheck = await pool.query<{ id: string }>(
+    `
+      SELECT id
+      FROM extraction_tasks
+      WHERE id = $1 AND extraction_id = $2
+      LIMIT 1
+    `,
+    [input.taskId, input.extractionId]
+  )
+
+  if (!taskOwnershipCheck.rows[0]) {
+    return null
+  }
+
+  await pool.query(
+    `
+      INSERT INTO extraction_task_shares (
+        id,
+        task_id,
+        extraction_id,
+        user_id
+      )
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (task_id, user_id)
+      DO NOTHING
+    `,
+    [randomUUID(), input.taskId, input.extractionId, input.userId]
+  )
+
+  return getExtractionTaskLikeSummaryForUser(input)
+}
+
+export async function recordExtractionTaskViewForUser(input: {
+  taskId: string
+  extractionId: string
+  userId: string
+}) {
+  await ensureDbReady()
+
+  const taskOwnershipCheck = await pool.query<{ id: string }>(
+    `
+      SELECT id
+      FROM extraction_tasks
+      WHERE id = $1 AND extraction_id = $2
+      LIMIT 1
+    `,
+    [input.taskId, input.extractionId]
+  )
+
+  if (!taskOwnershipCheck.rows[0]) {
+    return null
+  }
+
+  const { rows: insertedRows } = await pool.query<{ id: string }>(
+    `
+      INSERT INTO extraction_task_views (
+        id,
+        task_id,
+        extraction_id,
+        user_id
+      )
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (task_id, user_id)
+      DO NOTHING
+      RETURNING id
+    `,
+    [randomUUID(), input.taskId, input.extractionId, input.userId]
+  )
+
+  const summary = await getExtractionTaskLikeSummaryForUser(input)
+  return {
+    ...summary,
+    recorded: insertedRows.length > 0,
+  } satisfies DbExtractionTaskLikeSummary & { recorded: boolean }
 }
 
 export async function createExtraction(input: {
