@@ -1,923 +1,351 @@
 import { randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest, isAdminEmail } from '@/lib/auth'
+import { type PendingAiUsageLogInput } from '@/lib/ai-usage-log'
+import { AI_PRICING_VERSION, estimateCostUsd, streamAi } from '@/lib/ai-client'
+import { buildExtractionSystemPrompt, buildExtractionUserPrompt, estimateTime } from '@/lib/extract-core'
+import { getExtractionModeLabel } from '@/lib/extraction-modes'
+import { classifyModelError, retryWithBackoff } from '@/lib/extract-resilience'
 import {
-  createExtraction,
-  findExtractionOrderNumberForUser,
-  findAnyVideoCacheByVideoId,
-  findVideoCacheByVideoId,
-  getAppSetting,
-  getPromptOverride,
-  upsertVideoCache,
-} from '@/lib/db'
-import { persistAiUsageLogsInBackground, type PendingAiUsageLogInput } from '@/lib/ai-usage-log'
-import { classifyModelError, classifyTranscriptError, retryWithBackoff } from '@/lib/extract-resilience'
-import {
-  buildExtractionUserPrompt,
-  buildExtractionSystemPrompt,
-  estimateTime,
-  EXTRACTION_MODEL as EXTRACTION_MODEL_DEFAULT,
-  extractVideoId,
-  getExtractionPromptVersion,
-  parseExtractionModelText,
-} from '@/lib/extract-core'
-import {
-  AI_PRICING_VERSION,
-  type AiProvider,
-  callAi,
-  streamAi,
-  estimateCostUsd,
-  isProviderAvailable,
-  PROVIDER_MODELS,
-} from '@/lib/ai-client'
-import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
-import {
-  normalizeExtractionOutputLanguage,
-  resolveExtractionOutputLanguage,
-  type ResolvedExtractionOutputLanguage,
-} from '@/lib/output-language'
-import {
-  buildExtractionRateLimitMessage,
-  consumeUserExtractionRateLimit,
-  consumeGuestRateLimit,
-  type UserExtractionRateLimitResult,
-} from '@/lib/rate-limit'
-import { resolveVideoPreview } from '@/lib/video-preview'
-import { detectSourceType } from '@/lib/source-detector'
-import { extractWebContent } from '@/lib/content-extractor'
+  buildCachedExtractionResult,
+  createRateLimitResponse,
+  ensureExtractionProviderConfigured,
+  EXTRACTION_MAX_TOKENS,
+  ExtractionRequestError,
+  finalizeExtractionResult,
+  loadExtractionRequestContext,
+  parseExtractionRequestBody,
+  parseExtractionWithRepair,
+  resolveExtractionSourceContent,
+} from '@/lib/extraction-server'
 import { prepareContentForExtraction } from '@/lib/long-content-preparation'
-import { flattenItemsAsText, normalizePlaybookPhases } from '@/lib/playbook-tree'
-import { resolveYoutubeTranscriptWithFallback } from '@/lib/youtube-transcript-fallback'
+import { resolveExtractionOutputLanguage } from '@/lib/output-language'
+import { consumeGuestRateLimit, consumeUserExtractionRateLimit } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
-const EXTRACTION_MAX_TOKENS = 4096
-const JSON_REPAIR_MAX_TOKENS = 4096
-const JSON_REPAIR_SYSTEM_PROMPT =
-  'Eres un normalizador de JSON. Convierte contenido en JSON válido estricto. Devuelve solo JSON, sin markdown ni texto adicional.'
-
-function safeParse<T>(value: string, fallback: T): T {
-  try {
-    return JSON.parse(value) as T
-  } catch {
-    return fallback
-  }
-}
 
 function formatSseEvent(event: string, payload: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`
 }
 
-function buildTranscriptFallbackFromCachedExtraction(cachedVideo: {
-  objective: string
-  phases_json: string
-  pro_tip: string
-}) {
-  const phases = normalizePlaybookPhases(safeParse<unknown>(cachedVideo.phases_json, []))
-  const phaseLines = phases
-    .map((phase, index) => {
-      const title = typeof phase.title === 'string' && phase.title.trim() ? phase.title.trim() : `Fase ${index + 1}`
-      const items = flattenItemsAsText(phase.items).slice(0, 5)
-      if (items.length === 0) {
-        return `- ${title}`
-      }
-      return [`- ${title}`, ...items.map((item) => `  - ${item}`)].join('\n')
-    })
-    .join('\n')
-
-  return [
-    'Resumen previo del mismo video:',
-    `Objetivo: ${cachedVideo.objective}`,
-    phaseLines,
-    `Consejo Pro: ${cachedVideo.pro_tip}`,
-  ]
-    .filter((line) => line.trim().length > 0)
-    .join('\n')
-}
-
-function createRateLimitResponse(rateLimit: UserExtractionRateLimitResult) {
-  return NextResponse.json(
-    {
-      error: buildExtractionRateLimitMessage(rateLimit.limit),
-      rateLimit: {
-        limit: rateLimit.limit,
-        remaining: rateLimit.remaining,
-        resetAt: rateLimit.resetAt,
-      },
-    },
-    {
-      status: 429,
-      headers: {
-        'Retry-After': String(rateLimit.retryAfterSeconds),
-        'X-RateLimit-Limit': String(rateLimit.limit),
-        'X-RateLimit-Remaining': String(rateLimit.remaining),
-        'X-RateLimit-Reset': rateLimit.resetAt,
-      },
-    }
-  )
-}
-
-function buildJsonRepairUserPrompt(rawText: string) {
-  return `Convierte el siguiente contenido en JSON VÁLIDO con esta estructura exacta:
-
-{
-  "objective": "string",
-  "phases": [
-    {
-      "id": 1,
-      "title": "string",
-      "items": ["string"]
-    }
-  ],
-  "proTip": "string",
-  "metadata": {
-    "difficulty": "string",
-    "readingTime": "string"
-  }
-}
-
-Reglas:
-- Mantén el contenido original lo más fiel posible.
-- Si falta algún campo, completa con valor vacío razonable ("" o []).
-- No agregues markdown.
-- No uses comentarios.
-
-CONTENIDO A NORMALIZAR:
-${rawText}`
-}
-
-function buildCompactJsonRepairUserPrompt(rawText: string, modeLabel: string) {
-  return `Convierte el siguiente contenido en JSON VÁLIDO y COMPACTO para el modo "${modeLabel}" con esta estructura exacta:
-
-{
-  "objective": "string",
-  "phases": [
-    {
-      "id": 1,
-      "title": "string",
-      "items": ["string"]
-    }
-  ],
-  "proTip": "string",
-  "metadata": {
-    "difficulty": "string",
-    "readingTime": "string"
-  }
-}
-
-Reglas de compresión:
-- Máximo 4 fases.
-- Máximo 4 items por fase.
-- Cada item con máximo 20 palabras.
-- objective en máximo 2 líneas.
-- proTip en máximo 1 línea.
-- Mantén la esencia del contenido y elimina relleno.
-- Si falta algún campo, completa con valor vacío razonable ("" o []).
-- Devuelve solo JSON, sin markdown.
-
-CONTENIDO A NORMALIZAR:
-${rawText}`
-}
-
-async function parseExtractionWithRepair(params: {
-  modelText: string
-  provider: AiProvider
-  model: string
-  mode: ReturnType<typeof normalizeExtractionMode>
-  resolvedOutputLanguage: ResolvedExtractionOutputLanguage
-  originalTime: string
-  savedTime: string
-  onRepair?: () => void
-  userId?: string | null
-  sourceType?: string | null
-  onUsage?: (usage: PendingAiUsageLogInput) => Promise<void> | void
-}) {
-  const {
-    modelText,
-    provider,
-    model,
-    mode,
-    resolvedOutputLanguage,
-    originalTime,
-    savedTime,
-    onRepair,
-    userId,
-    sourceType,
-    onUsage,
-  } = params
-
-  const parseWithTime = (text: string) =>
-    parseExtractionModelText(
-      text,
-      {
-        originalTime,
-        savedTime,
-      },
-      mode,
-      resolvedOutputLanguage
-    )
-
-  try {
-    return parseWithTime(modelText)
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : ''
-    if (!message.includes('JSON inválido')) {
-      throw error
-    }
-
-    onRepair?.()
-
-    const repairPrompts = [
-      buildJsonRepairUserPrompt(modelText),
-      buildCompactJsonRepairUserPrompt(modelText, mode),
-    ]
-
-    let lastError: unknown = error
-    for (const repairPrompt of repairPrompts) {
-      try {
-        const repairResult = await retryWithBackoff(
-          () =>
-            callAi({
-              provider,
-              model,
-              system: JSON_REPAIR_SYSTEM_PROMPT,
-              messages: [{ role: 'user', content: repairPrompt }],
-              maxTokens: JSON_REPAIR_MAX_TOKENS,
-            }),
-          {
-            maxAttempts: 2,
-            shouldRetry: (repairError) => classifyModelError(repairError).retryable,
-          }
-        )
-
-        if (!repairResult.text.trim()) {
-          lastError = new Error('No se pudo normalizar la respuesta del modelo.')
-          continue
-        }
-
-        await onUsage?.({
-          provider,
-          model,
-          useType: 'repair',
-          userId,
-          sourceType,
-          inputTokens: repairResult.inputTokens,
-          outputTokens: repairResult.outputTokens,
-          costUsd: estimateCostUsd(model, repairResult.inputTokens, repairResult.outputTokens),
-          pricingVersion: AI_PRICING_VERSION,
-        })
-
-        return parseWithTime(repairResult.text)
-      } catch (repairError: unknown) {
-        lastError = repairError
-      }
-    }
-
-    if (lastError instanceof Error) {
-      throw lastError
-    }
-
-    throw new Error('El modelo devolvió JSON inválido. Intenta de nuevo.')
-  }
-}
-
 export async function POST(req: NextRequest) {
-  const user = await getUserFromRequest(req)
-  const isAdminUser = Boolean(user?.email && isAdminEmail(user.email))
-  const isGuest = !user && req.headers.get('X-Guest-Mode') === '1'
-
-  if (!user && !isGuest) {
-    return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
-  }
-
-  if (isGuest) {
-    const rawGuestId = req.headers.get('X-Guest-ID') ?? ''
-    const guestId = /^[0-9a-f-]{20,40}$/i.test(rawGuestId) ? rawGuestId : 'unknown'
-    const { allowed } = await consumeGuestRateLimit(guestId)
-    if (!allowed) {
-      return NextResponse.json(
-        { error: 'Ya usaste tu extracción gratuita. Crea una cuenta para continuar.' },
-        { status: 429 }
-      )
-    }
-  }
-
-  let body: unknown
   try {
-    body = await req.json()
-  } catch {
-    return NextResponse.json({ error: 'Body JSON inválido.' }, { status: 400 })
-  }
+    const user = await getUserFromRequest(req)
+    const isAdminUser = Boolean(user?.email && isAdminEmail(user.email))
+    const isGuest = !user && req.headers.get('X-Guest-Mode') === '1'
 
-  const rawUrl = typeof (body as { url?: unknown })?.url === 'string' ? (body as { url: string }).url.trim() : ''
-  const rawText = typeof (body as { text?: unknown })?.text === 'string' ? (body as { text: string }).text.trim() : ''
-  const bodySourceType = (body as { sourceType?: unknown })?.sourceType
-  const bodySourceLabel = typeof (body as { sourceLabel?: unknown })?.sourceLabel === 'string'
-    ? (body as { sourceLabel: string }).sourceLabel
-    : null
-  const bodySourceFileUrl: string | null = (() => {
-    const v = (body as { sourceFileUrl?: unknown })?.sourceFileUrl
-    return typeof v === 'string' && (v.startsWith('https://') || v.startsWith('/api/uploads/')) ? v : null
-  })()
-  const bodySourceFileName: string | null = (() => {
-    const v = (body as { sourceFileName?: unknown })?.sourceFileName
-    return typeof v === 'string' ? v.slice(0, 500) : null
-  })()
-  const bodySourceFileSizeBytes: number | null = (() => {
-    const v = (body as { sourceFileSizeBytes?: unknown })?.sourceFileSizeBytes
-    return typeof v === 'number' && v > 0 ? v : null
-  })()
-  const bodySourceFileMimeType: string | null = (() => {
-    const v = (body as { sourceFileMimeType?: unknown })?.sourceFileMimeType
-    return typeof v === 'string' ? v.slice(0, 200) : null
-  })()
-
-  const mode = normalizeExtractionMode((body as { mode?: unknown })?.mode)
-  const outputLanguage = normalizeExtractionOutputLanguage((body as { outputLanguage?: unknown })?.outputLanguage)
-  const modeLabel = getExtractionModeLabel(mode)
-  const promptVersion = getExtractionPromptVersion(mode, outputLanguage)
-
-  // Determine source type
-  const sourceType = typeof bodySourceType === 'string' && bodySourceType
-    ? bodySourceType as 'youtube' | 'web_url' | 'pdf' | 'docx' | 'text'
-    : detectSourceType(rawUrl || rawText)
-
-  // Validate input
-  if (sourceType === 'youtube') {
-    if (!rawUrl) {
-      return NextResponse.json({ error: 'URL requerida.' }, { status: 400 })
-    }
-  } else if (sourceType === 'web_url') {
-    if (!rawUrl) {
-      return NextResponse.json({ error: 'URL requerida.' }, { status: 400 })
-    }
-  } else {
-    // pdf, docx, text: need rawText
-    if (!rawText) {
-      return NextResponse.json({ error: 'Contenido de texto requerido.' }, { status: 400 })
-    }
-  }
-
-  const videoId = sourceType === 'youtube' ? extractVideoId(rawUrl) : null
-  if (sourceType === 'youtube' && !videoId) {
-    return NextResponse.json(
-      { error: 'URL de YouTube inválida. Usa el formato https://youtube.com/watch?v=...' },
-      { status: 400 }
-    )
-  }
-
-  const [dbExtractionProvider, dbExtractionModel, systemOverride, userOverride] = await Promise.all([
-    getAppSetting('extraction_provider').catch(() => null),
-    getAppSetting('extraction_model').catch(() => null),
-    getPromptOverride(`extraction:${mode}:system`).catch(() => null),
-    getPromptOverride(`extraction:${mode}:user`).catch(() => null),
-  ])
-  const EXTRACTION_PROVIDER: AiProvider =
-    (dbExtractionProvider as AiProvider | null) ?? 'anthropic'
-  const EXTRACTION_MODEL = dbExtractionModel || EXTRACTION_MODEL_DEFAULT
-
-  // Cache only for YouTube
-  const cachedVideo = sourceType === 'youtube' && videoId
-    ? await findVideoCacheByVideoId({ videoId, promptVersion, model: EXTRACTION_MODEL })
-    : null
-  const fallbackVideoCache = sourceType === 'youtube' && videoId
-    ? (cachedVideo ?? (await findAnyVideoCacheByVideoId(videoId)))
-    : null
-
-  if (!cachedVideo) {
-    if (!isProviderAvailable(EXTRACTION_PROVIDER)) {
-      return NextResponse.json({ error: 'Servicio de IA no configurado. Falta la API key del proveedor seleccionado.' }, { status: 503 })
+    if (!user && !isGuest) {
+      return NextResponse.json({ error: 'Debes iniciar sesión.' }, { status: 401 })
     }
 
-    if (user && !isAdminUser) {
-      const rateLimit = await consumeUserExtractionRateLimit(user.id)
-      if (!rateLimit.allowed) {
-        return createRateLimitResponse(rateLimit)
+    if (isGuest) {
+      const rawGuestId = req.headers.get('X-Guest-ID') ?? ''
+      const guestId = /^[0-9a-f-]{20,40}$/i.test(rawGuestId) ? rawGuestId : 'unknown'
+      const { allowed } = await consumeGuestRateLimit(guestId)
+      if (!allowed) {
+        return NextResponse.json(
+          { error: 'Ya usaste tu extracción gratuita. Crea una cuenta para continuar.' },
+          { status: 429 }
+        )
       }
     }
-  }
 
-  const pendingExtractionId = user ? randomUUID() : null
+    let body: unknown
+    try {
+      body = await req.json()
+    } catch {
+      return NextResponse.json({ error: 'Body JSON inválido.' }, { status: 400 })
+    }
 
-  const encoder = new TextEncoder()
-  const abortController = new AbortController()
-  let closed = false
+    const input = parseExtractionRequestBody(body)
+    const context = await loadExtractionRequestContext(input)
+    const modeLabel = getExtractionModeLabel(context.mode)
 
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const send = (event: string, payload: unknown) => {
-        if (closed) return
-        try {
-          controller.enqueue(encoder.encode(formatSseEvent(event, payload)))
-        } catch {
-          closed = true
+    if (!context.cachedVideo) {
+      ensureExtractionProviderConfigured(context.extractionProvider)
+
+      if (user && !isAdminUser) {
+        const rateLimit = await consumeUserExtractionRateLimit(user.id)
+        if (!rateLimit.allowed) {
+          return createRateLimitResponse(rateLimit)
         }
       }
+    }
 
-      const close = () => {
-        if (closed) return
-        closed = true
-        try {
-          controller.close()
-        } catch {
-          // noop
-        }
-      }
+    const pendingExtractionId = user ? randomUUID() : null
 
-      try {
-        const pendingAiUsageLogs: PendingAiUsageLogInput[] = []
+    const encoder = new TextEncoder()
+    const abortController = new AbortController()
+    let closed = false
 
-        if (sourceType === 'youtube') {
-          send('status', {
-            step: 'cache',
-            message: 'Verificando caché del video...',
-          })
-        }
-
-        if (cachedVideo) {
-          const cachedMetadata = safeParse(cachedVideo.metadata_json, {
-            readingTime: '3 min',
-            difficulty: 'Media',
-            originalTime: '0m',
-            savedTime: '0m',
-          })
-
-          const responsePayload = {
-            mode,
-            objective: cachedVideo.objective,
-            phases: safeParse(cachedVideo.phases_json, []),
-            proTip: cachedVideo.pro_tip,
-            metadata: {
-              readingTime:
-                typeof cachedMetadata.readingTime === 'string' ? cachedMetadata.readingTime : '3 min',
-              difficulty:
-                typeof cachedMetadata.difficulty === 'string' ? cachedMetadata.difficulty : 'Media',
-              originalTime:
-                typeof cachedMetadata.originalTime === 'string' ? cachedMetadata.originalTime : '0m',
-              savedTime: typeof cachedMetadata.savedTime === 'string' ? cachedMetadata.savedTime : '0m',
-            },
-          }
-
-          const videoPreview = await resolveVideoPreview({
-            videoId: videoId!,
-            titleHint: cachedVideo.video_title,
-            thumbnailHint: cachedVideo.thumbnail_url,
-          })
-
-          if (!cachedVideo.video_title || !cachedVideo.thumbnail_url) {
-            await upsertVideoCache({
-              videoId: videoId!,
-              videoTitle: videoPreview.videoTitle,
-              thumbnailUrl: videoPreview.thumbnailUrl,
-              objective: responsePayload.objective,
-              phasesJson: JSON.stringify(responsePayload.phases),
-              proTip: responsePayload.proTip,
-              metadataJson: JSON.stringify(responsePayload.metadata),
-              transcriptText: cachedVideo.transcript_text,
-              promptVersion,
-              model: EXTRACTION_MODEL,
-            })
-          }
-
-          send('status', {
-            step: 'cached',
-            message: 'Resultado obtenido desde caché.',
-          })
-
-          if (user) {
-            const saved = await createExtraction({
-              userId: user.id,
-              url: rawUrl || null,
-              videoId: videoId!,
-              videoTitle: videoPreview.videoTitle,
-              thumbnailUrl: videoPreview.thumbnailUrl,
-              extractionMode: mode,
-              objective: responsePayload.objective,
-              phasesJson: JSON.stringify(responsePayload.phases),
-              proTip: responsePayload.proTip,
-              metadataJson: JSON.stringify(responsePayload.metadata),
-              sourceType,
-              sourceLabel: videoPreview.videoTitle ?? bodySourceLabel,
-              transcriptSource: 'cache_exact',
-            })
-            const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
-
-            send('result', {
-              ...responsePayload,
-              url: rawUrl || null,
-              videoId: videoId!,
-              videoTitle: videoPreview.videoTitle,
-              thumbnailUrl: videoPreview.thumbnailUrl,
-              outputLanguageRequested: outputLanguage,
-              outputLanguageResolved: outputLanguage === 'auto' ? null : outputLanguage,
-              id: saved.id,
-              orderNumber: orderNumber ?? undefined,
-              shareVisibility: saved.share_visibility,
-              clonePermission: saved.clone_permission,
-              createdAt: saved.created_at,
-              cached: true,
-              sourceType,
-              transcriptSource: 'cache_exact',
-              sourceLabel: saved.source_label,
-              folderId: saved.folder_id,
-            })
-          } else {
-            send('result', {
-              ...responsePayload,
-              url: rawUrl || null,
-              videoId: videoId!,
-              videoTitle: videoPreview.videoTitle,
-              thumbnailUrl: videoPreview.thumbnailUrl,
-              outputLanguageRequested: outputLanguage,
-              outputLanguageResolved: outputLanguage === 'auto' ? null : outputLanguage,
-              cached: true,
-              sourceType,
-              transcriptSource: 'cache_exact',
-              sourceLabel: videoPreview.videoTitle ?? bodySourceLabel,
-            })
-          }
-          send('done', { ok: true })
-          close()
-          return
-        }
-
-        // Obtain content based on source type
-        let contentText = ''
-        let contentTitle: string | null = null
-        let previewPromise: Promise<{ videoTitle: string | null; thumbnailUrl: string | null }> | null = null
-        let transcriptSource:
-          | 'cache_transcript'
-          | 'cache_result'
-          | 'custom_extractor'
-          | 'youtube_transcript'
-          | 'yt_dlp_subtitles'
-          | 'openai_audio_transcription'
-          | 'youtube_official_api'
-          | 'web'
-          | 'file'
-          | 'text' = 'youtube_transcript'
-
-        if (sourceType === 'youtube') {
-          send('status', {
-            step: 'transcript',
-            message: 'Obteniendo transcripción de YouTube...',
-          })
-          previewPromise = resolveVideoPreview({ videoId: videoId! })
-
-          let transcriptText = fallbackVideoCache?.transcript_text?.trim() ?? ''
-          transcriptSource = transcriptText ? 'cache_transcript' : 'youtube_transcript'
-          const transcriptFallbackFromCache = fallbackVideoCache
-            ? buildTranscriptFallbackFromCachedExtraction(fallbackVideoCache)
-            : ''
-
-          if (transcriptText) {
-            send('status', {
-              step: 'transcript-cache',
-              message: 'Usando transcripción en caché del video...',
-            })
-          } else {
-            try {
-              const transcriptResolution = await retryWithBackoff(
-                () =>
-                  resolveYoutubeTranscriptWithFallback(videoId!, {
-                    onStatus: (update) => send('status', update),
-                  }),
-                {
-                  maxAttempts: 3,
-                  shouldRetry: (transcriptError) => classifyTranscriptError(transcriptError).retryable,
-                  onRetry: ({ nextAttempt, maxAttempts, delayMs }) =>
-                    send('status', {
-                      step: 'transcript-retry',
-                      message: `Fallo al obtener la transcripción. Reintentando (${nextAttempt}/${maxAttempts}) en ${Math.ceil(
-                        delayMs / 1000
-                      )}s...`,
-                    }),
-                }
-              )
-
-              if (!transcriptResolution.segments.length) {
-                if (transcriptFallbackFromCache) {
-                  transcriptText = transcriptFallbackFromCache
-                  transcriptSource = 'cache_result'
-                  send('status', {
-                    step: 'transcript-fallback',
-                    message:
-                      'No se pudieron leer subtítulos en este momento. Usando una extracción previa del mismo video como respaldo.',
-                  })
-                } else {
-                  send('error', {
-                    message: 'No se encontró transcripción utilizable para este video. Prueba con otro enlace.',
-                  })
-                  send('done', { ok: false })
-                  close()
-                  return
-                }
-              } else {
-                transcriptText = transcriptResolution.segments.map((segment) => segment.text).join(' ')
-                transcriptSource = transcriptResolution.source
-                for (const usageEvent of transcriptResolution.usageEvents) {
-                  pendingAiUsageLogs.push({
-                    provider: usageEvent.provider,
-                    model: usageEvent.model,
-                    useType: usageEvent.useType,
-                    userId: user?.id ?? null,
-                    sourceType,
-                    inputTokens: 0,
-                    outputTokens: 0,
-                    costUsd: usageEvent.costUsd,
-                    pricingVersion: usageEvent.pricingVersion,
-                  })
-                }
-              }
-            } catch (error: unknown) {
-              if (transcriptFallbackFromCache) {
-                transcriptText = transcriptFallbackFromCache
-                transcriptSource = 'cache_result'
-                send('status', {
-                  step: 'transcript-fallback',
-                  message:
-                    'No se pudieron leer subtítulos en este momento. Usando una extracción previa del mismo video como respaldo.',
-                })
-              } else {
-                const transcriptError = classifyTranscriptError(error)
-                send('error', { message: transcriptError.message })
-                send('done', { ok: false })
-                close()
-                return
-              }
-            }
-          }
-
-          contentText = transcriptText
-        } else if (sourceType === 'web_url') {
-          send('status', {
-            step: 'fetch',
-            message: 'Descargando contenido de la página web...',
-          })
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const send = (event: string, payload: unknown) => {
+          if (closed) return
           try {
-            const webContent = await extractWebContent(rawUrl)
-            contentText = webContent.text
-            contentTitle = webContent.title
-            transcriptSource = 'web'
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : 'No se pudo descargar la página.'
-            send('error', { message: msg })
+            controller.enqueue(encoder.encode(formatSseEvent(event, payload)))
+          } catch {
+            closed = true
+          }
+        }
+
+        const close = () => {
+          if (closed) return
+          closed = true
+          try {
+            controller.close()
+          } catch {
+            // noop
+          }
+        }
+
+        try {
+          const pendingAiUsageLogs: PendingAiUsageLogInput[] = []
+
+          if (context.sourceType === 'youtube') {
+            send('status', {
+              step: 'cache',
+              message: 'Verificando caché del video...',
+            })
+          }
+
+          if (context.cachedVideo) {
+            const cachedResult = await buildCachedExtractionResult({
+              userId: user?.id ?? null,
+              rawUrl: context.rawUrl,
+              videoId: context.videoId!,
+              mode: context.mode,
+              outputLanguage: context.outputLanguage,
+              sourceType: context.sourceType,
+              bodySourceLabel: context.bodySourceLabel,
+              cachedVideo: context.cachedVideo,
+              promptVersion: context.promptVersion,
+              extractionModel: context.extractionModel,
+            })
+
+            send('status', {
+              step: 'cached',
+              message: 'Resultado obtenido desde caché.',
+            })
+            send('result', {
+              ...cachedResult,
+              hasSourceText: false,
+            })
+            send('done', { ok: true })
+            close()
+            return
+          }
+
+          const resolvedContent = await resolveExtractionSourceContent({
+            sourceType: context.sourceType,
+            rawUrl: context.rawUrl,
+            rawText: context.rawText,
+            videoId: context.videoId,
+            fallbackVideoCache: context.fallbackVideoCache,
+            extractionProvider: context.extractionProvider,
+            extractionModel: context.extractionModel,
+            userId: user?.id ?? null,
+            onUsage: (usage) => {
+              pendingAiUsageLogs.push(usage)
+            },
+            onStatus: (update) => send('status', update),
+          })
+
+          const preparedContent = await prepareContentForExtraction({
+            text: resolvedContent.contentText,
+            provider: context.extractionProvider,
+            model: context.extractionModel,
+            userId: user?.id ?? null,
+            sourceType: context.sourceType,
+            onUsage: (usage) => {
+              pendingAiUsageLogs.push(usage)
+            },
+            onProgress: (progress) => send('status', progress),
+          })
+          const finalTranscript = preparedContent.finalText
+          const wordCount = resolvedContent.contentText.split(/\s+/).length
+          const { originalTime, savedTime } = estimateTime(wordCount)
+          const resolvedOutputLanguage = resolveExtractionOutputLanguage(
+            context.outputLanguage,
+            finalTranscript
+          )
+
+          send('status', {
+            step: 'language',
+            message:
+              resolvedOutputLanguage === 'en'
+                ? 'Idioma detectado: inglés.'
+                : 'Idioma detectado: español.',
+          })
+
+          send('status', {
+            step: 'analyzing',
+            message: `Analizando contenido con IA (${modeLabel})...`,
+          })
+
+          let modelText = ''
+          try {
+            const aiResult = await retryWithBackoff(
+              () =>
+                streamAi(
+                  {
+                    provider: context.extractionProvider,
+                    model: context.extractionModel,
+                    system: buildExtractionSystemPrompt(
+                      context.mode,
+                      resolvedOutputLanguage,
+                      context.systemOverride
+                    ),
+                    messages: [
+                      {
+                        role: 'user',
+                        content: buildExtractionUserPrompt(
+                          finalTranscript,
+                          context.mode,
+                          resolvedOutputLanguage,
+                          context.userOverride
+                        ),
+                      },
+                    ],
+                    maxTokens: EXTRACTION_MAX_TOKENS,
+                  },
+                  {
+                    onChunk: (chunk) => send('text', { chunk }),
+                    signal: abortController.signal,
+                  }
+                ),
+              {
+                maxAttempts: 3,
+                shouldRetry: (modelError) => classifyModelError(modelError).retryable,
+                onRetry: ({ nextAttempt, maxAttempts, delayMs }) =>
+                  send('status', {
+                    step: 'ai-retry',
+                    message: `La IA falló en el intento anterior. Reintentando (${nextAttempt}/${maxAttempts}) en ${Math.ceil(
+                      delayMs / 1000
+                    )}s...`,
+                  }),
+              }
+            )
+            modelText = aiResult.text
+            pendingAiUsageLogs.push({
+              provider: context.extractionProvider,
+              model: context.extractionModel,
+              useType: 'extraction',
+              userId: user?.id ?? null,
+              sourceType: context.sourceType,
+              inputTokens: aiResult.inputTokens,
+              outputTokens: aiResult.outputTokens,
+              costUsd: estimateCostUsd(
+                context.extractionModel,
+                aiResult.inputTokens,
+                aiResult.outputTokens
+              ),
+              pricingVersion: AI_PRICING_VERSION,
+            })
+          } catch (error: unknown) {
+            const modelError = classifyModelError(error)
+            send('error', { message: modelError.message })
             send('done', { ok: false })
             close()
             return
           }
-        } else if (sourceType === 'text') {
-          send('status', { step: 'text', message: 'Preparando texto para análisis...' })
-          contentText = rawText
-          contentTitle = bodySourceLabel
-          transcriptSource = 'text'
-        } else if (sourceType === 'pdf') {
-          send('status', { step: 'file', message: 'Analizando documento PDF...' })
-          contentText = rawText
-          contentTitle = bodySourceLabel
-          transcriptSource = 'file'
-        } else if (sourceType === 'docx') {
-          send('status', { step: 'file', message: 'Analizando documento Word...' })
-          contentText = rawText
-          contentTitle = bodySourceLabel
-          transcriptSource = 'file'
-        }
 
-        if (!contentText.trim()) {
-          send('error', { message: 'El contenido está vacío. Prueba con otra fuente.' })
-          send('done', { ok: false })
-          close()
-          return
-        }
-
-        const preparedContent = await prepareContentForExtraction({
-          text: contentText,
-          provider: EXTRACTION_PROVIDER,
-          model: EXTRACTION_MODEL,
-          userId: user?.id ?? null,
-          sourceType,
-          onUsage: (usage) => {
-            pendingAiUsageLogs.push(usage)
-          },
-          onProgress: (progress) => send('status', progress),
-        })
-        const finalTranscript = preparedContent.finalText
-
-        const wordCount = contentText.split(/\s+/).length
-        const { originalTime, savedTime } = estimateTime(wordCount)
-        const resolvedOutputLanguage = resolveExtractionOutputLanguage(outputLanguage, finalTranscript)
-
-        send('status', {
-          step: 'language',
-          message:
-            resolvedOutputLanguage === 'en'
-              ? 'Idioma detectado: inglés.'
-              : 'Idioma detectado: español.',
-        })
-
-        send('status', {
-          step: 'analyzing',
-          message: `Analizando contenido con IA (${modeLabel})...`,
-        })
-
-        let modelText = ''
-        try {
-          const aiResult = await retryWithBackoff(
-            () =>
-              streamAi(
-                {
-                  provider: EXTRACTION_PROVIDER,
-                  model: EXTRACTION_MODEL,
-                  system: buildExtractionSystemPrompt(mode, resolvedOutputLanguage, systemOverride),
-                  messages: [
-                    {
-                      role: 'user',
-                      content: buildExtractionUserPrompt(finalTranscript, mode, resolvedOutputLanguage, userOverride),
-                    },
-                  ],
-                  maxTokens: EXTRACTION_MAX_TOKENS,
-                },
-                {
-                  onChunk: (chunk) => send('text', { chunk }),
-                  signal: abortController.signal,
-                }
-              ),
-            {
-              maxAttempts: 3,
-              shouldRetry: (modelError) => classifyModelError(modelError).retryable,
-              onRetry: ({ nextAttempt, maxAttempts, delayMs }) =>
+          let responsePayload: Awaited<ReturnType<typeof parseExtractionWithRepair>>
+          try {
+            responsePayload = await parseExtractionWithRepair({
+              modelText,
+              provider: context.extractionProvider,
+              model: context.extractionModel,
+              originalTime,
+              savedTime,
+              mode: context.mode,
+              resolvedOutputLanguage,
+              userId: user?.id ?? null,
+              sourceType: context.sourceType,
+              onUsage: (usage) => {
+                pendingAiUsageLogs.push(usage)
+              },
+              onRepair: () =>
                 send('status', {
-                  step: 'ai-retry',
-                  message: `La IA falló en el intento anterior. Reintentando (${nextAttempt}/${maxAttempts}) en ${Math.ceil(
-                    delayMs / 1000
-                  )}s...`,
+                  step: 'repair-json',
+                  message: 'Corrigiendo formato de respuesta...',
                 }),
-            }
-          )
-          modelText = aiResult.text
-          pendingAiUsageLogs.push({
-            provider: EXTRACTION_PROVIDER,
-            model: EXTRACTION_MODEL,
-            useType: 'extraction',
-            userId: user?.id ?? null,
-            sourceType,
-            inputTokens: aiResult.inputTokens,
-            outputTokens: aiResult.outputTokens,
-            costUsd: estimateCostUsd(EXTRACTION_MODEL, aiResult.inputTokens, aiResult.outputTokens),
-            pricingVersion: AI_PRICING_VERSION,
-          })
-        } catch (error: unknown) {
-          const modelError = classifyModelError(error)
-          send('error', { message: modelError.message })
-          send('done', { ok: false })
-          close()
-          return
-        }
+            })
+          } catch (error: unknown) {
+            const modelError = classifyModelError(error)
+            send('error', { message: modelError.message })
+            send('done', { ok: false })
+            close()
+            return
+          }
 
-        let responsePayload: Awaited<ReturnType<typeof parseExtractionWithRepair>>
-        try {
-          responsePayload = await parseExtractionWithRepair({
-            modelText,
-            provider: EXTRACTION_PROVIDER,
-            model: EXTRACTION_MODEL,
-            originalTime,
-            savedTime,
-            mode,
+          const result = await finalizeExtractionResult({
+            userId: user?.id ?? null,
+            pendingExtractionId,
+            pendingAiUsageLogs,
+            responsePayload,
+            rawUrl: context.rawUrl,
+            videoId: context.videoId,
+            mode: context.mode,
+            outputLanguage: context.outputLanguage,
             resolvedOutputLanguage,
-            userId: user?.id ?? null,
-            sourceType,
-            onUsage: (usage) => {
-              pendingAiUsageLogs.push(usage)
-            },
-            onRepair: () =>
-              send('status', {
-                step: 'repair-json',
-                message: 'Corrigiendo formato de respuesta...',
-              }),
+            sourceType: context.sourceType,
+            bodySourceLabel: context.bodySourceLabel,
+            bodySourceFileUrl: context.bodySourceFileUrl,
+            bodySourceFileName: context.bodySourceFileName,
+            bodySourceFileSizeBytes: context.bodySourceFileSizeBytes,
+            bodySourceFileMimeType: context.bodySourceFileMimeType,
+            contentText: resolvedContent.contentText,
+            contentTitle: resolvedContent.contentTitle,
+            transcriptSource: resolvedContent.transcriptSource,
+            promptVersion: context.promptVersion,
+            extractionModel: context.extractionModel,
+            previewPromise: resolvedContent.previewPromise,
           })
+
+          send('result', result)
+          send('done', { ok: true })
         } catch (error: unknown) {
-          const modelError = classifyModelError(error)
-          send('error', { message: modelError.message })
+          if (error instanceof ExtractionRequestError) {
+            send('error', { message: error.message })
+          } else {
+            console.error('[ActionExtractor] extract stream error:', error)
+            send('error', {
+              message:
+                'No se pudo completar la extracción por un error interno. Intenta nuevamente en unos minutos.',
+            })
+          }
           send('done', { ok: false })
+        } finally {
           close()
-          return
         }
-        const videoPreview = previewPromise ? await previewPromise : { videoTitle: null, thumbnailUrl: null }
+      },
+      cancel() {
+        abortController.abort()
+      },
+    })
 
-        // Only upsert cache for YouTube
-        if (sourceType === 'youtube' && videoId) {
-          await upsertVideoCache({
-            videoId,
-            videoTitle: videoPreview.videoTitle,
-            thumbnailUrl: videoPreview.thumbnailUrl,
-            objective: responsePayload.objective,
-            phasesJson: JSON.stringify(responsePayload.phases),
-            proTip: responsePayload.proTip,
-            metadataJson: JSON.stringify(responsePayload.metadata),
-            transcriptText: transcriptSource === 'cache_result' ? null : contentText,
-            promptVersion,
-            model: EXTRACTION_MODEL,
-          })
-        }
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    })
+  } catch (error: unknown) {
+    if (error instanceof ExtractionRequestError) {
+      return NextResponse.json({ error: error.message }, { status: error.status })
+    }
 
-        const resolvedSourceLabel = sourceType === 'youtube'
-          ? (videoPreview.videoTitle ?? bodySourceLabel)
-          : (contentTitle ?? bodySourceLabel)
-
-        const sourceTextToStore = sourceType !== 'youtube' ? contentText || null : null
-
-        if (user) {
-          const saved = await createExtraction({
-            id: pendingExtractionId ?? undefined,
-            userId: user.id,
-            url: rawUrl || null,
-            videoId: videoId ?? null,
-            videoTitle: videoPreview.videoTitle,
-            thumbnailUrl: videoPreview.thumbnailUrl,
-            extractionMode: mode,
-            objective: responsePayload.objective,
-            phasesJson: JSON.stringify(responsePayload.phases),
-            proTip: responsePayload.proTip,
-            metadataJson: JSON.stringify(responsePayload.metadata),
-            sourceType,
-            sourceLabel: resolvedSourceLabel,
-            sourceText: sourceTextToStore,
-            sourceFileUrl: bodySourceFileUrl,
-            sourceFileName: bodySourceFileName,
-            sourceFileSizeBytes: bodySourceFileSizeBytes,
-            sourceFileMimeType: bodySourceFileMimeType,
-            transcriptSource,
-          })
-
-          persistAiUsageLogsInBackground(pendingAiUsageLogs, saved.id)
-
-          const orderNumber = await findExtractionOrderNumberForUser({ id: saved.id, userId: user.id })
-
-          send('result', {
-            ...responsePayload,
-            url: rawUrl || null,
-            videoId: videoId ?? null,
-            videoTitle: videoPreview.videoTitle,
-            thumbnailUrl: videoPreview.thumbnailUrl,
-            outputLanguageRequested: outputLanguage,
-            outputLanguageResolved: resolvedOutputLanguage,
-            id: saved.id,
-            orderNumber: orderNumber ?? undefined,
-            shareVisibility: saved.share_visibility,
-            clonePermission: saved.clone_permission,
-            createdAt: saved.created_at,
-            cached: false,
-            sourceType,
-            transcriptSource: saved.transcript_source,
-            sourceLabel: saved.source_label,
-            folderId: saved.folder_id,
-            sourceFileUrl: saved.source_file_url,
-            sourceFileName: saved.source_file_name,
-            sourceFileSizeBytes: saved.source_file_size_bytes,
-            sourceFileMimeType: saved.source_file_mime_type,
-            hasSourceText: !!sourceTextToStore,
-          })
-        } else {
-          persistAiUsageLogsInBackground(pendingAiUsageLogs, null)
-
-          send('result', {
-            ...responsePayload,
-            url: rawUrl || null,
-            videoId: videoId ?? null,
-            videoTitle: videoPreview.videoTitle,
-            thumbnailUrl: videoPreview.thumbnailUrl,
-            outputLanguageRequested: outputLanguage,
-            outputLanguageResolved: resolvedOutputLanguage,
-            cached: false,
-            sourceType,
-            transcriptSource,
-            sourceLabel: resolvedSourceLabel,
-          })
-        }
-        send('done', { ok: true })
-      } catch (error: unknown) {
-        console.error('[ActionExtractor] extract stream error:', error)
-        send('error', {
-          message:
-            'No se pudo completar la extracción por un error interno. Intenta nuevamente en unos minutos.',
-        })
-        send('done', { ok: false })
-      } finally {
-        close()
-      }
-    },
-    cancel() {
-      abortController.abort()
-    },
-  })
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    },
-  })
+    console.error('[ActionExtractor] extract stream setup error:', error)
+    return NextResponse.json(
+      {
+        error:
+          'No se pudo completar la extracción por un error interno. Intenta nuevamente en unos minutos.',
+      },
+      { status: 500 }
+    )
+  }
 }
