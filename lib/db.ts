@@ -10289,49 +10289,29 @@ export async function updateExtractionTaskFlowNodeType(input: {
 export async function getPresentationDeck(
   { extractionId }: { extractionId: string }
 ): Promise<{ deckJson: string } | null> {
-  await ensureDbReady()
-  const { rows } = await pool.query<{ deck_json: string }>(
-    `SELECT deck_json FROM extraction_presentations WHERE extraction_id = $1`,
-    [extractionId]
-  )
-  if (!rows[0]) return null
-  return { deckJson: rows[0].deck_json }
+  const { getPresentationDeck: getPresentationDeckInModule } = await import('@/lib/db/extractions')
+  return getPresentationDeckInModule({ extractionId })
 }
 
 export async function savePresentationDeck(
   { extractionId, deckJson }: { extractionId: string; deckJson: string }
 ): Promise<void> {
-  await ensureDbReady()
-  await pool.query(
-    `INSERT INTO extraction_presentations (extraction_id, deck_json)
-     VALUES ($1, $2)
-     ON CONFLICT (extraction_id) DO UPDATE SET deck_json = $2, updated_at = NOW()`,
-    [extractionId, deckJson]
-  )
+  const { savePresentationDeck: savePresentationDeckInModule } = await import('@/lib/db/extractions')
+  return savePresentationDeckInModule({ extractionId, deckJson })
 }
 
 export async function getPresentationState(
   { extractionId, userId }: { extractionId: string; userId: string }
 ): Promise<{ lastSlideId: string | null } | null> {
-  await ensureDbReady()
-  const { rows } = await pool.query<{ last_slide_id: string | null }>(
-    `SELECT last_slide_id FROM extraction_presentation_states WHERE extraction_id = $1 AND user_id = $2`,
-    [extractionId, userId]
-  )
-  if (!rows[0]) return null
-  return { lastSlideId: rows[0].last_slide_id }
+  const { getPresentationState: getPresentationStateInModule } = await import('@/lib/db/extractions')
+  return getPresentationStateInModule({ extractionId, userId })
 }
 
 export async function setPresentationState(
   { extractionId, userId, lastSlideId }: { extractionId: string; userId: string; lastSlideId: string }
 ): Promise<void> {
-  await ensureDbReady()
-  await pool.query(
-    `INSERT INTO extraction_presentation_states (extraction_id, user_id, last_slide_id)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (extraction_id, user_id) DO UPDATE SET last_slide_id = $3, updated_at = NOW()`,
-    [extractionId, userId, lastSlideId]
-  )
+  const { setPresentationState: setPresentationStateInModule } = await import('@/lib/db/extractions')
+  return setPresentationStateInModule({ extractionId, userId, lastSlideId })
 }
 
 export async function listFlowNodePositions(extractionId: string) {
