@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest, isAdminEmail } from '@/lib/auth'
-import { findAdminUserById, listAdminExtractionsByUser } from '@/lib/db'
+import { findAdminUserById } from '@/lib/db'
+import { listAdminExtractionsByUser } from '@/lib/db/extractions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

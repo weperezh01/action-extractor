@@ -3245,21 +3245,9 @@ export async function deleteExtractionAdditionalSourceForUser(input: {
   sourceId: string
   userId: string
 }): Promise<boolean> {
-  await ensureDbReady()
-  const { rowCount } = await pool.query(
-    `
-      DELETE FROM extraction_additional_sources s
-      USING extractions e
-      WHERE s.id = $1
-        AND s.extraction_id = $2
-        AND e.id = s.extraction_id
-        AND e.user_id = $3
-        AND COALESCE(s.analysis_status, 'pending') <> 'analyzed'
-    `,
-    [input.sourceId, input.extractionId, input.userId]
-  )
-
-  return (rowCount ?? 0) > 0
+  const { deleteExtractionAdditionalSourceForUser: deleteExtractionAdditionalSourceForUserInModule } =
+    await import('@/lib/db/extractions')
+  return deleteExtractionAdditionalSourceForUserInModule(input)
 }
 
 export async function markExtractionAdditionalSourcesAnalyzedForUser(input: {
@@ -3324,103 +3312,10 @@ export async function listAdminExtractionsByUser(
   userId: string,
   limit = 30
 ): Promise<AdminUserExtractionCostDetail[]> {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbAdminUserExtractionCostRow>(
-    `
-      SELECT
-        ranked.id,
-        ranked.user_id,
-        ranked.url,
-        ranked.video_id,
-        ranked.video_title,
-        ranked.thumbnail_url,
-        ranked.extraction_mode,
-        ranked.objective,
-        ranked.phases_json,
-        ranked.pro_tip,
-        ranked.metadata_json,
-        ranked.share_visibility,
-        ranked.created_at,
-        ranked.source_type,
-        ranked.transcript_source,
-        ranked.source_label,
-        ranked.folder_id,
-        ranked.order_number,
-        ranked.is_starred,
-        ranked.source_text,
-        ranked.source_file_url,
-        ranked.source_file_name,
-        ranked.source_file_size_bytes,
-        ranked.source_file_mime_type,
-        ranked.has_source_text,
-        COALESCE(ai.total_ai_calls, 0)::int AS total_ai_calls,
-        COALESCE(ai.total_ai_cost_usd, 0) AS total_ai_cost_usd,
-        COALESCE(ai.audio_transcription_calls, 0)::int AS audio_transcription_calls,
-        COALESCE(ai.audio_transcription_cost_usd, 0) AS audio_transcription_cost_usd
-      FROM (
-        SELECT
-          id,
-          user_id,
-          url,
-          video_id,
-          video_title,
-          thumbnail_url,
-          extraction_mode,
-          objective,
-          phases_json,
-          pro_tip,
-          metadata_json,
-          share_visibility,
-          created_at,
-          source_type,
-          transcript_source,
-          source_label,
-          folder_id,
-          is_starred,
-          source_text,
-          source_file_url,
-          source_file_name,
-          source_file_size_bytes,
-          source_file_mime_type,
-          (source_text IS NOT NULL AND source_text <> '') AS has_source_text,
-          ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC)::int AS order_number
-        FROM extractions
-        WHERE user_id = $1
-      ) AS ranked
-      LEFT JOIN (
-        SELECT
-          extraction_id,
-          COUNT(*)::int AS total_ai_calls,
-          COALESCE(SUM(cost_usd), 0) AS total_ai_cost_usd,
-          COUNT(*) FILTER (WHERE use_type = 'transcription')::int AS audio_transcription_calls,
-          COALESCE(SUM(cost_usd) FILTER (WHERE use_type = 'transcription'), 0) AS audio_transcription_cost_usd
-        FROM ai_usage_log
-        WHERE user_id = $1
-          AND extraction_id IS NOT NULL
-        GROUP BY extraction_id
-      ) ai ON ai.extraction_id = ranked.id
-      ORDER BY ranked.created_at DESC, ranked.id DESC
-      LIMIT $2
-    `,
-    [userId, limit]
+  const { listAdminExtractionsByUser: listAdminExtractionsByUserInModule } = await import(
+    '@/lib/db/extractions'
   )
-
-  return rows.map((row) => ({
-    id: row.id,
-    url: row.url ?? null,
-    video_id: row.video_id ?? null,
-    video_title: row.video_title ?? null,
-    thumbnail_url: row.thumbnail_url ?? null,
-    extraction_mode: row.extraction_mode,
-    objective: row.objective,
-    created_at: toIso(row.created_at),
-    source_type: row.source_type ?? 'youtube',
-    transcript_source: row.transcript_source ?? null,
-    total_ai_calls: parseDbInteger(row.total_ai_calls),
-    total_ai_cost_usd: Number(row.total_ai_cost_usd ?? 0),
-    audio_transcription_calls: parseDbInteger(row.audio_transcription_calls),
-    audio_transcription_cost_usd: Number(row.audio_transcription_cost_usd ?? 0),
-  }))
+  return listAdminExtractionsByUserInModule(userId, limit)
 }
 
 export async function setExtractionStarredForUser(input: {
@@ -9160,12 +9055,8 @@ export async function adminGetUserCreditDetail(userId: string): Promise<{
 // ── Tags ───────────────────────────────────────────────────────────────────
 
 export async function listUserTags(userId: string): Promise<DbExtractionTag[]> {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionTag>(
-    `SELECT id, name, color FROM extraction_tags WHERE user_id = $1 ORDER BY name`,
-    [userId]
-  )
-  return rows
+  const { listUserTags: listUserTagsInModule } = await import('@/lib/db/extractions')
+  return listUserTagsInModule(userId)
 }
 
 export async function createOrGetTag(
@@ -9173,47 +9064,31 @@ export async function createOrGetTag(
   name: string,
   color: string
 ): Promise<DbExtractionTag> {
-  await ensureDbReady()
-  const id = randomUUID()
-  const { rows } = await pool.query<DbExtractionTag>(
-    `INSERT INTO extraction_tags (id, user_id, name, color)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (user_id, name) DO UPDATE SET color = EXCLUDED.color
-     RETURNING id, name, color`,
-    [id, userId, name.trim().toLowerCase(), color]
-  )
-  return rows[0]
+  const { createOrGetTag: createOrGetTagInModule } = await import('@/lib/db/extractions')
+  return createOrGetTagInModule(userId, name, color)
 }
 
 export async function deleteUserTag(userId: string, tagId: string): Promise<void> {
-  await ensureDbReady()
-  await pool.query(
-    `DELETE FROM extraction_tags WHERE id = $1 AND user_id = $2`,
-    [tagId, userId]
-  )
+  const { deleteUserTag: deleteUserTagInModule } = await import('@/lib/db/extractions')
+  return deleteUserTagInModule(userId, tagId)
 }
 
 export async function assignTagToExtraction(
   extractionId: string,
   tagId: string
 ): Promise<void> {
-  await ensureDbReady()
-  await pool.query(
-    `INSERT INTO extraction_tag_assignments (extraction_id, tag_id)
-     VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-    [extractionId, tagId]
-  )
+  const { assignTagToExtraction: assignTagToExtractionInModule } = await import('@/lib/db/extractions')
+  return assignTagToExtractionInModule(extractionId, tagId)
 }
 
 export async function removeTagFromExtraction(
   extractionId: string,
   tagId: string
 ): Promise<void> {
-  await ensureDbReady()
-  await pool.query(
-    `DELETE FROM extraction_tag_assignments WHERE extraction_id = $1 AND tag_id = $2`,
-    [extractionId, tagId]
+  const { removeTagFromExtraction: removeTagFromExtractionInModule } = await import(
+    '@/lib/db/extractions'
   )
+  return removeTagFromExtractionInModule(extractionId, tagId)
 }
 
 // ── Dashboard stats ────────────────────────────────────────────────────────
@@ -9545,42 +9420,9 @@ export async function getExtractionNotificationContext(
   extractionId: string,
   taskId: string
 ): Promise<{ extraction: ExtractionNotificationContext | null; taskText: string | null }> {
-  await getDbReadyPromise()
-  const { rows } = await pool.query<{
-    owner_user_id: string
-    owner_email: string
-    owner_name: string | null
-    video_title: string | null
-    source_label: string | null
-    objective: string | null
-    task_text: string | null
-  }>(
-    `SELECT
-       e.user_id AS owner_user_id,
-       u.email AS owner_email,
-       u.name AS owner_name,
-       e.video_title,
-       e.source_label,
-       e.objective,
-       t.item_text AS task_text
-     FROM extractions e
-     JOIN users u ON u.id = e.user_id
-     LEFT JOIN extraction_tasks t ON t.id = $2 AND t.extraction_id = e.id
-     WHERE e.id = $1`,
-    [extractionId, taskId]
-  )
-  if (rows.length === 0) return { extraction: null, taskText: null }
-  const row = rows[0]
-  const extractionTitle = row.video_title ?? row.source_label ?? row.objective ?? 'Sin título'
-  return {
-    extraction: {
-      ownerUserId: row.owner_user_id,
-      ownerEmail: row.owner_email,
-      ownerName: row.owner_name ?? '',
-      extractionTitle,
-    },
-    taskText: row.task_text,
-  }
+  const { getExtractionNotificationContext: getExtractionNotificationContextInModule } =
+    await import('@/lib/db/extractions')
+  return getExtractionNotificationContextInModule(extractionId, taskId)
 }
 
 export interface TaskFollowerInfo {

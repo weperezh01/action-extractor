@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { createOrGetTag, deleteUserTag, listUserTags } from '@/lib/db'
+import { createOrGetTag, deleteUserTag, listUserTags } from '@/lib/db/extractions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

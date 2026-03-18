@@ -1,9 +1,9 @@
 import { Resend } from 'resend'
 import {
-  getExtractionNotificationContext,
   getNotificationPreferences,
   getTaskFollowersForNotification,
 } from './db'
+import { getExtractionNotificationContext } from './db/extractions'
 
 const TASK_STATUS_LABELS: Record<string, string> = {
   pending: 'Pendiente',
