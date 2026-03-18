@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest, isAdminEmail } from '@/lib/auth'
-import { getAdminInvestorMetricsPack } from '@/lib/db'
+import { getAdminInvestorMetricsPack } from '@/lib/db/billing'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
