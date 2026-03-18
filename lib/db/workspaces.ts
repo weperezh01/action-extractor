@@ -3,10 +3,14 @@ import type { PoolClient } from 'pg'
 import {
   ensureDbReady,
   pool,
+  type DbExtraction,
+  type DbExtractionTag,
   type DbWorkspace,
   type DbWorkspaceInvitation,
   type DbWorkspaceMember,
   type DbWorkspaceWithRole,
+  type ExtractionClonePermission,
+  type ExtractionShareVisibility,
   type WorkspaceInvitationStatus,
   type WorkspaceRole,
 } from '@/lib/db'
@@ -51,6 +55,37 @@ interface DbWorkspaceInvitationRow {
   invited_by_name?: string | null
 }
 
+interface DbExtractionRow {
+  id: string
+  user_id: string
+  parent_extraction_id?: string | null
+  url: string | null
+  video_id: string | null
+  video_title: string | null
+  thumbnail_url: string | null
+  extraction_mode: string
+  objective: string
+  phases_json: string
+  pro_tip: string
+  metadata_json: string
+  share_visibility?: string | null
+  clone_permission?: string | null
+  order_number?: number | string
+  created_at: Date | string
+  source_type?: string | null
+  source_label?: string | null
+  folder_id?: string | null
+  is_starred?: boolean | null
+  tags_json?: string | null
+  source_text?: string | null
+  source_file_url?: string | null
+  source_file_name?: string | null
+  source_file_size_bytes?: number | null
+  source_file_mime_type?: string | null
+  has_source_text?: boolean | null
+  transcript_source?: string | null
+}
+
 function toIso(value: Date | string) {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString()
 }
@@ -82,6 +117,19 @@ function normalizeWorkspaceInvitationStatus(value: unknown): WorkspaceInvitation
   if (value === 'declined') return 'declined'
   if (value === 'expired') return 'expired'
   return 'pending'
+}
+
+function normalizeExtractionShareVisibility(value: unknown): ExtractionShareVisibility {
+  if (value === 'public') return 'public'
+  if (value === 'unlisted') return 'unlisted'
+  if (value === 'circle') return 'circle'
+  return 'private'
+}
+
+function normalizeExtractionClonePermission(value: unknown): ExtractionClonePermission {
+  if (value === 'template_only') return 'template_only'
+  if (value === 'full') return 'full'
+  return 'disabled'
 }
 
 function mapWorkspaceRow(row: DbWorkspaceRow): DbWorkspace {
@@ -130,6 +178,53 @@ function mapWorkspaceInvitationRow(row: DbWorkspaceInvitationRow): DbWorkspaceIn
     accepted_at: row.accepted_at ? toIso(row.accepted_at) : null,
     workspace_name: row.workspace_name,
     invited_by_name: row.invited_by_name,
+  }
+}
+
+function mapExtractionRow(row: DbExtractionRow): DbExtraction {
+  const orderNumber =
+    row.order_number === null || row.order_number === undefined
+      ? undefined
+      : parseDbInteger(row.order_number)
+  const shareVisibility = normalizeExtractionShareVisibility(row.share_visibility)
+  const clonePermission = normalizeExtractionClonePermission(row.clone_permission)
+
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    parent_extraction_id: row.parent_extraction_id ?? null,
+    url: row.url ?? null,
+    video_id: row.video_id,
+    video_title: row.video_title,
+    thumbnail_url: row.thumbnail_url,
+    extraction_mode: row.extraction_mode || 'action_plan',
+    objective: row.objective,
+    phases_json: row.phases_json,
+    pro_tip: row.pro_tip,
+    metadata_json: row.metadata_json,
+    share_visibility: shareVisibility,
+    clone_permission: clonePermission,
+    order_number: orderNumber,
+    created_at: toIso(row.created_at),
+    source_type: row.source_type ?? 'youtube',
+    source_label: row.source_label ?? null,
+    folder_id: row.folder_id ?? null,
+    is_starred: row.is_starred === true,
+    tags: (() => {
+      try {
+        const parsed = row.tags_json ? JSON.parse(row.tags_json) : []
+        return Array.isArray(parsed) ? (parsed as DbExtractionTag[]) : []
+      } catch {
+        return []
+      }
+    })(),
+    source_text: row.source_text ?? null,
+    source_file_url: row.source_file_url ?? null,
+    source_file_name: row.source_file_name ?? null,
+    source_file_size_bytes: row.source_file_size_bytes != null ? Number(row.source_file_size_bytes) : null,
+    source_file_mime_type: row.source_file_mime_type ?? null,
+    has_source_text: row.has_source_text === true || !!(row.source_text && row.source_text.length > 0),
+    transcript_source: row.transcript_source ?? null,
   }
 }
 
@@ -512,4 +607,73 @@ export async function cancelWorkspaceInvitation(input: {
   }
 
   await pool.query(`DELETE FROM workspace_invitations WHERE id = $1`, [input.invitationId])
+}
+
+export async function listWorkspaceExtractions(input: {
+  workspaceId: string
+  userId: string
+  limit?: number
+  cursor?: string
+}): Promise<DbExtraction[]> {
+  await ensureDbReady()
+  const limit = Math.min(input.limit ?? 30, 100)
+  const params: unknown[] = [input.workspaceId, limit]
+  let cursorClause = ''
+
+  if (input.cursor) {
+    cursorClause = ` AND e.id < $3`
+    params.push(input.cursor)
+  }
+
+  const { rows } = await pool.query<DbExtractionRow & { tags_json: string | null }>(
+    `SELECT e.*,
+       COALESCE(
+         (SELECT json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color))
+          FROM extraction_tag_assignments eta
+          JOIN extraction_tags t ON t.id = eta.tag_id
+          WHERE eta.extraction_id = e.id),
+         '[]'
+       )::text AS tags_json
+     FROM extractions e
+     WHERE e.workspace_id = $1${cursorClause}
+     ORDER BY e.created_at DESC
+     LIMIT $2`,
+    params
+  )
+
+  return rows.map(mapExtractionRow)
+}
+
+export async function moveExtractionToWorkspace(input: {
+  extractionId: string
+  userId: string
+  workspaceId: string | null
+}): Promise<void> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ user_id: string }>(
+    `SELECT user_id FROM extractions WHERE id = $1`,
+    [input.extractionId]
+  )
+
+  if (!rows[0]) throw new Error('Extracción no encontrada.')
+  if (rows[0].user_id !== input.userId) throw new Error('Sin permisos sobre esta extracción.')
+
+  if (input.workspaceId) {
+    const role = await getWorkspaceMemberRole(input.workspaceId, input.userId)
+    if (!role || role === 'viewer') throw new Error('Sin permisos para mover extracciones al workspace.')
+  }
+
+  await pool.query(
+    `UPDATE extractions SET workspace_id = $1 WHERE id = $2 AND user_id = $3`,
+    [input.workspaceId, input.extractionId, input.userId]
+  )
+}
+
+export async function countWorkspaceExtractions(workspaceId: string): Promise<number> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ total: number | string }>(
+    `SELECT COUNT(*)::int AS total FROM extractions WHERE workspace_id = $1`,
+    [workspaceId]
+  )
+  return parseDbInteger(rows[0]?.total ?? 0)
 }

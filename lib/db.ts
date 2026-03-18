@@ -8158,30 +8158,10 @@ export async function listWorkspaceExtractions(input: {
   limit?: number
   cursor?: string
 }): Promise<DbExtraction[]> {
-  await getDbReadyPromise()
-  const limit = Math.min(input.limit ?? 30, 100)
-  const params: unknown[] = [input.workspaceId, limit]
-  let cursorClause = ''
-  if (input.cursor) {
-    cursorClause = ` AND e.id < $3`
-    params.push(input.cursor)
-  }
-  const { rows } = await pool.query<DbExtractionRow & { tags_json: string | null }>(
-    `SELECT e.*,
-       COALESCE(
-         (SELECT json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color))
-          FROM extraction_tag_assignments eta
-          JOIN extraction_tags t ON t.id = eta.tag_id
-          WHERE eta.extraction_id = e.id),
-         '[]'
-       )::text AS tags_json
-     FROM extractions e
-     WHERE e.workspace_id = $1${cursorClause}
-     ORDER BY e.created_at DESC
-     LIMIT $2`,
-    params
+  const { listWorkspaceExtractions: listWorkspaceExtractionsInModule } = await import(
+    '@/lib/db/workspaces'
   )
-  return rows.map(mapExtractionRow)
+  return listWorkspaceExtractionsInModule(input)
 }
 
 export async function moveExtractionToWorkspace(input: {
@@ -8189,34 +8169,17 @@ export async function moveExtractionToWorkspace(input: {
   userId: string
   workspaceId: string | null
 }): Promise<void> {
-  await getDbReadyPromise()
-  // Verify extraction belongs to user
-  const { rows } = await pool.query<{ user_id: string }>(
-    `SELECT user_id FROM extractions WHERE id = $1`,
-    [input.extractionId]
+  const { moveExtractionToWorkspace: moveExtractionToWorkspaceInModule } = await import(
+    '@/lib/db/workspaces'
   )
-  if (!rows[0]) throw new Error('Extracción no encontrada.')
-  if (rows[0].user_id !== input.userId) throw new Error('Sin permisos sobre esta extracción.')
-
-  // If moving to workspace, verify user is member+
-  if (input.workspaceId) {
-    const role = await getWorkspaceMemberRole(input.workspaceId, input.userId)
-    if (!role || role === 'viewer') throw new Error('Sin permisos para mover extracciones al workspace.')
-  }
-
-  await pool.query(
-    `UPDATE extractions SET workspace_id = $1 WHERE id = $2 AND user_id = $3`,
-    [input.workspaceId, input.extractionId, input.userId]
-  )
+  return moveExtractionToWorkspaceInModule(input)
 }
 
 export async function countWorkspaceExtractions(workspaceId: string): Promise<number> {
-  await getDbReadyPromise()
-  const { rows } = await pool.query<{ total: number | string }>(
-    `SELECT COUNT(*)::int AS total FROM extractions WHERE workspace_id = $1`,
-    [workspaceId]
+  const { countWorkspaceExtractions: countWorkspaceExtractionsInModule } = await import(
+    '@/lib/db/workspaces'
   )
-  return parseDbInteger(rows[0]?.total ?? 0)
+  return countWorkspaceExtractionsInModule(workspaceId)
 }
 
 // ── Prompt template overrides ─────────────────────────────────────────────────

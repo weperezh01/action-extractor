@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { moveExtractionToWorkspace } from '@/lib/db'
+import { moveExtractionToWorkspace } from '@/lib/db/workspaces'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

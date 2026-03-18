@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { listWorkspaceExtractions } from '@/lib/db'
-import { getWorkspaceMemberRole } from '@/lib/db/workspaces'
+import { getWorkspaceMemberRole, listWorkspaceExtractions } from '@/lib/db/workspaces'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
