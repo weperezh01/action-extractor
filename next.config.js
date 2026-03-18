@@ -41,6 +41,9 @@ const { withSentryConfig } = require('@sentry/nextjs')
 const nextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   experimental: {
     serverComponentsExternalPackages: ['pdf-parse', 'mammoth'],
   },

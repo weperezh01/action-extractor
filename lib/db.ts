@@ -617,6 +617,7 @@ interface GlobalDb {
   __actionExtractorPgPool?: Pool
   __actionExtractorDbReady?: Promise<void>
   __actionExtractorDbInitSignature?: string
+  __actionExtractorDbBootstrapWarned?: boolean
 }
 
 interface DbUserRow {
@@ -2182,7 +2183,16 @@ const INIT_SQL = `
   ALTER TABLE user_storage ADD COLUMN IF NOT EXISTS storage_limit_override_bytes BIGINT;
 `
 
-const DB_INIT_SIGNATURE = '2026-03-17-hardening-v1'
+const DB_INIT_SIGNATURE = '2026-03-18-phase2-1'
+const DB_RUNTIME_BOOTSTRAP_WARNING =
+  '[db] Runtime schema bootstrap is deprecated. Run "npm run db:migrate" before starting the app or deploying changes.'
+
+function warnRuntimeBootstrapDeprecationOnce() {
+  if (process.env.NODE_ENV === 'test') return
+  if (globalForDb.__actionExtractorDbBootstrapWarned) return
+  globalForDb.__actionExtractorDbBootstrapWarned = true
+  console.warn(DB_RUNTIME_BOOTSTRAP_WARNING)
+}
 
 function getDbReadyPromise() {
   const shouldReinitialize =
@@ -2191,6 +2201,7 @@ function getDbReadyPromise() {
 
   if (shouldReinitialize) {
     let readyPromise: Promise<void>
+    warnRuntimeBootstrapDeprecationOnce()
     readyPromise = pool
       .query(INIT_SQL)
       .then(async () => {

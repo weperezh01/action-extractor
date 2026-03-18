@@ -1,3 +1,4 @@
+import type { NextRequest } from 'next/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const authMocks = vi.hoisted(() => ({
@@ -45,7 +46,7 @@ function makeRequest(body: unknown) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-  })
+  }) as unknown as NextRequest
 }
 
 describe('POST /api/auth/login', () => {

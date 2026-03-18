@@ -1,3 +1,4 @@
+import type { NextRequest } from 'next/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const stripeMocks = vi.hoisted(() => ({
@@ -55,7 +56,7 @@ function makeRequest(body = '{}') {
       'content-type': 'application/json',
     },
     body,
-  })
+  }) as unknown as NextRequest
 }
 
 describe('POST /api/stripe/webhook', () => {
