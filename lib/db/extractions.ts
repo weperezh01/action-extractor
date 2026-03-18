@@ -5216,3 +5216,110 @@ export async function updateExtractionTaskFlowNodeType(input: {
     [input.flowNodeType, input.taskId, input.extractionId]
   )
 }
+
+export async function upsertTaskEdge(input: {
+  extractionId: string
+  fromTaskId: string
+  toTaskId: string
+  edgeType: 'and' | 'xor' | 'loop'
+  label: string | null
+  expectedExtraDays: number | null
+  sortOrder?: number
+}): Promise<DbExtractionTaskEdge> {
+  await ensureDbReady()
+  const id = randomUUID()
+  const { rows } = await pool.query<DbExtractionTaskEdgeRow>(
+    `INSERT INTO extraction_task_edges (id, extraction_id, from_task_id, to_task_id, edge_type, label, expected_extra_days, sort_order)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ON CONFLICT (extraction_id, from_task_id, to_task_id, edge_type) DO UPDATE
+       SET label = EXCLUDED.label,
+           expected_extra_days = EXCLUDED.expected_extra_days,
+           updated_at = NOW()
+     RETURNING id, extraction_id, from_task_id, to_task_id, edge_type, label, expected_extra_days, sort_order, created_at, updated_at`,
+    [
+      id,
+      input.extractionId,
+      input.fromTaskId,
+      input.toTaskId,
+      input.edgeType,
+      input.label,
+      input.expectedExtraDays,
+      input.sortOrder ?? 0,
+    ]
+  )
+  return mapEdgeRow(rows[0])
+}
+
+export async function deleteTaskEdge(input: {
+  extractionId: string
+  fromTaskId: string
+  toTaskId: string
+  edgeType: 'and' | 'xor' | 'loop'
+}): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `DELETE FROM extraction_task_edges WHERE extraction_id = $1 AND from_task_id = $2 AND to_task_id = $3 AND edge_type = $4`,
+    [input.extractionId, input.fromTaskId, input.toTaskId, input.edgeType]
+  )
+}
+
+export async function upsertDecisionSelection(input: {
+  extractionId: string
+  decisionTaskId: string
+  selectedToTaskId: string
+}): Promise<DbExtractionTaskDecisionSelection> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbDecisionSelectionRow>(
+    `INSERT INTO extraction_task_decision_selection (extraction_id, decision_task_id, selected_to_task_id)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (extraction_id, decision_task_id) DO UPDATE
+       SET selected_to_task_id = EXCLUDED.selected_to_task_id, updated_at = NOW()
+     RETURNING extraction_id, decision_task_id, selected_to_task_id, created_at, updated_at`,
+    [input.extractionId, input.decisionTaskId, input.selectedToTaskId]
+  )
+  return {
+    extraction_id: rows[0].extraction_id,
+    decision_task_id: rows[0].decision_task_id,
+    selected_to_task_id: rows[0].selected_to_task_id,
+    created_at: toIso(rows[0].created_at),
+    updated_at: toIso(rows[0].updated_at),
+  }
+}
+
+export async function listFlowNodePositions(extractionId: string) {
+  await ensureDbReady()
+  const { rows } = await pool.query<{
+    task_id: string
+    extraction_id: string
+    cx: number | string
+    cy: number | string
+    updated_at: Date | string
+  }>(
+    `SELECT task_id, extraction_id, cx, cy, updated_at
+     FROM flow_node_positions WHERE extraction_id = $1`,
+    [extractionId]
+  )
+  return rows.map((row) => ({
+    task_id: row.task_id,
+    extraction_id: row.extraction_id,
+    cx: Number(row.cx),
+    cy: Number(row.cy),
+    updated_at: toIso(row.updated_at),
+  }))
+}
+
+export async function upsertFlowNodePosition(input: {
+  taskId: string
+  extractionId: string
+  cx: number
+  cy: number
+}): Promise<void> {
+  await ensureDbReady()
+  await pool.query(
+    `INSERT INTO flow_node_positions (task_id, extraction_id, cx, cy)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (task_id, extraction_id) DO UPDATE
+       SET cx = EXCLUDED.cx, cy = EXCLUDED.cy, updated_at = NOW()`,
+    [input.taskId, input.extractionId, input.cx, input.cy]
+  )
+}

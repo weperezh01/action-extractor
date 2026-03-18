@@ -10229,42 +10229,6 @@ export async function adminGetChatTokenStats(): Promise<
 
 // ── Flowchart / Process Graph helpers ─────────────────────────────────────────
 
-interface DbExtractionTaskEdgeRow {
-  id: string
-  extraction_id: string
-  from_task_id: string
-  to_task_id: string
-  edge_type: string
-  label: string | null
-  expected_extra_days: number | string | null
-  sort_order: number | string
-  created_at: Date | string
-  updated_at: Date | string
-}
-
-interface DbDecisionSelectionRow {
-  extraction_id: string
-  decision_task_id: string
-  selected_to_task_id: string
-  created_at: Date | string
-  updated_at: Date | string
-}
-
-function mapEdgeRow(row: DbExtractionTaskEdgeRow): DbExtractionTaskEdge {
-  return {
-    id: row.id,
-    extraction_id: row.extraction_id,
-    from_task_id: row.from_task_id,
-    to_task_id: row.to_task_id,
-    edge_type: row.edge_type as 'and' | 'xor' | 'loop',
-    label: row.label ?? null,
-    expected_extra_days: row.expected_extra_days != null ? Number(row.expected_extra_days) : null,
-    sort_order: typeof row.sort_order === 'number' ? row.sort_order : Number.parseInt(String(row.sort_order), 10),
-    created_at: toIso(row.created_at),
-    updated_at: toIso(row.updated_at),
-  }
-}
-
 export async function listExtractionTaskEdges(extractionId: string): Promise<DbExtractionTaskEdge[]> {
   const { listExtractionTaskEdges: listExtractionTaskEdgesInModule } = await import('@/lib/db/extractions')
   return listExtractionTaskEdgesInModule(extractionId)
@@ -10284,19 +10248,8 @@ export async function upsertTaskEdge(input: {
   expectedExtraDays: number | null
   sortOrder?: number
 }): Promise<DbExtractionTaskEdge> {
-  await ensureDbReady()
-  const id = randomUUID()
-  const { rows } = await pool.query<DbExtractionTaskEdgeRow>(
-    `INSERT INTO extraction_task_edges (id, extraction_id, from_task_id, to_task_id, edge_type, label, expected_extra_days, sort_order)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     ON CONFLICT (extraction_id, from_task_id, to_task_id, edge_type) DO UPDATE
-       SET label = EXCLUDED.label,
-           expected_extra_days = EXCLUDED.expected_extra_days,
-           updated_at = NOW()
-     RETURNING id, extraction_id, from_task_id, to_task_id, edge_type, label, expected_extra_days, sort_order, created_at, updated_at`,
-    [id, input.extractionId, input.fromTaskId, input.toTaskId, input.edgeType, input.label, input.expectedExtraDays, input.sortOrder ?? 0]
-  )
-  return mapEdgeRow(rows[0])
+  const { upsertTaskEdge: upsertTaskEdgeInModule } = await import('@/lib/db/extractions')
+  return upsertTaskEdgeInModule(input)
 }
 
 export async function deleteTaskEdge(input: {
@@ -10305,11 +10258,8 @@ export async function deleteTaskEdge(input: {
   toTaskId: string
   edgeType: 'and' | 'xor' | 'loop'
 }): Promise<void> {
-  await ensureDbReady()
-  await pool.query(
-    `DELETE FROM extraction_task_edges WHERE extraction_id = $1 AND from_task_id = $2 AND to_task_id = $3 AND edge_type = $4`,
-    [input.extractionId, input.fromTaskId, input.toTaskId, input.edgeType]
-  )
+  const { deleteTaskEdge: deleteTaskEdgeInModule } = await import('@/lib/db/extractions')
+  return deleteTaskEdgeInModule(input)
 }
 
 export async function upsertDecisionSelection(input: {
@@ -10317,22 +10267,10 @@ export async function upsertDecisionSelection(input: {
   decisionTaskId: string
   selectedToTaskId: string
 }): Promise<DbExtractionTaskDecisionSelection> {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbDecisionSelectionRow>(
-    `INSERT INTO extraction_task_decision_selection (extraction_id, decision_task_id, selected_to_task_id)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (extraction_id, decision_task_id) DO UPDATE
-       SET selected_to_task_id = EXCLUDED.selected_to_task_id, updated_at = NOW()
-     RETURNING extraction_id, decision_task_id, selected_to_task_id, created_at, updated_at`,
-    [input.extractionId, input.decisionTaskId, input.selectedToTaskId]
-  )
-  return {
-    extraction_id: rows[0].extraction_id,
-    decision_task_id: rows[0].decision_task_id,
-    selected_to_task_id: rows[0].selected_to_task_id,
-    created_at: toIso(rows[0].created_at),
-    updated_at: toIso(rows[0].updated_at),
-  }
+  const {
+    upsertDecisionSelection: upsertDecisionSelectionInModule,
+  } = await import('@/lib/db/extractions')
+  return upsertDecisionSelectionInModule(input)
 }
 
 export async function updateExtractionTaskFlowNodeType(input: {
@@ -10397,30 +10335,15 @@ export async function setPresentationState(
 }
 
 export async function listFlowNodePositions(extractionId: string) {
-  await ensureDbReady()
-  const { rows } = await pool.query(
-    `SELECT task_id, extraction_id, cx, cy, updated_at
-     FROM flow_node_positions WHERE extraction_id = $1`,
-    [extractionId]
-  )
-  return rows.map((r) => ({
-    task_id: r.task_id as string,
-    extraction_id: r.extraction_id as string,
-    cx: Number(r.cx),
-    cy: Number(r.cy),
-    updated_at: toIso(r.updated_at as Date | string),
-  }))
+  const { listFlowNodePositions: listFlowNodePositionsInModule } = await import('@/lib/db/extractions')
+  return listFlowNodePositionsInModule(extractionId)
 }
 
 export async function upsertFlowNodePosition(input: {
   taskId: string; extractionId: string; cx: number; cy: number
 }): Promise<void> {
-  await ensureDbReady()
-  await pool.query(
-    `INSERT INTO flow_node_positions (task_id, extraction_id, cx, cy)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (task_id, extraction_id) DO UPDATE
-       SET cx = EXCLUDED.cx, cy = EXCLUDED.cy, updated_at = NOW()`,
-    [input.taskId, input.extractionId, input.cx, input.cy]
-  )
+  const {
+    upsertFlowNodePosition: upsertFlowNodePositionInModule,
+  } = await import('@/lib/db/extractions')
+  return upsertFlowNodePositionInModule(input)
 }
