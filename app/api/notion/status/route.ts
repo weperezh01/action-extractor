@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { findNotionConnectionByUserId } from '@/lib/db'
+import { findNotionConnectionByUserId } from '@/lib/db/integrations'
 import { isNotionOAuthConfigured } from '@/lib/notion'
 
 export const runtime = 'nodejs'

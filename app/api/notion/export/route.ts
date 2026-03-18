@@ -3,7 +3,7 @@ import { getUserFromRequest } from '@/lib/auth'
 import {
   deleteNotionConnectionByUserId,
   findNotionConnectionByUserId,
-} from '@/lib/db'
+} from '@/lib/db/integrations'
 import { findExtractionByIdForUser } from '@/lib/db/extractions'
 import {
   createNotionPageFromExtraction,

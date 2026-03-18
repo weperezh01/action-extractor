@@ -3,7 +3,7 @@ import { getUserFromRequest } from '@/lib/auth'
 import {
   deleteTrelloConnectionByUserId,
   findTrelloConnectionByUserId,
-} from '@/lib/db'
+} from '@/lib/db/integrations'
 import { findExtractionByIdForUser } from '@/lib/db/extractions'
 import { parseExtractionMetadata, parseExtractionPhases } from '@/lib/export-parsers'
 import { createTrelloCardFromExtraction, TrelloApiError } from '@/lib/trello'

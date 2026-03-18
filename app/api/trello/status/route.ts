@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { findTrelloConnectionByUserId } from '@/lib/db'
+import { findTrelloConnectionByUserId } from '@/lib/db/integrations'
 import { isTrelloConfigured } from '@/lib/trello'
 
 export const runtime = 'nodejs'

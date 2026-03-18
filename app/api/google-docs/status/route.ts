@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { findGoogleDocsConnectionByUserId } from '@/lib/db'
+import { findGoogleDocsConnectionByUserId } from '@/lib/db/integrations'
 import { isGoogleDocsOAuthConfigured } from '@/lib/google-docs'
 
 export const runtime = 'nodejs'

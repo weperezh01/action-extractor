@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { upsertTrelloConnection } from '@/lib/db'
+import { upsertTrelloConnection } from '@/lib/db/integrations'
 import {
   getTrelloMemberByToken,
   TrelloApiError,

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { upsertGoogleDocsConnection } from '@/lib/db'
+import { upsertGoogleDocsConnection } from '@/lib/db/integrations'
 import { getAppBaseUrl } from '@/lib/notion'
 import {
   exchangeGoogleAuthorizationCode,

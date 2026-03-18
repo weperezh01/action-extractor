@@ -3,7 +3,7 @@ import { getUserFromRequest } from '@/lib/auth'
 import {
   deleteTodoistConnectionByUserId,
   findTodoistConnectionByUserId,
-} from '@/lib/db'
+} from '@/lib/db/integrations'
 import { findExtractionByIdForUser } from '@/lib/db/extractions'
 import { parseExtractionMetadata, parseExtractionPhases } from '@/lib/export-parsers'
 import { createTodoistTaskFromExtraction, TodoistApiError } from '@/lib/todoist'

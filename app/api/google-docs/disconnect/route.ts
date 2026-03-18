@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { deleteGoogleDocsConnectionByUserId } from '@/lib/db'
+import { deleteGoogleDocsConnectionByUserId } from '@/lib/db/integrations'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

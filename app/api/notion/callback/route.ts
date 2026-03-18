@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { upsertNotionConnection } from '@/lib/db'
+import { upsertNotionConnection } from '@/lib/db/integrations'
 import {
   exchangeNotionAuthorizationCode,
   getAppBaseUrl,
