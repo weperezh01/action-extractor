@@ -4,9 +4,7 @@ import {
   createExtractionTaskEventForUser,
   findExtractionTaskByIdForUser,
   listExtractionTaskDependencies,
-  listExtractionTasksWithEventsForUser,
   replaceExtractionTaskStatusForExtraction,
-  syncExtractionTasksForUser,
   updateExtractionTaskStatusCatalogById,
   updateExtractionTaskPlanningForUser,
   updateExtractionTaskScheduleForUser,
@@ -15,7 +13,11 @@ import {
   type ExtractionTaskEventType,
   type ExtractionTaskStatus,
 } from '@/lib/db'
-import { findExtractionAccessForUser } from '@/lib/db/extractions'
+import {
+  findExtractionAccessForUser,
+  listExtractionTasksWithEventsForUser,
+  syncExtractionTasksForUser,
+} from '@/lib/db/extractions'
 import { notifyTaskStatusChange } from '@/lib/email-notifications'
 import { normalizePlaybookPhases } from '@/lib/playbook-tree'
 import {

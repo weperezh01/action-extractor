@@ -4,8 +4,8 @@ import type { Metadata } from 'next'
 import {
   findSharedExtractionByToken,
   listExtractionTaskAttachmentsForSharedExtraction,
-  listExtractionTasksWithEventsForSharedExtraction,
 } from '@/lib/db'
+import { listExtractionTasksWithEventsForSharedExtraction } from '@/lib/db/extractions'
 import type { InteractiveTask, InteractiveTaskAttachment } from '@/app/home/lib/types'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
 import { parseTaskNumericFormulaJson, resolveTaskNumericValues } from '@/lib/task-numeric-formulas'

@@ -5,9 +5,9 @@ import {
   findExtractionByIdForUser,
   findGoogleDocsConnectionByUserId,
   listExtractionTaskDependencies,
-  listExtractionTasksWithEventsForUser,
   upsertGoogleDocsConnection,
 } from '@/lib/db'
+import { listExtractionTasksWithEventsForUser } from '@/lib/db/extractions'
 import { refreshGoogleAccessToken } from '@/lib/google-docs'
 import { createGoogleSheetFromCsv, GoogleSheetsApiError } from '@/lib/google-sheets'
 import { parseTaskNumericFormulaJson, resolveTaskNumericValues } from '@/lib/task-numeric-formulas'

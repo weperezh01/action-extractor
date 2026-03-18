@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
-  syncExtractionTasksForUser,
   updateExtractionPhasesForUser,
 } from '@/lib/db'
-import { findExtractionAccessForUser } from '@/lib/db/extractions'
+import {
+  findExtractionAccessForUser,
+  syncExtractionTasksForUser,
+} from '@/lib/db/extractions'
 import { normalizePlaybookPhases, type PlaybookPhase } from '@/lib/playbook-tree'
 
 export const runtime = 'nodejs'
