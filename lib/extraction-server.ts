@@ -10,15 +10,17 @@ import {
 import { classifyModelError, classifyTranscriptError, retryWithBackoff } from '@/lib/extract-resilience'
 import { normalizeExtractionMode } from '@/lib/extraction-modes'
 import {
+  getAppSetting,
+  getPromptOverride,
+  type DbVideoCache,
+} from '@/lib/db'
+import {
   createExtraction,
   findAnyVideoCacheByVideoId,
   findExtractionOrderNumberForUser,
   findVideoCacheByVideoId,
-  getAppSetting,
-  getPromptOverride,
-  type DbVideoCache,
   upsertVideoCache,
-} from '@/lib/db'
+} from '@/lib/db/extractions'
 import {
   normalizeExtractionOutputLanguage,
   type ResolvedExtractionOutputLanguage,

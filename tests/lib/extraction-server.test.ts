@@ -51,12 +51,15 @@ vi.mock('@/lib/extraction-modes', () => ({
 }))
 
 vi.mock('@/lib/db', () => ({
+  getAppSetting: dbMocks.getAppSetting,
+  getPromptOverride: dbMocks.getPromptOverride,
+}))
+
+vi.mock('@/lib/db/extractions', () => ({
   createExtraction: dbMocks.createExtraction,
   findAnyVideoCacheByVideoId: dbMocks.findAnyVideoCacheByVideoId,
   findExtractionOrderNumberForUser: dbMocks.findExtractionOrderNumberForUser,
   findVideoCacheByVideoId: dbMocks.findVideoCacheByVideoId,
-  getAppSetting: dbMocks.getAppSetting,
-  getPromptOverride: dbMocks.getPromptOverride,
   upsertVideoCache: dbMocks.upsertVideoCache,
 }))
 
