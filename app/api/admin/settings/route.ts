@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest, isAdminEmail } from '@/lib/auth'
-import { getAppSetting, getBusinessAssumptions, upsertAppSetting, upsertBusinessAssumptions } from '@/lib/db'
+import { getAppSetting, upsertAppSetting } from '@/lib/db'
+import { getBusinessAssumptions, upsertBusinessAssumptions } from '@/lib/db/billing'
 import {
   type AiProvider,
   PROVIDER_MODELS,

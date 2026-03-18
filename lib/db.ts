@@ -4,7 +4,6 @@ import {
   type BuiltInTaskStatus,
 } from '@/lib/task-statuses'
 import {
-  DEFAULT_BUSINESS_ASSUMPTIONS,
   calculatePaymentFeeMonthlyUsd,
   calculateGrossMarginPct,
   calculateMaxVariableCostAllowed,
@@ -19,7 +18,6 @@ import {
   classifyProfitabilityStatus,
   deriveScenarioRecommendation,
   getTotalSharedFixedCostUsd,
-  normalizeBusinessAssumptions,
   normalizeMarginPct,
   roundUpPriceUsd,
   type BusinessAssumptions,
@@ -6494,25 +6492,16 @@ export async function upsertAppSetting(key: string, value: string): Promise<void
   )
 }
 
-const BUSINESS_ASSUMPTIONS_SETTING_KEY = 'business_assumptions_v1'
-
 export async function getBusinessAssumptions(): Promise<BusinessAssumptions> {
-  const raw = await getAppSetting(BUSINESS_ASSUMPTIONS_SETTING_KEY)
-  if (!raw) return DEFAULT_BUSINESS_ASSUMPTIONS
-
-  try {
-    return normalizeBusinessAssumptions(JSON.parse(raw) as Partial<BusinessAssumptions>)
-  } catch {
-    return DEFAULT_BUSINESS_ASSUMPTIONS
-  }
+  const { getBusinessAssumptions: getBusinessAssumptionsInModule } = await import('@/lib/db/billing')
+  return getBusinessAssumptionsInModule()
 }
 
 export async function upsertBusinessAssumptions(
   input: Partial<BusinessAssumptions> | BusinessAssumptions
 ): Promise<BusinessAssumptions> {
-  const normalized = normalizeBusinessAssumptions(input)
-  await upsertAppSetting(BUSINESS_ASSUMPTIONS_SETTING_KEY, JSON.stringify(normalized))
-  return normalized
+  const { upsertBusinessAssumptions: upsertBusinessAssumptionsInModule } = await import('@/lib/db/billing')
+  return upsertBusinessAssumptionsInModule(input)
 }
 
 export function mapUserForClient(user: Pick<DbUser, 'id' | 'name' | 'email'>) {

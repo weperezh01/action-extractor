@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import {
+  DEFAULT_BUSINESS_ASSUMPTIONS,
   calculateGrossMarginPct,
   calculateMaxVariableCostAllowed,
   calculateMonthlyRunRate,
@@ -16,6 +17,7 @@ import {
   deriveScenarioRecommendation,
   getTotalSharedFixedCostUsd,
   normalizeMarginPct,
+  normalizeBusinessAssumptions,
   roundUpPriceUsd,
   type BusinessAssumptions,
   type ProfitabilityStatus,
@@ -23,9 +25,10 @@ import {
   type SharedCostAllocationStrategy,
 } from '@/lib/profitability'
 import {
-  getBusinessAssumptions,
   ensureDbReady,
+  getAppSetting,
   pool,
+  upsertAppSetting,
   type AdminAiCostModelDetail,
   type AdminAiCostStats,
   type AdminCreditStats,
@@ -48,6 +51,8 @@ import {
   type UserAiDailyStat,
   type AdminUserMonthlyStats,
 } from '@/lib/db'
+
+const BUSINESS_ASSUMPTIONS_SETTING_KEY = 'business_assumptions_v1'
 
 interface DbUserRow {
   id: string
@@ -511,6 +516,25 @@ async function getActivePlanSnapshotForUpdate(client: PoolClient, userId: string
       ? parseDbInteger(activePlanResult.rows[0].extra_credits ?? 0)
       : 0,
   }
+}
+
+export async function getBusinessAssumptions(): Promise<BusinessAssumptions> {
+  const raw = await getAppSetting(BUSINESS_ASSUMPTIONS_SETTING_KEY)
+  if (!raw) return DEFAULT_BUSINESS_ASSUMPTIONS
+
+  try {
+    return normalizeBusinessAssumptions(JSON.parse(raw) as Partial<BusinessAssumptions>)
+  } catch {
+    return DEFAULT_BUSINESS_ASSUMPTIONS
+  }
+}
+
+export async function upsertBusinessAssumptions(
+  input: Partial<BusinessAssumptions> | BusinessAssumptions
+): Promise<BusinessAssumptions> {
+  const normalized = normalizeBusinessAssumptions(input)
+  await upsertAppSetting(BUSINESS_ASSUMPTIONS_SETTING_KEY, JSON.stringify(normalized))
+  return normalized
 }
 
 export async function listPlans(): Promise<DbPlan[]> {
