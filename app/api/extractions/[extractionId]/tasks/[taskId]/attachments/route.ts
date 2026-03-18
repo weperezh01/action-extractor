@@ -3,7 +3,6 @@ import { getUserFromRequest } from '@/lib/auth'
 import { uploadFileToCloudinary } from '@/lib/cloudinary'
 import {
   createExtractionTaskAttachmentForUser,
-  findExtractionTaskByIdForUser,
   getUserStorageInfo,
   incrementUserStorageUsed,
   listExtractionTaskAttachmentsForUser,
@@ -11,7 +10,10 @@ import {
   type ExtractionAccessRole,
   type ExtractionTaskAttachmentType,
 } from '@/lib/db'
-import { findExtractionAccessForUser } from '@/lib/db/extractions'
+import {
+  findExtractionAccessForUser,
+  findExtractionTaskByIdForUser,
+} from '@/lib/db/extractions'
 import { formatStorageBytes } from '@/lib/storage-limits'
 import {
   createGuestTaskAttachment,

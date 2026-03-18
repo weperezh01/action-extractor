@@ -5572,41 +5572,9 @@ export async function findExtractionTaskByIdForUser(input: {
   taskId: string
   extractionId: string
 }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionTaskRow>(
-    `
-      SELECT
-        id,
-        extraction_id,
-        user_id,
-        phase_id,
-        phase_title,
-        item_index,
-        item_text,
-        node_id,
-        parent_node_id,
-        depth,
-        position_path,
-        checked,
-        status,
-        numeric_value,
-        numeric_formula_json,
-        due_at,
-        completed_at,
-        scheduled_start_at,
-        scheduled_end_at,
-        duration_days,
-        flow_node_type,
-        created_at,
-        updated_at
-      FROM extraction_tasks
-      WHERE id = $1 AND extraction_id = $2
-      LIMIT 1
-    `,
-    [input.taskId, input.extractionId]
-  )
-
-  return rows[0] ? mapExtractionTaskRow(rows[0]) : null
+  const { findExtractionTaskByIdForUser: findExtractionTaskByIdForUserInModule } =
+    await import('@/lib/db/extractions')
+  return findExtractionTaskByIdForUserInModule(input)
 }
 
 export async function updateExtractionTaskStateForUser(input: {
@@ -5617,57 +5585,9 @@ export async function updateExtractionTaskStateForUser(input: {
   numericValue: number | null
   numericFormulaJson: string
 }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionTaskRow>(
-    `
-      UPDATE extraction_tasks
-      SET
-        checked = $1,
-        status = $2,
-        numeric_value = $3,
-        numeric_formula_json = $4,
-        completed_at = CASE
-          WHEN $2 = 'completed' THEN COALESCE(completed_at, NOW())
-          ELSE NULL
-        END,
-        updated_at = NOW()
-      WHERE id = $5 AND extraction_id = $6
-      RETURNING
-        id,
-        extraction_id,
-        user_id,
-        phase_id,
-        phase_title,
-        item_index,
-        item_text,
-        node_id,
-        parent_node_id,
-        depth,
-        position_path,
-        checked,
-        status,
-        numeric_value,
-        numeric_formula_json,
-        due_at,
-        completed_at,
-        scheduled_start_at,
-        scheduled_end_at,
-        duration_days,
-        flow_node_type,
-        created_at,
-        updated_at
-    `,
-    [
-      input.checked,
-      input.status,
-      input.numericValue,
-      input.numericFormulaJson,
-      input.taskId,
-      input.extractionId,
-    ]
-  )
-
-  return rows[0] ? mapExtractionTaskRow(rows[0]) : null
+  const { updateExtractionTaskStateForUser: updateExtractionTaskStateForUserInModule } =
+    await import('@/lib/db/extractions')
+  return updateExtractionTaskStateForUserInModule(input)
 }
 
 export async function updateExtractionTaskScheduleForUser(input: {
@@ -5676,17 +5596,9 @@ export async function updateExtractionTaskScheduleForUser(input: {
   scheduledStartAt: string | null
   scheduledEndAt: string | null
 }): Promise<DbExtractionTask | null> {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionTaskRow>(
-    `UPDATE extraction_tasks
-     SET scheduled_start_at = $1, scheduled_end_at = $2, updated_at = NOW()
-     WHERE id = $3 AND extraction_id = $4
-     RETURNING id, extraction_id, user_id, phase_id, phase_title, item_index, item_text,
-       node_id, parent_node_id, depth, position_path, checked, status,
-       numeric_value, numeric_formula_json, due_at, completed_at, scheduled_start_at, scheduled_end_at, duration_days, flow_node_type, created_at, updated_at`,
-    [input.scheduledStartAt || null, input.scheduledEndAt || null, input.taskId, input.extractionId]
-  )
-  return rows[0] ? mapExtractionTaskRow(rows[0]) : null
+  const { updateExtractionTaskScheduleForUser: updateExtractionTaskScheduleForUserInModule } =
+    await import('@/lib/db/extractions')
+  return updateExtractionTaskScheduleForUserInModule(input)
 }
 
 export async function listExtractionTaskDependencies(
@@ -5839,52 +5751,9 @@ export async function createExtractionTaskEventForUser(input: {
   content: string
   metadataJson?: string
 }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionTaskEventRow>(
-    `
-      WITH target_task AS (
-        SELECT id
-        FROM extraction_tasks
-        WHERE id = $1 AND extraction_id = $2
-        LIMIT 1
-      )
-      INSERT INTO extraction_task_events (
-        id,
-        task_id,
-        user_id,
-        event_type,
-        content,
-        metadata_json
-      )
-      SELECT
-        $4,
-        target_task.id,
-        $3,
-        $5,
-        $6,
-        $7
-      FROM target_task
-      RETURNING
-        id,
-        task_id,
-        user_id,
-        event_type,
-        content,
-        metadata_json,
-        created_at
-    `,
-    [
-      input.taskId,
-      input.extractionId,
-      input.userId,
-      randomUUID(),
-      input.eventType,
-      input.content,
-      input.metadataJson ?? '{}',
-    ]
-  )
-
-  return rows[0] ? mapExtractionTaskEventRow(rows[0]) : null
+  const { createExtractionTaskEventForUser: createExtractionTaskEventForUserInModule } =
+    await import('@/lib/db/extractions')
+  return createExtractionTaskEventForUserInModule(input)
 }
 
 export async function listExtractionTaskAttachmentsForUser(input: {

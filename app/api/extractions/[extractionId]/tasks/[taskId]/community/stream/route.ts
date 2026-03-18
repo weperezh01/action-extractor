@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { findExtractionTaskByIdForUser } from '@/lib/db'
-import { findExtractionAccessForUser } from '@/lib/db/extractions'
+import {
+  findExtractionAccessForUser,
+  findExtractionTaskByIdForUser,
+} from '@/lib/db/extractions'
 import { findGuestTaskById } from '@/lib/guest-tasks'
 import { subscribeTaskCommunityRefreshEvent } from '@/lib/task-community-realtime'
 

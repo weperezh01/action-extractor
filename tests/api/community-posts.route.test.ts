@@ -22,11 +22,11 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@/lib/db', () => ({
   createCommunityPostForUser: dbMocks.createCommunityPostForUser,
-  findExtractionTaskByIdForUser: dbMocks.findExtractionTaskByIdForUser,
 }))
 
 vi.mock('@/lib/db/extractions', () => ({
   findExtractionAccessForUser: dbMocks.findExtractionAccessForUser,
+  findExtractionTaskByIdForUser: dbMocks.findExtractionTaskByIdForUser,
 }))
 
 vi.mock('@/lib/rate-limit', () => ({
