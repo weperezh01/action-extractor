@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { findPublicExtractionById } from '@/lib/db'
+import { findPublicExtractionById } from '@/lib/db/extractions'
 import { normalizeExtractionMode } from '@/lib/extraction-modes'
 import { normalizePlaybookPhases } from '@/lib/playbook-tree'
 import { buildYoutubeThumbnailUrl } from '@/lib/video-preview'

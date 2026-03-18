@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { removeExtractionMemberForOwner } from '@/lib/db'
-import { findExtractionByIdForUser } from '@/lib/db/extractions'
+import {
+  findExtractionByIdForUser,
+  removeExtractionMemberForOwner,
+} from '@/lib/db/extractions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

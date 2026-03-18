@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { listExtractionsByUser } from '@/lib/db'
+import { listExtractionsByUser } from '@/lib/db/extractions'
 import { normalizeExtractionMode } from '@/lib/extraction-modes'
 
 export const runtime = 'nodejs'

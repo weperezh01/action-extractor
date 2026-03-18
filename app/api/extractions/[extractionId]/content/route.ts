@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
   updateExtractionPhasesForUser,
-} from '@/lib/db'
-import {
   findExtractionAccessForUser,
   syncExtractionTasksForUser,
 } from '@/lib/db/extractions'

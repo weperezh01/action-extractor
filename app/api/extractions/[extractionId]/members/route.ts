@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
+import { findUserByEmail, type ExtractionMemberRole } from '@/lib/db'
 import {
   findExtractionByIdForUser,
-  findUserByEmail,
   listExtractionMembersForOwner,
   upsertExtractionMemberForOwner,
-  type ExtractionMemberRole,
-} from '@/lib/db'
+} from '@/lib/db/extractions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

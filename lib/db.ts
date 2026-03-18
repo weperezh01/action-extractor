@@ -698,69 +698,8 @@ interface DbExtractionFolderRow {
   updated_at: Date | string
 }
 
-interface DbExtractionMemberRow {
-  extraction_id: string
-  user_id: string
-  role: string
-  created_at: Date | string
-  user_name: string | null
-  user_email: string | null
-}
-
-interface DbCircleExtractionRow extends DbExtractionRow {
-  access_role: string
-  owner_name: string | null
-  owner_email: string | null
-}
-
-interface DbSharedExtractionRow extends DbExtractionRow {
-  access_role: string
-  owner_name: string | null
-  owner_email: string | null
-  share_source: 'direct' | 'folder'
-  root_folder_id: string | null
-  root_folder_name: string | null
-}
-
-interface DbPublicExtractionRow extends DbExtractionRow {
-  owner_name: string | null
-  owner_email: string | null
-}
-
 interface DbExtractionAccessRow extends DbExtractionRow {
   access_role: string | null
-}
-
-interface DbExtractionLineageRow {
-  id: string
-  user_id: string
-  parent_extraction_id: string | null
-  video_title: string | null
-  source_label: string | null
-  objective: string
-  created_at: Date | string
-  owner_name: string | null
-  owner_email: string | null
-}
-
-interface DbExtractionCountRow {
-  count: number | string
-}
-
-interface DbExtractionRecentCloneRow {
-  id: string
-  parent_extraction_id: string | null
-  user_id: string
-  video_title: string | null
-  source_label: string | null
-  objective: string
-  created_at: Date | string
-  depth: number | string
-  owner_name: string | null
-  owner_email: string | null
-  parent_video_title: string | null
-  parent_source_label: string | null
-  parent_objective: string | null
 }
 
 interface DbVideoCacheRow {
@@ -2296,11 +2235,6 @@ function normalizeCommunityPostVisibility(value: unknown): CommunityPostVisibili
   return 'public'
 }
 
-function normalizeExtractionMemberRole(value: unknown): ExtractionMemberRole {
-  if (value === 'editor') return 'editor'
-  return 'viewer'
-}
-
 function normalizeExtractionAccessRole(value: unknown): ExtractionAccessRole | null {
   if (value === 'owner') return 'owner'
   if (value === 'editor') return 'editor'
@@ -2396,26 +2330,6 @@ function mapExtractionRow(row: DbExtractionRow): DbExtraction {
   }
 }
 
-function resolveDbExtractionDisplayTitle(input: {
-  id: string
-  video_title: string | null
-  source_label: string | null
-  objective: string | null
-}) {
-  const videoTitle = input.video_title?.trim()
-  if (videoTitle) return videoTitle
-
-  const sourceLabel = input.source_label?.trim()
-  if (sourceLabel) return sourceLabel
-
-  const objective = input.objective?.trim() ?? ''
-  if (objective) {
-    return objective.length > 96 ? `${objective.slice(0, 96)}...` : objective
-  }
-
-  return `Playbook ${input.id.slice(0, 8)}`
-}
-
 function mapExtractionAdditionalSourceRow(row: DbExtractionAdditionalSourceRow): DbExtractionAdditionalSource {
   return {
     id: row.id,
@@ -2444,17 +2358,6 @@ function mapExtractionFolderRow(row: DbExtractionFolderRow): DbExtractionFolder 
     parent_id: row.parent_id ?? null,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
-  }
-}
-
-function mapExtractionMemberRow(row: DbExtractionMemberRow): DbExtractionMember {
-  return {
-    extraction_id: row.extraction_id,
-    user_id: row.user_id,
-    role: normalizeExtractionMemberRole(row.role),
-    created_at: toIso(row.created_at),
-    user_name: row.user_name ?? null,
-    user_email: row.user_email ?? null,
   }
 }
 
@@ -3414,76 +3317,8 @@ export async function getVideoCacheTranscript(videoId: string): Promise<string |
 }
 
 export async function listExtractionsByUser(userId: string, limit = 30) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionRow>(
-    `
-      SELECT
-        ranked.id,
-        ranked.user_id,
-        ranked.url,
-        ranked.video_id,
-        ranked.video_title,
-        ranked.thumbnail_url,
-        ranked.extraction_mode,
-        ranked.objective,
-        ranked.phases_json,
-        ranked.pro_tip,
-        ranked.metadata_json,
-        ranked.share_visibility,
-        ranked.clone_permission,
-        ranked.created_at,
-        ranked.source_type,
-        ranked.transcript_source,
-        ranked.source_label,
-        ranked.folder_id,
-        ranked.order_number,
-        ranked.is_starred,
-        ranked.source_file_url,
-        ranked.source_file_name,
-        ranked.has_source_text,
-        (
-          SELECT COALESCE(
-            jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'color', t.color) ORDER BY t.name),
-            '[]'::jsonb
-          )
-          FROM extraction_tag_assignments eta
-          JOIN extraction_tags t ON t.id = eta.tag_id
-          WHERE eta.extraction_id = ranked.id
-        )::text AS tags_json
-      FROM (
-        SELECT
-          id,
-          user_id,
-          url,
-          video_id,
-          video_title,
-          thumbnail_url,
-          extraction_mode,
-          objective,
-          phases_json,
-          pro_tip,
-          metadata_json,
-          share_visibility,
-          clone_permission,
-          created_at,
-          source_type,
-          transcript_source,
-          source_label,
-          folder_id,
-          is_starred,
-          source_file_url,
-          source_file_name,
-          (source_text IS NOT NULL AND source_text <> '') AS has_source_text,
-          ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC)::int AS order_number
-        FROM extractions
-        WHERE user_id = $1
-      ) AS ranked
-      ORDER BY ranked.created_at DESC, ranked.id DESC
-      LIMIT $2
-    `,
-    [userId, limit]
-  )
-  return rows.map(mapExtractionRow)
+  const { listExtractionsByUser: listExtractionsByUserInModule } = await import('@/lib/db/extractions')
+  return listExtractionsByUserInModule(userId, limit)
 }
 
 export async function listAdminExtractionsByUser(
@@ -3594,236 +3429,31 @@ export async function setExtractionStarredForUser(input: {
   userId: string
   starred: boolean
 }): Promise<DbExtraction | null> {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionRow>(
-    `
-      UPDATE extractions
-      SET is_starred = $3
-      WHERE id = $1 AND user_id = $2
-      RETURNING
-        id, user_id, url, video_id, video_title, thumbnail_url,
-        extraction_mode, objective, phases_json, pro_tip, metadata_json,
-        share_visibility, created_at, source_type, source_label, folder_id, is_starred
-    `,
-    [input.id, input.userId, input.starred]
-  )
-  return rows[0] ? mapExtractionRow(rows[0]) : null
+  const {
+    setExtractionStarredForUser: setExtractionStarredForUserInModule,
+  } = await import('@/lib/db/extractions')
+  return setExtractionStarredForUserInModule(input)
 }
 
 export async function assignUnfolderedExtractionsToGeneralForUser(userId: string) {
-  await ensureDbReady()
-  await ensureDefaultExtractionFoldersForUser(userId)
-
-  const generalFolderId = buildSystemExtractionFolderIdForUser({
-    userId,
-    key: 'general',
-  })
-
-  await pool.query(
-    `
-      UPDATE extractions
-      SET folder_id = $2
-      WHERE user_id = $1 AND folder_id IS NULL
-    `,
-    [userId, generalFolderId]
-  )
-
-  return generalFolderId
+  const {
+    assignUnfolderedExtractionsToGeneralForUser: assignUnfolderedExtractionsToGeneralForUserInModule,
+  } = await import('@/lib/db/extractions')
+  return assignUnfolderedExtractionsToGeneralForUserInModule(userId)
 }
 
 export async function listCircleExtractionsForMember(userId: string, limit = 30) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbCircleExtractionRow>(
-    `
-      SELECT
-        e.id,
-        e.user_id,
-        e.url,
-        e.video_id,
-        e.video_title,
-        e.thumbnail_url,
-        e.extraction_mode,
-        e.objective,
-        e.phases_json,
-        e.pro_tip,
-        e.metadata_json,
-        e.share_visibility,
-        e.clone_permission,
-        e.created_at,
-        e.source_type,
-        e.source_label,
-        e.folder_id,
-        e.source_file_url,
-        e.source_file_name,
-        e.source_file_size_bytes,
-        e.source_file_mime_type,
-        (e.source_text IS NOT NULL AND e.source_text <> '') AS has_source_text,
-        m.role AS access_role,
-        owner.name AS owner_name,
-        owner.email AS owner_email
-      FROM extraction_members m
-      INNER JOIN extractions e ON e.id = m.extraction_id
-      INNER JOIN users owner ON owner.id = e.user_id
-      WHERE
-        m.user_id = $1
-        AND e.user_id <> $1
-        AND e.share_visibility = 'circle'
-      ORDER BY e.created_at DESC, e.id DESC
-      LIMIT $2
-    `,
-    [userId, limit]
-  )
-
-  return rows
-    .map((row) => ({
-      extraction: mapExtractionRow(row),
-      access_role: normalizeExtractionMemberRole(row.access_role),
-      owner_name: row.owner_name ?? null,
-      owner_email: row.owner_email ?? null,
-    }))
-    .filter((row): row is DbCircleExtraction => row.access_role === 'editor' || row.access_role === 'viewer')
+  const {
+    listCircleExtractionsForMember: listCircleExtractionsForMemberInModule,
+  } = await import('@/lib/db/extractions')
+  return listCircleExtractionsForMemberInModule(userId, limit)
 }
 
 export async function listExtractionsSharedViaFoldersForMember(userId: string, limit = 80) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbSharedExtractionRow>(
-    `
-      WITH RECURSIVE shared_roots AS (
-        SELECT
-          fm.folder_id AS root_folder_id,
-          fm.owner_user_id
-        FROM extraction_folder_members fm
-        WHERE fm.member_user_id = $1
-      ),
-      shared_tree AS (
-        SELECT
-          sr.owner_user_id,
-          sr.root_folder_id,
-          sr.root_folder_id AS folder_id,
-          0::int AS depth
-        FROM shared_roots sr
-        UNION ALL
-        SELECT
-          st.owner_user_id,
-          st.root_folder_id,
-          child.id AS folder_id,
-          st.depth + 1
-        FROM extraction_folders child
-        INNER JOIN shared_tree st
-          ON child.parent_id = st.folder_id
-         AND child.user_id = st.owner_user_id
-      ),
-      visible_extractions AS (
-        SELECT
-          e.id,
-          e.user_id,
-          e.url,
-          e.video_id,
-          e.video_title,
-          e.thumbnail_url,
-          e.extraction_mode,
-          e.objective,
-          e.phases_json,
-          e.pro_tip,
-          e.metadata_json,
-          e.share_visibility,
-          e.clone_permission,
-          e.created_at,
-          e.source_type,
-          e.source_label,
-          e.folder_id,
-          e.source_file_url,
-          e.source_file_name,
-          e.source_file_size_bytes,
-          e.source_file_mime_type,
-          (e.source_text IS NOT NULL AND e.source_text <> '') AS has_source_text,
-          st.root_folder_id,
-          st.depth
-        FROM extractions e
-        INNER JOIN shared_tree st
-          ON e.folder_id = st.folder_id
-         AND e.user_id = st.owner_user_id
-        WHERE e.user_id <> $1
-      ),
-      dedup AS (
-        SELECT DISTINCT ON (ve.id)
-          ve.id,
-          ve.user_id,
-          ve.url,
-          ve.video_id,
-          ve.video_title,
-          ve.thumbnail_url,
-          ve.extraction_mode,
-          ve.objective,
-          ve.phases_json,
-          ve.pro_tip,
-          ve.metadata_json,
-          ve.share_visibility,
-          ve.clone_permission,
-          ve.created_at,
-          ve.source_type,
-          ve.source_label,
-          ve.folder_id,
-          ve.source_file_url,
-          ve.source_file_name,
-          ve.source_file_size_bytes,
-          ve.source_file_mime_type,
-          ve.has_source_text,
-          ve.root_folder_id
-        FROM visible_extractions ve
-        ORDER BY ve.id, ve.depth ASC, ve.created_at DESC
-      )
-      SELECT
-        d.id,
-        d.user_id,
-        d.url,
-        d.video_id,
-        d.video_title,
-        d.thumbnail_url,
-        d.extraction_mode,
-        d.objective,
-        d.phases_json,
-        d.pro_tip,
-        d.metadata_json,
-        d.share_visibility,
-        d.clone_permission,
-        d.created_at,
-        d.source_type,
-        d.source_label,
-        d.folder_id,
-        d.source_file_url,
-        d.source_file_name,
-        d.source_file_size_bytes,
-        d.source_file_mime_type,
-        d.has_source_text,
-        'viewer'::text AS access_role,
-        owner.name AS owner_name,
-        owner.email AS owner_email,
-        'folder'::text AS share_source,
-        d.root_folder_id,
-        root_folder.name AS root_folder_name
-      FROM dedup d
-      INNER JOIN users owner ON owner.id = d.user_id
-      LEFT JOIN extraction_folders root_folder
-        ON root_folder.id = d.root_folder_id
-       AND root_folder.user_id = d.user_id
-      ORDER BY d.created_at DESC, d.id DESC
-      LIMIT $2
-    `,
-    [userId, limit]
-  )
-
-  return rows
-    .map((row) => ({
-      extraction: mapExtractionRow(row),
-      access_role: normalizeExtractionMemberRole(row.access_role),
-      owner_name: row.owner_name ?? null,
-      owner_email: row.owner_email ?? null,
-      share_source: row.share_source,
-      root_folder_id: row.root_folder_id ?? null,
-      root_folder_name: row.root_folder_name ?? null,
-    }))
-    .filter((row): row is DbSharedExtraction => row.access_role === 'editor' || row.access_role === 'viewer')
+  const {
+    listExtractionsSharedViaFoldersForMember: listExtractionsSharedViaFoldersForMemberInModule,
+  } = await import('@/lib/db/extractions')
+  return listExtractionsSharedViaFoldersForMemberInModule(userId, limit)
 }
 
 export async function findExtractionOrderNumberForUser(input: { id: string; userId: string }) {
@@ -3852,165 +3482,34 @@ export async function findExtractionOrderNumberForUser(input: { id: string; user
 }
 
 export async function deleteExtractionByIdForUser(input: { id: string; userId: string }) {
-  await ensureDbReady()
-  const result = await pool.query(
-    `
-      DELETE FROM extractions
-      WHERE id = $1 AND user_id = $2
-    `,
-    [input.id, input.userId]
-  )
-
-  return result.rowCount ?? 0
+  const {
+    deleteExtractionByIdForUser: deleteExtractionByIdForUserInModule,
+  } = await import('@/lib/db/extractions')
+  return deleteExtractionByIdForUserInModule(input)
 }
 
 export async function deleteExtractionsByUser(userId: string) {
-  await ensureDbReady()
-  const result = await pool.query(
-    `
-      DELETE FROM extractions
-      WHERE user_id = $1
-    `,
-    [userId]
-  )
-
-  return result.rowCount ?? 0
+  const { deleteExtractionsByUser: deleteExtractionsByUserInModule } = await import('@/lib/db/extractions')
+  return deleteExtractionsByUserInModule(userId)
 }
 
 export async function findExtractionById(id: string) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionRow>(
-    `
-      SELECT
-        id,
-        user_id,
-        url,
-        video_id,
-        video_title,
-        thumbnail_url,
-        extraction_mode,
-        objective,
-        phases_json,
-        pro_tip,
-        metadata_json,
-        share_visibility,
-        clone_permission,
-        created_at
-      FROM extractions
-      WHERE id = $1
-      LIMIT 1
-    `,
-    [id]
-  )
-  return rows[0] ? mapExtractionRow(rows[0]) : null
+  const { findExtractionById: findExtractionByIdInModule } = await import('@/lib/db/extractions')
+  return findExtractionByIdInModule(id)
 }
 
 export async function findPublicExtractionById(id: string) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbPublicExtractionRow>(
-    `
-      SELECT
-        e.id,
-        e.user_id,
-        e.url,
-        e.video_id,
-        e.video_title,
-        e.thumbnail_url,
-        e.extraction_mode,
-        e.objective,
-        e.phases_json,
-        e.pro_tip,
-        e.metadata_json,
-        e.share_visibility,
-        e.clone_permission,
-        e.created_at,
-        e.source_type,
-        e.source_label,
-        e.folder_id,
-        owner.name AS owner_name,
-        owner.email AS owner_email
-      FROM extractions e
-      INNER JOIN users owner ON owner.id = e.user_id
-      WHERE
-        e.id = $1
-        AND e.share_visibility = 'public'
-        AND owner.blocked_at IS NULL
-      LIMIT 1
-    `,
-    [id]
-  )
-
-  if (!rows[0]) return null
-  return {
-    extraction: mapExtractionRow(rows[0]),
-    owner_name: rows[0].owner_name ?? null,
-    owner_email: rows[0].owner_email ?? null,
-  } satisfies DbPublicExtraction
+  const {
+    findPublicExtractionById: findPublicExtractionByIdInModule,
+  } = await import('@/lib/db/extractions')
+  return findPublicExtractionByIdInModule(id)
 }
 
 export async function listPublicExtractionsForSearch(input: { query: string; limit: number }) {
-  await ensureDbReady()
-  const normalizedQuery = input.query.trim()
-  const hasQuery = normalizedQuery.length > 0
-  const likeQuery = `%${normalizedQuery}%`
-  const startsWithQuery = `${normalizedQuery}%`
-  const limit = Number.isFinite(input.limit) ? Math.max(1, Math.min(60, Math.trunc(input.limit))) : 20
-
-  const { rows } = await pool.query<DbPublicExtractionRow>(
-    `
-      SELECT
-        e.id,
-        e.user_id,
-        e.url,
-        e.video_id,
-        e.video_title,
-        e.thumbnail_url,
-        e.extraction_mode,
-        e.objective,
-        e.phases_json,
-        e.pro_tip,
-        e.metadata_json,
-        e.share_visibility,
-        e.clone_permission,
-        e.created_at,
-        e.source_type,
-        e.source_label,
-        e.folder_id,
-        owner.name AS owner_name,
-        owner.email AS owner_email
-      FROM extractions e
-      INNER JOIN users owner ON owner.id = e.user_id
-      WHERE
-        e.share_visibility = 'public'
-        AND owner.blocked_at IS NULL
-        AND (
-          NOT $1
-          OR COALESCE(e.video_title, '') ILIKE $2
-          OR COALESCE(e.source_label, '') ILIKE $2
-          OR COALESCE(e.objective, '') ILIKE $2
-          OR COALESCE(e.url, '') ILIKE $2
-          OR COALESCE(owner.name, '') ILIKE $2
-          OR COALESCE(owner.email, '') ILIKE $2
-        )
-      ORDER BY
-        CASE
-          WHEN $1 AND COALESCE(e.video_title, '') ILIKE $3 THEN 0
-          WHEN $1 AND COALESCE(e.source_label, '') ILIKE $3 THEN 1
-          WHEN $1 AND COALESCE(e.objective, '') ILIKE $3 THEN 2
-          ELSE 3
-        END ASC,
-        e.created_at DESC,
-        e.id DESC
-      LIMIT $4
-    `,
-    [hasQuery, likeQuery, startsWithQuery, limit]
-  )
-
-  return rows.map((row) => ({
-    extraction: mapExtractionRow(row),
-    owner_name: row.owner_name ?? null,
-    owner_email: row.owner_email ?? null,
-  })) satisfies DbPublicExtraction[]
+  const {
+    listPublicExtractionsForSearch: listPublicExtractionsForSearchInModule,
+  } = await import('@/lib/db/extractions')
+  return listPublicExtractionsForSearchInModule(input)
 }
 
 export async function findExtractionAccessForUser(input: { id: string; userId: string }) {
@@ -4193,191 +3692,15 @@ export interface DbPlaybookLineageData {
     | null
 }
 
-async function readExtractionLineageRowById(id: string) {
-  const { rows } = await pool.query<DbExtractionLineageRow>(
-    `
-      SELECT
-        e.id,
-        e.user_id,
-        e.parent_extraction_id,
-        e.video_title,
-        e.source_label,
-        e.objective,
-        e.created_at,
-        owner.name AS owner_name,
-        owner.email AS owner_email
-      FROM extractions e
-      INNER JOIN users owner
-        ON owner.id = e.user_id
-      WHERE e.id = $1
-      LIMIT 1
-    `,
-    [id]
-  )
-
-  return rows[0] ?? null
-}
-
 export async function buildExtractionLineageForUser(input: {
   extractionId: string
   userId: string
   includeCopyStats: boolean
 }) {
-  await ensureDbReady()
-
-  const nodes: DbPlaybookLineageNode[] = []
-  const seen = new Set<string>()
-  let currentId = input.extractionId.trim()
-  let depth = 0
-
-  while (currentId && depth < 24 && !seen.has(currentId)) {
-    seen.add(currentId)
-
-    const row = await readExtractionLineageRowById(currentId)
-    if (!row) break
-
-    const access = await findCloneableExtractionAccessForUser({
-      id: currentId,
-      userId: input.userId,
-    })
-    const accessible = Boolean(access.role)
-
-    nodes.push({
-      depth,
-      isCurrent: depth === 0,
-      isOriginal: !row.parent_extraction_id,
-      accessible,
-      title: accessible
-        ? resolveDbExtractionDisplayTitle({
-            id: row.id,
-            video_title: row.video_title,
-            source_label: row.source_label,
-            objective: row.objective,
-          })
-        : null,
-      ownerName: accessible ? row.owner_name : null,
-      ownerEmail: accessible ? row.owner_email : null,
-      createdAt: accessible ? toIso(row.created_at) : null,
-    })
-
-    currentId = row.parent_extraction_id ?? ''
-    depth += 1
-  }
-
-  let copies: DbPlaybookLineageData['copies'] = null
-
-  if (input.includeCopyStats) {
-    const directCountResult = await pool.query<DbExtractionCountRow>(
-      `
-        SELECT COUNT(*) AS count
-        FROM extractions
-        WHERE parent_extraction_id = $1
-      `,
-      [input.extractionId]
-    )
-
-    const totalCountResult = await pool.query<DbExtractionCountRow>(
-      `
-        WITH RECURSIVE descendants AS (
-          SELECT id
-          FROM extractions
-          WHERE parent_extraction_id = $1
-          UNION ALL
-          SELECT child.id
-          FROM extractions child
-          INNER JOIN descendants d
-            ON child.parent_extraction_id = d.id
-        )
-        SELECT COUNT(*) AS count
-        FROM descendants
-      `,
-      [input.extractionId]
-    )
-
-    const recentCopiesResult = await pool.query<DbExtractionRecentCloneRow>(
-      `
-        WITH RECURSIVE descendants AS (
-          SELECT
-            e.id,
-            e.parent_extraction_id,
-            e.user_id,
-            e.video_title,
-            e.source_label,
-            e.objective,
-            e.created_at,
-            1::int AS depth
-          FROM extractions e
-          WHERE e.parent_extraction_id = $1
-          UNION ALL
-          SELECT
-            child.id,
-            child.parent_extraction_id,
-            child.user_id,
-            child.video_title,
-            child.source_label,
-            child.objective,
-            child.created_at,
-            d.depth + 1
-          FROM extractions child
-          INNER JOIN descendants d
-            ON child.parent_extraction_id = d.id
-        )
-        SELECT
-          d.id,
-          d.parent_extraction_id,
-          d.user_id,
-          d.video_title,
-          d.source_label,
-          d.objective,
-          d.created_at,
-          d.depth,
-          owner.name AS owner_name,
-          owner.email AS owner_email,
-          parent.video_title AS parent_video_title,
-          parent.source_label AS parent_source_label,
-          parent.objective AS parent_objective
-        FROM descendants d
-        INNER JOIN users owner
-          ON owner.id = d.user_id
-        LEFT JOIN extractions parent
-          ON parent.id = d.parent_extraction_id
-        ORDER BY d.created_at DESC, d.id DESC
-        LIMIT 10
-      `,
-      [input.extractionId]
-    )
-
-    copies = {
-      directCount: directCountResult.rows[0] ? parseDbInteger(directCountResult.rows[0].count) : 0,
-      totalCount: totalCountResult.rows[0] ? parseDbInteger(totalCountResult.rows[0].count) : 0,
-      recent: recentCopiesResult.rows.map((row) => ({
-        depth: parseDbInteger(row.depth),
-        title: resolveDbExtractionDisplayTitle({
-          id: row.id,
-          video_title: row.video_title,
-          source_label: row.source_label,
-          objective: row.objective,
-        }),
-        copiedByName: row.owner_name,
-        copiedByEmail: row.owner_email,
-        createdAt: toIso(row.created_at),
-        copiedFromTitle: row.parent_extraction_id
-          ? resolveDbExtractionDisplayTitle({
-              id: row.parent_extraction_id,
-              video_title: row.parent_video_title,
-              source_label: row.parent_source_label,
-              objective: row.parent_objective,
-            })
-          : null,
-      })),
-    }
-  }
-
-  return {
-    generation: Math.max(0, nodes.length - 1),
-    nodes,
-    copies,
-  } satisfies DbPlaybookLineageData
+  const {
+    buildExtractionLineageForUser: buildExtractionLineageForUserInModule,
+  } = await import('@/lib/db/extractions')
+  return buildExtractionLineageForUserInModule(input)
 }
 
 export async function findExtractionByIdForUser(input: { id: string; userId: string }) {
@@ -4430,29 +3753,10 @@ export async function findExtractionByIdForUser(input: { id: string; userId: str
 }
 
 export async function listExtractionMembersForOwner(input: { extractionId: string; ownerUserId: string }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionMemberRow>(
-    `
-      SELECT
-        m.extraction_id,
-        m.user_id,
-        m.role,
-        m.created_at,
-        u.name AS user_name,
-        u.email AS user_email
-      FROM extraction_members m
-      INNER JOIN extractions e
-        ON e.id = m.extraction_id
-      INNER JOIN users u
-        ON u.id = m.user_id
-      WHERE
-        m.extraction_id = $1
-        AND e.user_id = $2
-      ORDER BY m.created_at ASC
-    `,
-    [input.extractionId, input.ownerUserId]
-  )
-  return rows.map(mapExtractionMemberRow)
+  const {
+    listExtractionMembersForOwner: listExtractionMembersForOwnerInModule,
+  } = await import('@/lib/db/extractions')
+  return listExtractionMembersForOwnerInModule(input)
 }
 
 export async function upsertExtractionMemberForOwner(input: {
@@ -4461,49 +3765,10 @@ export async function upsertExtractionMemberForOwner(input: {
   memberUserId: string
   role: ExtractionMemberRole
 }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionMemberRow>(
-    `
-      WITH target_extraction AS (
-        SELECT id
-        FROM extractions
-        WHERE id = $1 AND user_id = $2
-        LIMIT 1
-      ),
-      upserted AS (
-        INSERT INTO extraction_members (
-          extraction_id,
-          user_id,
-          role
-        )
-        SELECT
-          target_extraction.id,
-          $3,
-          $4
-        FROM target_extraction
-        WHERE $3 <> $2
-        ON CONFLICT (extraction_id, user_id)
-        DO UPDATE SET role = EXCLUDED.role
-        RETURNING
-          extraction_id,
-          user_id,
-          role,
-          created_at
-      )
-      SELECT
-        upserted.extraction_id,
-        upserted.user_id,
-        upserted.role,
-        upserted.created_at,
-        u.name AS user_name,
-        u.email AS user_email
-      FROM upserted
-      INNER JOIN users u ON u.id = upserted.user_id
-      LIMIT 1
-    `,
-    [input.extractionId, input.ownerUserId, input.memberUserId, input.role]
-  )
-  return rows[0] ? mapExtractionMemberRow(rows[0]) : null
+  const {
+    upsertExtractionMemberForOwner: upsertExtractionMemberForOwnerInModule,
+  } = await import('@/lib/db/extractions')
+  return upsertExtractionMemberForOwnerInModule(input)
 }
 
 export async function removeExtractionMemberForOwner(input: {
@@ -4511,20 +3776,10 @@ export async function removeExtractionMemberForOwner(input: {
   ownerUserId: string
   memberUserId: string
 }) {
-  await ensureDbReady()
-  const result = await pool.query(
-    `
-      DELETE FROM extraction_members m
-      USING extractions e
-      WHERE
-        m.extraction_id = $1
-        AND m.user_id = $2
-        AND e.id = m.extraction_id
-        AND e.user_id = $3
-    `,
-    [input.extractionId, input.memberUserId, input.ownerUserId]
-  )
-  return result.rowCount ?? 0
+  const {
+    removeExtractionMemberForOwner: removeExtractionMemberForOwnerInModule,
+  } = await import('@/lib/db/extractions')
+  return removeExtractionMemberForOwnerInModule(input)
 }
 
 export async function listExtractionFolderMembersForOwner(input: {
@@ -4572,32 +3827,10 @@ export async function updateExtractionShareVisibilityForUser(input: {
   userId: string
   shareVisibility: ExtractionShareVisibility
 }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionRow>(
-    `
-      UPDATE extractions
-      SET share_visibility = $1
-      WHERE id = $2 AND user_id = $3
-      RETURNING
-        id,
-        user_id,
-        url,
-        video_id,
-        video_title,
-        thumbnail_url,
-        extraction_mode,
-        objective,
-        phases_json,
-        pro_tip,
-        metadata_json,
-        share_visibility,
-        clone_permission,
-        created_at
-    `,
-    [input.shareVisibility, input.id, input.userId]
-  )
-
-  return rows[0] ? mapExtractionRow(rows[0]) : null
+  const {
+    updateExtractionShareVisibilityForUser: updateExtractionShareVisibilityForUserInModule,
+  } = await import('@/lib/db/extractions')
+  return updateExtractionShareVisibilityForUserInModule(input)
 }
 
 export async function updateExtractionClonePermissionForUser(input: {
@@ -4605,32 +3838,10 @@ export async function updateExtractionClonePermissionForUser(input: {
   userId: string
   clonePermission: ExtractionClonePermission
 }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionRow>(
-    `
-      UPDATE extractions
-      SET clone_permission = $1
-      WHERE id = $2 AND user_id = $3
-      RETURNING
-        id,
-        user_id,
-        url,
-        video_id,
-        video_title,
-        thumbnail_url,
-        extraction_mode,
-        objective,
-        phases_json,
-        pro_tip,
-        metadata_json,
-        share_visibility,
-        clone_permission,
-        created_at
-    `,
-    [input.clonePermission, input.id, input.userId]
-  )
-
-  return rows[0] ? mapExtractionRow(rows[0]) : null
+  const {
+    updateExtractionClonePermissionForUser: updateExtractionClonePermissionForUserInModule,
+  } = await import('@/lib/db/extractions')
+  return updateExtractionClonePermissionForUserInModule(input)
 }
 
 export async function updateExtractionPhasesForUser(input: {
@@ -4638,50 +3849,10 @@ export async function updateExtractionPhasesForUser(input: {
   userId: string
   phasesJson: string
 }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionRow>(
-    `
-      UPDATE extractions e
-      SET phases_json = $1
-      WHERE
-        e.id = $2
-        AND (
-          e.user_id = $3
-          OR (
-            e.share_visibility = 'circle'
-            AND EXISTS (
-              SELECT 1
-              FROM extraction_members m
-              WHERE
-                m.extraction_id = e.id
-                AND m.user_id = $3
-                AND m.role = 'editor'
-            )
-          )
-        )
-      RETURNING
-        id,
-        user_id,
-        url,
-        video_id,
-        video_title,
-        thumbnail_url,
-        extraction_mode,
-        objective,
-        phases_json,
-        pro_tip,
-        metadata_json,
-        share_visibility,
-        clone_permission,
-        created_at,
-        source_type,
-        source_label,
-        folder_id
-    `,
-    [input.phasesJson, input.id, input.userId]
-  )
-
-  return rows[0] ? mapExtractionRow(rows[0]) : null
+  const {
+    updateExtractionPhasesForUser: updateExtractionPhasesForUserInModule,
+  } = await import('@/lib/db/extractions')
+  return updateExtractionPhasesForUserInModule(input)
 }
 
 export async function updateExtractionGeneratedContentForUser(input: {
@@ -4749,18 +3920,10 @@ export async function updateExtractionMetaForUser(input: {
   thumbnailUrl: string | null
   objective: string
 }) {
-  await ensureDbReady()
-  const { rows } = await pool.query<DbExtractionRow>(
-    `UPDATE extractions
-     SET video_title = $1, source_label = $2, thumbnail_url = $3, objective = $4
-     WHERE id = $5 AND user_id = $6
-     RETURNING
-       id, user_id, url, video_id, video_title, thumbnail_url,
-       extraction_mode, objective, phases_json, pro_tip, metadata_json,
-       share_visibility, created_at, source_type, source_label`,
-    [input.videoTitle, input.sourceLabel, input.thumbnailUrl, input.objective, input.id, input.userId]
-  )
-  return rows[0] ? mapExtractionRow(rows[0]) : null
+  const {
+    updateExtractionMetaForUser: updateExtractionMetaForUserInModule,
+  } = await import('@/lib/db/extractions')
+  return updateExtractionMetaForUserInModule(input)
 }
 
 export async function cloneExtractionForUser(input: {

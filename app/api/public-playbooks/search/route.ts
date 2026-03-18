@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { listPublicExtractionsForSearch } from '@/lib/db'
+import { listPublicExtractionsForSearch } from '@/lib/db/extractions'
 import { normalizeExtractionMode } from '@/lib/extraction-modes'
 import { buildYoutubeThumbnailUrl } from '@/lib/video-preview'
 
