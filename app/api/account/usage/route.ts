@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { getAdminUserAiCostDetail, getUserAiDailyUsage } from '@/lib/db'
+import { getAdminUserAiCostDetail, getUserAiDailyUsage } from '@/lib/db/billing'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

@@ -1,4 +1,4 @@
-import { logAiUsage } from '@/lib/db'
+import { logAiUsage } from '@/lib/db/billing'
 
 export type AiUsageLogInput = Parameters<typeof logAiUsage>[0]
 export type PendingAiUsageLogInput = Omit<AiUsageLogInput, 'extractionId'>

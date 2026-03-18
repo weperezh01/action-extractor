@@ -3,13 +3,12 @@ import { getUserFromRequest } from '@/lib/auth'
 import { getExtractionModeLabel, normalizeExtractionMode } from '@/lib/extraction-modes'
 import { flattenItemsAsText, normalizePlaybookPhases } from '@/lib/playbook-tree'
 import {
-  consumeChatTokens,
   createChatMessageForUser,
   getAppSetting,
-  getChatTokenSnapshot,
   getPromptOverride,
   listChatMessagesForUser,
 } from '@/lib/db'
+import { consumeChatTokens, getChatTokenSnapshot } from '@/lib/db/billing'
 import {
   findExtractionByIdForUser,
   listExtractionsByUser,
