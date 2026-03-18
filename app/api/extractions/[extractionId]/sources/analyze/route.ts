@@ -8,8 +8,6 @@ import { resolveYoutubeTranscriptWithFallback } from '@/lib/youtube-transcript-f
 import {
   createExtractionAdditionalSourceForUser,
   findExtractionAccessForUser,
-  getExtractionSourceData,
-  getVideoCacheTranscript,
   listExtractionAdditionalSources,
   markExtractionAdditionalSourcesAnalyzedForUser,
   syncExtractionTasksForUser,
@@ -17,7 +15,11 @@ import {
   type DbExtraction,
   type DbExtractionAdditionalSource,
 } from '@/lib/db'
-import { createExtraction } from '@/lib/db/extractions'
+import {
+  createExtraction,
+  getExtractionSourceData,
+  getVideoCacheTranscript,
+} from '@/lib/db/extractions'
 import { getUserFromRequest } from '@/lib/auth'
 import {
   buildCombinedPlaybookSourceText,

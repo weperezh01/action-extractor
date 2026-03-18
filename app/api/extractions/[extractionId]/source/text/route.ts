@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { getExtractionSourceData, getVideoCacheTranscript } from '@/lib/db'
+import { getExtractionSourceData, getVideoCacheTranscript } from '@/lib/db/extractions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

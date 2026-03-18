@@ -263,6 +263,102 @@ export async function createExtraction(input: {
   return mapExtractionRow(rows[0])
 }
 
+export async function getExtractionSourceData(input: {
+  extractionId: string
+  requestingUserId: string | null
+}): Promise<{
+  sourceType: string
+  sourceLabel: string | null
+  url: string | null
+  videoId: string | null
+  thumbnailUrl: string | null
+  videoTitle: string | null
+  sourceText: string | null
+  sourceFileUrl: string | null
+  sourceFileName: string | null
+  sourceFileSizeBytes: number | null
+  sourceFileMimeType: string | null
+  shareVisibility: ExtractionShareVisibility
+  userId: string
+} | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{
+    id: string
+    user_id: string
+    url: string | null
+    video_id: string | null
+    video_title: string | null
+    thumbnail_url: string | null
+    share_visibility: string | null
+    source_type: string | null
+    source_label: string | null
+    source_text: string | null
+    source_file_url: string | null
+    source_file_name: string | null
+    source_file_size_bytes: number | null
+    source_file_mime_type: string | null
+    has_access: boolean
+  }>(
+    `
+      SELECT
+        e.id,
+        e.user_id,
+        e.url,
+        e.video_id,
+        e.video_title,
+        e.thumbnail_url,
+        e.share_visibility,
+        e.source_type,
+        e.source_label,
+        e.source_text,
+        e.source_file_url,
+        e.source_file_name,
+        e.source_file_size_bytes,
+        e.source_file_mime_type,
+        (
+          e.user_id = $2
+          OR e.share_visibility IN ('public', 'unlisted')
+          OR EXISTS (
+            SELECT 1 FROM extraction_members m
+            WHERE m.extraction_id = e.id AND m.user_id = $2
+          )
+        ) AS has_access
+      FROM extractions e
+      WHERE e.id = $1
+      LIMIT 1
+    `,
+    [input.extractionId, input.requestingUserId ?? '']
+  )
+
+  if (!rows[0] || !rows[0].has_access) return null
+
+  const row = rows[0]
+  return {
+    sourceType: row.source_type ?? 'youtube',
+    sourceLabel: row.source_label ?? null,
+    url: row.url ?? null,
+    videoId: row.video_id ?? null,
+    thumbnailUrl: row.thumbnail_url ?? null,
+    videoTitle: row.video_title ?? null,
+    sourceText: row.source_text ?? null,
+    sourceFileUrl: row.source_file_url ?? null,
+    sourceFileName: row.source_file_name ?? null,
+    sourceFileSizeBytes: row.source_file_size_bytes != null ? Number(row.source_file_size_bytes) : null,
+    sourceFileMimeType: row.source_file_mime_type ?? null,
+    shareVisibility: normalizeExtractionShareVisibility(row.share_visibility),
+    userId: row.user_id,
+  }
+}
+
+export async function getVideoCacheTranscript(videoId: string): Promise<string | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<{ transcript_text: string | null }>(
+    `SELECT transcript_text FROM video_cache WHERE video_id = $1 LIMIT 1`,
+    [videoId]
+  )
+  return rows[0]?.transcript_text ?? null
+}
+
 export async function findExtractionOrderNumberForUser(input: { id: string; userId: string }) {
   await ensureDbReady()
   const { rows } = await pool.query<DbExtractionOrderNumberRow>(
@@ -282,6 +378,56 @@ export async function findExtractionOrderNumberForUser(input: { id: string; user
   )
   const row = rows[0]
   return row ? parseDbInteger(row.order_number) : null
+}
+
+export async function findExtractionByIdForUser(input: { id: string; userId: string }) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionRow>(
+    `
+      SELECT
+        id,
+        user_id,
+        parent_extraction_id,
+        url,
+        video_id,
+        video_title,
+        thumbnail_url,
+        extraction_mode,
+        objective,
+        phases_json,
+        pro_tip,
+        metadata_json,
+        share_visibility,
+        created_at,
+        clone_permission,
+        source_type,
+        source_label,
+        folder_id,
+        is_starred,
+        source_text,
+        source_file_url,
+        source_file_name,
+        source_file_size_bytes,
+        source_file_mime_type,
+        (source_text IS NOT NULL AND source_text <> '') AS has_source_text,
+        transcript_source,
+        (
+          SELECT COALESCE(
+            jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'color', t.color) ORDER BY t.name),
+            '[]'::jsonb
+          )
+          FROM extraction_tag_assignments eta
+          JOIN extraction_tags t ON t.id = eta.tag_id
+          WHERE eta.extraction_id = extractions.id
+        )::text AS tags_json
+      FROM extractions
+      WHERE id = $1 AND user_id = $2
+      LIMIT 1
+    `,
+    [input.id, input.userId]
+  )
+
+  return rows[0] ? mapExtractionRow(rows[0]) : null
 }
 
 export async function findVideoCacheByVideoId(input: {

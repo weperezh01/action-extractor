@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { createOrGetShareToken, findExtractionByIdForUser } from '@/lib/db'
+import { createOrGetShareToken } from '@/lib/db'
+import { findExtractionByIdForUser } from '@/lib/db/extractions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
