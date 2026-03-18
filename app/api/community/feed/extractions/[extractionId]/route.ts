@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
-  findExtractionAccessForUser,
   listCommunityPostsByExtractionForUser,
   recordCommunityPostViewsForUser,
   type DbCommunityPost,
 } from '@/lib/db'
+import { findExtractionAccessForUser } from '@/lib/db/extractions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

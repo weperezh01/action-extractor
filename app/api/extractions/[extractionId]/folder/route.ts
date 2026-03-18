@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
   ensureDefaultExtractionFoldersForUser,
-  findExtractionFolderByIdForUser,
   updateExtractionFolderForUser,
 } from '@/lib/db'
+import { findExtractionFolderByIdForUser } from '@/lib/db/extractions'
 import { buildSystemExtractionFolderIdForUser } from '@/lib/extraction-folders'
 
 export const runtime = 'nodejs'

@@ -5,8 +5,10 @@ import {
   pool,
   type DbExtractionAdditionalSource,
   type DbExtraction,
+  type DbExtractionFolder,
   type DbExtractionTag,
   type DbVideoCache,
+  type ExtractionAccessRole,
   type ExtractionClonePermission,
   type ExtractionShareVisibility,
 } from '@/lib/db'
@@ -80,6 +82,20 @@ interface DbExtractionOrderNumberRow {
   order_number: number | string
 }
 
+interface DbExtractionFolderRow {
+  id: string
+  user_id: string
+  name: string
+  color: string
+  parent_id: string | null
+  created_at: Date | string
+  updated_at: Date | string
+}
+
+interface DbExtractionAccessRow extends DbExtractionRow {
+  access_role: string | null
+}
+
 function toIso(value: Date | string) {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString()
 }
@@ -94,6 +110,13 @@ function normalizeExtractionShareVisibility(value: unknown): ExtractionShareVisi
 
 function normalizeExtractionClonePermission(value: unknown): ExtractionClonePermission {
   return value === 'template_only' || value === 'full' ? value : 'disabled'
+}
+
+function normalizeExtractionAccessRole(value: unknown): ExtractionAccessRole | null {
+  if (value === 'owner') return 'owner'
+  if (value === 'editor') return 'editor'
+  if (value === 'viewer') return 'viewer'
+  return null
 }
 
 function mapExtractionRow(row: DbExtractionRow): DbExtraction {
@@ -177,6 +200,18 @@ function mapExtractionAdditionalSourceRow(row: DbExtractionAdditionalSourceRow):
     analysis_status: row.analysis_status === 'analyzed' ? 'analyzed' : 'pending',
     analyzed_at: row.analyzed_at ? toIso(row.analyzed_at) : null,
     created_at: toIso(row.created_at),
+  }
+}
+
+function mapExtractionFolderRow(row: DbExtractionFolderRow): DbExtractionFolder {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    name: row.name,
+    color: row.color,
+    parent_id: row.parent_id ?? null,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
   }
 }
 
@@ -465,6 +500,154 @@ export async function findExtractionByIdForUser(input: { id: string; userId: str
   )
 
   return rows[0] ? mapExtractionRow(rows[0]) : null
+}
+
+export async function findExtractionAccessForUser(input: { id: string; userId: string }) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionAccessRow>(
+    `
+      SELECT
+        e.id,
+        e.user_id,
+        e.url,
+        e.video_id,
+        e.video_title,
+        e.thumbnail_url,
+        e.extraction_mode,
+        e.objective,
+        e.phases_json,
+        e.pro_tip,
+        e.metadata_json,
+        e.share_visibility,
+        e.created_at,
+        e.source_type,
+        e.source_label,
+        e.folder_id,
+        CASE
+          WHEN e.user_id = $2 THEN 'owner'
+          WHEN EXISTS (
+            WITH RECURSIVE folder_ancestors AS (
+              SELECT f.id, f.parent_id
+              FROM extraction_folders f
+              WHERE
+                e.folder_id IS NOT NULL
+                AND f.id = e.folder_id
+                AND f.user_id = e.user_id
+              UNION ALL
+              SELECT parent.id, parent.parent_id
+              FROM extraction_folders parent
+              INNER JOIN folder_ancestors fa
+                ON fa.parent_id = parent.id
+              WHERE parent.user_id = e.user_id
+            )
+            SELECT 1
+            FROM extraction_folder_members fm
+            WHERE
+              fm.member_user_id = $2
+              AND fm.owner_user_id = e.user_id
+              AND fm.folder_id IN (SELECT id FROM folder_ancestors)
+            LIMIT 1
+          ) THEN 'viewer'
+          WHEN e.share_visibility = 'circle' AND m.role IS NOT NULL THEN m.role
+          WHEN e.share_visibility IN ('public', 'unlisted') THEN 'viewer'
+          ELSE NULL
+        END AS access_role
+      FROM extractions e
+      LEFT JOIN extraction_members m
+        ON m.extraction_id = e.id
+        AND m.user_id = $2
+      WHERE e.id = $1
+      LIMIT 1
+    `,
+    [input.id, input.userId]
+  )
+
+  if (!rows[0]) {
+    return { extraction: null, role: null as ExtractionAccessRole | null }
+  }
+
+  return {
+    extraction: mapExtractionRow(rows[0]),
+    role: normalizeExtractionAccessRole(rows[0].access_role),
+  }
+}
+
+export async function findCloneableExtractionAccessForUser(input: { id: string; userId: string }) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionAccessRow>(
+    `
+      SELECT
+        e.id,
+        e.user_id,
+        e.parent_extraction_id,
+        e.url,
+        e.video_id,
+        e.video_title,
+        e.thumbnail_url,
+        e.extraction_mode,
+        e.objective,
+        e.phases_json,
+        e.pro_tip,
+        e.metadata_json,
+        e.share_visibility,
+        e.clone_permission,
+        e.created_at,
+        e.source_type,
+        e.source_label,
+        e.folder_id,
+        e.source_text,
+        e.source_file_url,
+        e.source_file_name,
+        e.source_file_size_bytes,
+        e.source_file_mime_type,
+        e.transcript_source,
+        CASE
+          WHEN e.user_id = $2 THEN 'owner'
+          WHEN EXISTS (
+            WITH RECURSIVE folder_ancestors AS (
+              SELECT f.id, f.parent_id
+              FROM extraction_folders f
+              WHERE
+                e.folder_id IS NOT NULL
+                AND f.id = e.folder_id
+                AND f.user_id = e.user_id
+              UNION ALL
+              SELECT parent.id, parent.parent_id
+              FROM extraction_folders parent
+              INNER JOIN folder_ancestors fa
+                ON fa.parent_id = parent.id
+              WHERE parent.user_id = e.user_id
+            )
+            SELECT 1
+            FROM extraction_folder_members fm
+            WHERE
+              fm.member_user_id = $2
+              AND fm.owner_user_id = e.user_id
+              AND fm.folder_id IN (SELECT id FROM folder_ancestors)
+            LIMIT 1
+          ) THEN 'viewer'
+          WHEN e.share_visibility = 'circle' AND m.role IS NOT NULL THEN m.role
+          WHEN e.share_visibility IN ('public', 'unlisted') THEN 'viewer'
+          ELSE NULL
+        END AS access_role
+      FROM extractions e
+      LEFT JOIN extraction_members m
+        ON m.extraction_id = e.id
+        AND m.user_id = $2
+      WHERE e.id = $1
+      LIMIT 1
+    `,
+    [input.id, input.userId]
+  )
+
+  if (!rows[0]) {
+    return { extraction: null, role: null as ExtractionAccessRole | null }
+  }
+
+  return {
+    extraction: mapExtractionRow(rows[0]),
+    role: normalizeExtractionAccessRole(rows[0].access_role),
+  }
 }
 
 export async function listExtractionAdditionalSources(input: {
@@ -898,4 +1081,25 @@ export async function updateExtractionGeneratedContentForUser(input: {
   )
 
   return rows[0] ? mapExtractionRow(rows[0]) : null
+}
+
+export async function findExtractionFolderByIdForUser(input: { id: string; userId: string }) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionFolderRow>(
+    `
+      SELECT
+        id,
+        user_id,
+        name,
+        color,
+        parent_id,
+        created_at,
+        updated_at
+      FROM extraction_folders
+      WHERE id = $1 AND user_id = $2
+      LIMIT 1
+    `,
+    [input.id, input.userId]
+  )
+  return rows[0] ? mapExtractionFolderRow(rows[0]) : null
 }

@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
   createExtractionTaskEventForUser,
-  findExtractionAccessForUser,
   findExtractionTaskByIdForUser,
   listExtractionTaskDependencies,
   listExtractionTasksWithEventsForUser,
@@ -16,6 +15,7 @@ import {
   type ExtractionTaskEventType,
   type ExtractionTaskStatus,
 } from '@/lib/db'
+import { findExtractionAccessForUser } from '@/lib/db/extractions'
 import { notifyTaskStatusChange } from '@/lib/email-notifications'
 import { normalizePlaybookPhases } from '@/lib/playbook-tree'
 import {

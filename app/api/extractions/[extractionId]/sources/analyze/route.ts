@@ -6,7 +6,6 @@ import { extractVideoId } from '@/lib/extract-core'
 import { extractWebContent } from '@/lib/content-extractor'
 import { resolveYoutubeTranscriptWithFallback } from '@/lib/youtube-transcript-fallback'
 import {
-  findExtractionAccessForUser,
   syncExtractionTasksForUser,
   type DbExtraction,
   type DbExtractionAdditionalSource,
@@ -14,6 +13,7 @@ import {
 import {
   createExtraction,
   createExtractionAdditionalSourceForUser,
+  findExtractionAccessForUser,
   getExtractionSourceData,
   getVideoCacheTranscript,
   listExtractionAdditionalSources,

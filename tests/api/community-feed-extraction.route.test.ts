@@ -16,9 +16,12 @@ vi.mock('@/lib/auth', () => ({
 }))
 
 vi.mock('@/lib/db', () => ({
-  findExtractionAccessForUser: dbMocks.findExtractionAccessForUser,
   listCommunityPostsByExtractionForUser: dbMocks.listCommunityPostsByExtractionForUser,
   recordCommunityPostViewsForUser: dbMocks.recordCommunityPostViewsForUser,
+}))
+
+vi.mock('@/lib/db/extractions', () => ({
+  findExtractionAccessForUser: dbMocks.findExtractionAccessForUser,
 }))
 
 import { GET } from '@/app/api/community/feed/extractions/[extractionId]/route'

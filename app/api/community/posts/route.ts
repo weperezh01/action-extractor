@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
   createCommunityPostForUser,
-  findExtractionAccessForUser,
   findExtractionTaskByIdForUser,
   type CommunityPostAttachmentStorageProvider,
   type CommunityPostAttachmentType,
   type CommunityPostVisibility,
   type DbCommunityPost,
 } from '@/lib/db'
+import { findExtractionAccessForUser } from '@/lib/db/extractions'
 import {
   buildCommunityActionRateLimitMessage,
   consumeUserCommunityActionRateLimit,

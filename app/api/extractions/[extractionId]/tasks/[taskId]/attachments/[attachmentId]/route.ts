@@ -4,10 +4,10 @@ import { deleteCloudinaryAsset } from '@/lib/cloudinary'
 import {
   decrementUserStorageUsed,
   deleteExtractionTaskAttachmentByIdForUser,
-  findExtractionAccessForUser,
   findExtractionTaskByIdForUser,
   type ExtractionAccessRole,
 } from '@/lib/db'
+import { findExtractionAccessForUser } from '@/lib/db/extractions'
 import { deleteGuestTaskAttachment, findGuestTaskById } from '@/lib/guest-tasks'
 
 export const runtime = 'nodejs'

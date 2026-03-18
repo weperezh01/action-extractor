@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
-  findExtractionAccessForUser,
-} from '@/lib/db'
-import {
   createExtractionAdditionalSourceForUser,
+  findExtractionAccessForUser,
   getExtractionSourceData,
   listExtractionAdditionalSources,
 } from '@/lib/db/extractions'

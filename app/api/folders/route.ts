@@ -3,10 +3,10 @@ import { getUserFromRequest } from '@/lib/auth'
 import {
   createExtractionFolderForUser,
   ensureDefaultExtractionFoldersForUser,
-  findExtractionFolderByIdForUser,
   listExtractionFoldersByUser,
   type DbExtractionFolder,
 } from '@/lib/db'
+import { findExtractionFolderByIdForUser } from '@/lib/db/extractions'
 import {
   isProtectedExtractionFolderIdForUser,
   resolveSystemExtractionFolderKey,
