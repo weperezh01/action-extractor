@@ -1,8 +1,8 @@
 import { cache } from 'react'
 import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
-import { findSharedExtractionByToken } from '@/lib/db'
 import {
+  findSharedExtractionByToken,
   listExtractionTaskAttachmentsForSharedExtraction,
   listExtractionTasksWithEventsForSharedExtraction,
 } from '@/lib/db/extractions'

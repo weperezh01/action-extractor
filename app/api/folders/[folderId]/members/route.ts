@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
+import { findUserByEmail } from '@/lib/db'
 import {
-  findUserByEmail,
+  findExtractionFolderByIdForUser,
   listExtractionFolderMembersForOwner,
   upsertExtractionFolderMemberForOwner,
-} from '@/lib/db'
-import { findExtractionFolderByIdForUser } from '@/lib/db/extractions'
+} from '@/lib/db/extractions'
 import { isProtectedExtractionFolderIdForUser } from '@/lib/extraction-folders'
 
 export const runtime = 'nodejs'

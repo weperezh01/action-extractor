@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import {
-  createExtractionFolderForUser,
   ensureDefaultExtractionFoldersForUser,
-  listExtractionFoldersByUser,
   type DbExtractionFolder,
 } from '@/lib/db'
-import { findExtractionFolderByIdForUser } from '@/lib/db/extractions'
+import {
+  createExtractionFolderForUser,
+  findExtractionFolderByIdForUser,
+  listExtractionFoldersByUser,
+} from '@/lib/db/extractions'
 import {
   isProtectedExtractionFolderIdForUser,
   resolveSystemExtractionFolderKey,

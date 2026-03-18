@@ -6,22 +6,29 @@ import {
   type DbExtractionAdditionalSource,
   type DbExtraction,
   type DbExtractionFolder,
+  type DbExtractionFolderMember,
   type DbExtractionTag,
   type DbExtractionTask,
   type DbExtractionTaskAttachment,
   type DbExtractionTaskComment,
   type DbExtractionTaskEvent,
   type DbExtractionTaskLikeSummary,
+  type DbShareToken,
+  type DbSharedExtractionFolder,
   type DbVideoCache,
   type ExtractionAccessRole,
   type ExtractionClonePermission,
+  type ExtractionFolderMemberRole,
   type ExtractionShareVisibility,
   type ExtractionTaskAttachmentStorageProvider,
   type ExtractionTaskAttachmentType,
   type ExtractionTaskEventType,
   type ExtractionTaskStatus,
 } from '@/lib/db'
-import { buildSystemExtractionFolderIdForUser } from '@/lib/extraction-folders'
+import {
+  buildSystemExtractionFolderIdForUser,
+  isProtectedExtractionFolderIdForUser,
+} from '@/lib/extraction-folders'
 import { flattenPlaybookPhases, normalizePlaybookPhases } from '@/lib/playbook-tree'
 import {
   parseTaskNumericFormulaJson,
@@ -106,8 +113,33 @@ interface DbExtractionFolderRow {
   updated_at: Date | string
 }
 
+interface DbExtractionFolderMemberRow {
+  folder_id: string
+  owner_user_id: string
+  member_user_id: string
+  role: string
+  created_at: Date | string
+  member_name: string | null
+  member_email: string | null
+}
+
+interface DbSharedExtractionFolderRow extends DbExtractionFolderRow {
+  root_folder_id: string
+  owner_user_id: string
+  owner_name: string | null
+  owner_email: string | null
+}
+
 interface DbExtractionAccessRow extends DbExtractionRow {
   access_role: string | null
+}
+
+interface DbShareTokenRow {
+  token: string
+  extraction_id: string
+  user_id: string
+  created_at: Date | string
+  last_used_at: Date | string
 }
 
 interface DbExtractionTaskRow {
@@ -279,6 +311,10 @@ function normalizeExtractionAccessRole(value: unknown): ExtractionAccessRole | n
   return null
 }
 
+function normalizeExtractionFolderMemberRole(value: unknown): ExtractionFolderMemberRole {
+  return value === 'viewer' ? 'viewer' : 'viewer'
+}
+
 function mapExtractionRow(row: DbExtractionRow): DbExtraction {
   const orderNumber =
     row.order_number === null || row.order_number === undefined
@@ -372,6 +408,48 @@ function mapExtractionFolderRow(row: DbExtractionFolderRow): DbExtractionFolder 
     parent_id: row.parent_id ?? null,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
+  }
+}
+
+function mapExtractionFolderMemberRow(
+  row: DbExtractionFolderMemberRow
+): DbExtractionFolderMember {
+  return {
+    folder_id: row.folder_id,
+    owner_user_id: row.owner_user_id,
+    member_user_id: row.member_user_id,
+    role: normalizeExtractionFolderMemberRole(row.role),
+    created_at: toIso(row.created_at),
+    member_name: row.member_name ?? null,
+    member_email: row.member_email ?? null,
+  }
+}
+
+function mapSharedExtractionFolderRow(
+  row: DbSharedExtractionFolderRow
+): DbSharedExtractionFolder {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    name: row.name,
+    color: row.color,
+    parent_id: row.parent_id ?? null,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+    root_folder_id: row.root_folder_id,
+    owner_user_id: row.owner_user_id,
+    owner_name: row.owner_name ?? null,
+    owner_email: row.owner_email ?? null,
+  }
+}
+
+function mapShareTokenRow(row: DbShareTokenRow): DbShareToken {
+  return {
+    token: row.token,
+    extraction_id: row.extraction_id,
+    user_id: row.user_id,
+    created_at: toIso(row.created_at),
+    last_used_at: toIso(row.last_used_at),
   }
 }
 
@@ -3518,4 +3596,409 @@ export async function findExtractionFolderByIdForUser(input: { id: string; userI
     [input.id, input.userId]
   )
   return rows[0] ? mapExtractionFolderRow(rows[0]) : null
+}
+
+export async function listExtractionFoldersByUser(userId: string) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionFolderRow>(
+    `
+      SELECT
+        id,
+        user_id,
+        name,
+        color,
+        parent_id,
+        created_at,
+        updated_at
+      FROM extraction_folders
+      WHERE user_id = $1
+      ORDER BY parent_id NULLS FIRST, created_at ASC
+    `,
+    [userId]
+  )
+  return rows.map(mapExtractionFolderRow)
+}
+
+export async function createExtractionFolderForUser(input: {
+  userId: string
+  name: string
+  color: string
+  parentId: string | null
+  id?: string
+}) {
+  await ensureDbReady()
+  const id = input.id?.trim() || randomUUID()
+
+  const { rows } = await pool.query<DbExtractionFolderRow>(
+    `
+      INSERT INTO extraction_folders (
+        id,
+        user_id,
+        name,
+        color,
+        parent_id
+      )
+      SELECT
+        $1,
+        $2,
+        $3,
+        $4,
+        $5::text
+      WHERE
+        $5::text IS NULL
+        OR EXISTS (
+          SELECT 1
+          FROM extraction_folders
+          WHERE id = $5::text AND user_id = $2
+        )
+      ON CONFLICT (id) DO NOTHING
+      RETURNING
+        id,
+        user_id,
+        name,
+        color,
+        parent_id,
+        created_at,
+        updated_at
+    `,
+    [id, input.userId, input.name, input.color, input.parentId]
+  )
+
+  return rows[0] ? mapExtractionFolderRow(rows[0]) : null
+}
+
+export async function deleteExtractionFolderTreeForUser(input: {
+  id: string
+  userId: string
+}) {
+  await ensureDbReady()
+
+  if (isProtectedExtractionFolderIdForUser({ userId: input.userId, id: input.id })) {
+    return []
+  }
+
+  await ensureDefaultExtractionFoldersForUser(input.userId)
+  const generalFolderId = buildSystemExtractionFolderIdForUser({
+    userId: input.userId,
+    key: 'general',
+  })
+
+  const { rows } = await pool.query<{ id: string }>(
+    `
+      WITH RECURSIVE folder_tree AS (
+        SELECT id
+        FROM extraction_folders
+        WHERE id = $1 AND user_id = $2
+        UNION ALL
+        SELECT child.id
+        FROM extraction_folders child
+        INNER JOIN folder_tree ft ON child.parent_id = ft.id
+        WHERE child.user_id = $2
+      ),
+      detached_extractions AS (
+        UPDATE extractions
+        SET folder_id = $3
+        WHERE user_id = $2 AND folder_id IN (SELECT id FROM folder_tree)
+      ),
+      deleted_folders AS (
+        DELETE FROM extraction_folders
+        WHERE user_id = $2 AND id IN (SELECT id FROM folder_tree)
+        RETURNING id
+      )
+      SELECT id FROM deleted_folders
+    `,
+    [input.id, input.userId, generalFolderId]
+  )
+
+  return rows.map((row) => row.id)
+}
+
+export async function updateExtractionFolderForUser(input: {
+  id: string
+  userId: string
+  folderId: string | null
+}): Promise<boolean> {
+  await ensureDbReady()
+  await ensureDefaultExtractionFoldersForUser(input.userId)
+
+  const targetFolderId =
+    input.folderId ??
+    buildSystemExtractionFolderIdForUser({
+      userId: input.userId,
+      key: 'general',
+    })
+
+  const { rowCount } = await pool.query(
+    `
+      UPDATE extractions
+      SET folder_id = $1::text
+      WHERE
+        id = $2
+        AND user_id = $3
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM extraction_folders
+            WHERE id = $1::text AND user_id = $3
+          )
+        )
+    `,
+    [targetFolderId, input.id, input.userId]
+  )
+  return (rowCount ?? 0) > 0
+}
+
+export async function listExtractionFolderMembersForOwner(input: {
+  folderId: string
+  ownerUserId: string
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionFolderMemberRow>(
+    `
+      SELECT
+        fm.folder_id,
+        fm.owner_user_id,
+        fm.member_user_id,
+        fm.role,
+        fm.created_at,
+        u.name AS member_name,
+        u.email AS member_email
+      FROM extraction_folder_members fm
+      INNER JOIN extraction_folders f
+        ON f.id = fm.folder_id
+       AND f.user_id = fm.owner_user_id
+      INNER JOIN users u
+        ON u.id = fm.member_user_id
+      WHERE
+        fm.folder_id = $1
+        AND fm.owner_user_id = $2
+      ORDER BY fm.created_at ASC
+    `,
+    [input.folderId, input.ownerUserId]
+  )
+  return rows.map(mapExtractionFolderMemberRow)
+}
+
+export async function upsertExtractionFolderMemberForOwner(input: {
+  folderId: string
+  ownerUserId: string
+  memberUserId: string
+  role: ExtractionFolderMemberRole
+}) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionFolderMemberRow>(
+    `
+      WITH target_folder AS (
+        SELECT id
+        FROM extraction_folders
+        WHERE id = $1 AND user_id = $2
+        LIMIT 1
+      ),
+      upserted AS (
+        INSERT INTO extraction_folder_members (
+          folder_id,
+          owner_user_id,
+          member_user_id,
+          role
+        )
+        SELECT
+          target_folder.id,
+          $2,
+          $3,
+          $4
+        FROM target_folder
+        WHERE $3 <> $2
+        ON CONFLICT (folder_id, member_user_id)
+        DO UPDATE SET role = EXCLUDED.role
+        RETURNING
+          folder_id,
+          owner_user_id,
+          member_user_id,
+          role,
+          created_at
+      )
+      SELECT
+        upserted.folder_id,
+        upserted.owner_user_id,
+        upserted.member_user_id,
+        upserted.role,
+        upserted.created_at,
+        u.name AS member_name,
+        u.email AS member_email
+      FROM upserted
+      INNER JOIN users u
+        ON u.id = upserted.member_user_id
+      LIMIT 1
+    `,
+    [input.folderId, input.ownerUserId, input.memberUserId, input.role]
+  )
+  return rows[0] ? mapExtractionFolderMemberRow(rows[0]) : null
+}
+
+export async function removeExtractionFolderMemberForOwner(input: {
+  folderId: string
+  ownerUserId: string
+  memberUserId: string
+}) {
+  await ensureDbReady()
+  const result = await pool.query(
+    `
+      DELETE FROM extraction_folder_members fm
+      USING extraction_folders f
+      WHERE
+        fm.folder_id = $1
+        AND fm.member_user_id = $2
+        AND fm.owner_user_id = $3
+        AND f.id = fm.folder_id
+        AND f.user_id = $3
+    `,
+    [input.folderId, input.memberUserId, input.ownerUserId]
+  )
+  return result.rowCount ?? 0
+}
+
+export async function listSharedExtractionFoldersForMember(userId: string) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbSharedExtractionFolderRow>(
+    `
+      WITH RECURSIVE shared_roots AS (
+        SELECT
+          fm.folder_id AS root_folder_id,
+          fm.owner_user_id
+        FROM extraction_folder_members fm
+        WHERE fm.member_user_id = $1
+      ),
+      shared_tree AS (
+        SELECT
+          sr.owner_user_id,
+          sr.root_folder_id,
+          f.id,
+          f.user_id,
+          f.name,
+          f.color,
+          f.parent_id,
+          f.created_at,
+          f.updated_at,
+          0::int AS depth
+        FROM shared_roots sr
+        INNER JOIN extraction_folders f
+          ON f.id = sr.root_folder_id
+         AND f.user_id = sr.owner_user_id
+        UNION ALL
+        SELECT
+          st.owner_user_id,
+          st.root_folder_id,
+          child.id,
+          child.user_id,
+          child.name,
+          child.color,
+          child.parent_id,
+          child.created_at,
+          child.updated_at,
+          st.depth + 1
+        FROM extraction_folders child
+        INNER JOIN shared_tree st
+          ON child.parent_id = st.id
+         AND child.user_id = st.owner_user_id
+      ),
+      dedup AS (
+        SELECT DISTINCT ON (st.owner_user_id, st.id)
+          st.id,
+          st.user_id,
+          st.name,
+          st.color,
+          st.parent_id,
+          st.created_at,
+          st.updated_at,
+          st.root_folder_id,
+          st.owner_user_id
+        FROM shared_tree st
+        ORDER BY st.owner_user_id, st.id, st.depth ASC
+      )
+      SELECT
+        d.id,
+        d.user_id,
+        d.name,
+        d.color,
+        d.parent_id,
+        d.created_at,
+        d.updated_at,
+        d.root_folder_id,
+        d.owner_user_id,
+        owner.name AS owner_name,
+        owner.email AS owner_email
+      FROM dedup d
+      INNER JOIN users owner
+        ON owner.id = d.owner_user_id
+      ORDER BY
+        owner.name ASC NULLS LAST,
+        owner.email ASC NULLS LAST,
+        d.created_at ASC,
+        d.id ASC
+    `,
+    [userId]
+  )
+
+  return rows.map(mapSharedExtractionFolderRow)
+}
+
+export async function createOrGetShareToken(input: {
+  extractionId: string
+  userId: string
+}) {
+  await ensureDbReady()
+  const generatedToken = randomUUID().replace(/-/g, '')
+  const { rows } = await pool.query<DbShareTokenRow>(
+    `
+      INSERT INTO share_tokens (token, extraction_id, user_id)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (extraction_id)
+      DO UPDATE SET user_id = EXCLUDED.user_id
+      RETURNING token, extraction_id, user_id, created_at, last_used_at
+    `,
+    [generatedToken, input.extractionId, input.userId]
+  )
+  return mapShareTokenRow(rows[0])
+}
+
+export async function findSharedExtractionByToken(token: string) {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbExtractionRow>(
+    `
+      SELECT
+        e.id,
+        e.user_id,
+        e.url,
+        e.video_id,
+        e.video_title,
+        e.thumbnail_url,
+        e.extraction_mode,
+        e.objective,
+        e.phases_json,
+        e.pro_tip,
+        e.metadata_json,
+        e.share_visibility,
+        e.created_at
+      FROM share_tokens st
+      INNER JOIN extractions e ON e.id = st.extraction_id
+      WHERE st.token = $1
+        AND e.share_visibility IN ('public', 'unlisted')
+      LIMIT 1
+    `,
+    [token]
+  )
+
+  const row = rows[0]
+  if (!row) return null
+
+  await pool.query(
+    `
+      UPDATE share_tokens
+      SET last_used_at = NOW()
+      WHERE token = $1
+    `,
+    [token]
+  )
+
+  return mapExtractionRow(row)
 }

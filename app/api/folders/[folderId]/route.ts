@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { deleteExtractionFolderTreeForUser } from '@/lib/db'
+import { deleteExtractionFolderTreeForUser } from '@/lib/db/extractions'
 import { isProtectedExtractionFolderIdForUser } from '@/lib/extraction-folders'
 
 export const runtime = 'nodejs'
