@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { getWorkspaceMemberRole, removeWorkspaceMember, upsertWorkspaceMember } from '@/lib/db'
+import { getWorkspaceMemberRole, removeWorkspaceMember, upsertWorkspaceMember } from '@/lib/db/workspaces'
 import type { WorkspaceRole } from '@/lib/db'
 
 export const runtime = 'nodejs'

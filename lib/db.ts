@@ -7995,16 +7995,6 @@ export async function getTaskFollowersForNotification(
 // WORKSPACE FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
-function generateSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60)
-}
-
 export async function createWorkspace(input: {
   ownerId: string
   name: string
@@ -8012,64 +8002,25 @@ export async function createWorkspace(input: {
   description?: string
   avatarColor?: string
 }): Promise<DbWorkspace> {
-  await getDbReadyPromise()
-  const id = randomUUID()
-  const slug = input.slug?.trim() || generateSlug(input.name) + '-' + id.slice(0, 6)
-  const now = new Date()
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN')
-    const { rows } = await client.query<DbWorkspaceRow>(
-      `INSERT INTO workspaces (id, name, slug, description, avatar_color, owner_user_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-       RETURNING *`,
-      [id, input.name.trim(), slug, input.description?.trim() ?? null, input.avatarColor ?? 'indigo', input.ownerId, now]
-    )
-    // Add owner as member
-    await client.query(
-      `INSERT INTO workspace_members (workspace_id, user_id, role, joined_at)
-       VALUES ($1, $2, 'owner', $3)`,
-      [id, input.ownerId, now]
-    )
-    await client.query('COMMIT')
-    return mapWorkspaceRow(rows[0])
-  } catch (err) {
-    await client.query('ROLLBACK')
-    throw err
-  } finally {
-    client.release()
-  }
+  const { createWorkspace: createWorkspaceInModule } = await import('@/lib/db/workspaces')
+  return createWorkspaceInModule(input)
 }
 
 export async function findWorkspaceById(id: string): Promise<DbWorkspace | null> {
-  await getDbReadyPromise()
-  const { rows } = await pool.query<DbWorkspaceRow>(
-    `SELECT * FROM workspaces WHERE id = $1`,
-    [id]
-  )
-  return rows[0] ? mapWorkspaceRow(rows[0]) : null
+  const { findWorkspaceById: findWorkspaceByIdInModule } = await import('@/lib/db/workspaces')
+  return findWorkspaceByIdInModule(id)
 }
 
 export async function findWorkspaceBySlug(slug: string): Promise<DbWorkspace | null> {
-  await getDbReadyPromise()
-  const { rows } = await pool.query<DbWorkspaceRow>(
-    `SELECT * FROM workspaces WHERE slug = $1`,
-    [slug]
-  )
-  return rows[0] ? mapWorkspaceRow(rows[0]) : null
+  const { findWorkspaceBySlug: findWorkspaceBySlugInModule } = await import('@/lib/db/workspaces')
+  return findWorkspaceBySlugInModule(slug)
 }
 
 export async function listWorkspacesForUser(userId: string): Promise<DbWorkspaceWithRole[]> {
-  await getDbReadyPromise()
-  const { rows } = await pool.query<DbWorkspaceWithRoleRow>(
-    `SELECT w.*, wm.role,
-       (SELECT COUNT(*) FROM workspace_members wm2 WHERE wm2.workspace_id = w.id)::int AS member_count
-     FROM workspaces w
-     JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = $1
-     ORDER BY w.updated_at DESC`,
-    [userId]
+  const { listWorkspacesForUser: listWorkspacesForUserInModule } = await import(
+    '@/lib/db/workspaces'
   )
-  return rows.map(mapWorkspaceWithRoleRow)
+  return listWorkspacesForUserInModule(userId)
 }
 
 export async function updateWorkspace(input: {
@@ -8079,73 +8030,32 @@ export async function updateWorkspace(input: {
   description?: string | null
   avatarColor?: string
 }): Promise<DbWorkspace | null> {
-  await getDbReadyPromise()
-  // Verify requester is admin+
-  const role = await getWorkspaceMemberRole(input.id, input.requestingUserId)
-  if (!role || (role !== 'owner' && role !== 'admin')) {
-    throw new Error('Sin permisos para editar el workspace.')
-  }
-
-  const setClauses: string[] = ['updated_at = NOW()']
-  const values: unknown[] = []
-  let idx = 1
-
-  if (input.name !== undefined) {
-    setClauses.push(`name = $${idx++}`)
-    values.push(input.name.trim())
-  }
-  if ('description' in input) {
-    setClauses.push(`description = $${idx++}`)
-    values.push(input.description?.trim() ?? null)
-  }
-  if (input.avatarColor !== undefined) {
-    setClauses.push(`avatar_color = $${idx++}`)
-    values.push(input.avatarColor)
-  }
-
-  values.push(input.id)
-  const { rows } = await pool.query<DbWorkspaceRow>(
-    `UPDATE workspaces SET ${setClauses.join(', ')} WHERE id = $${idx} RETURNING *`,
-    values
-  )
-  return rows[0] ? mapWorkspaceRow(rows[0]) : null
+  const { updateWorkspace: updateWorkspaceInModule } = await import('@/lib/db/workspaces')
+  return updateWorkspaceInModule(input)
 }
 
 export async function deleteWorkspace(input: { id: string; ownerUserId: string }): Promise<void> {
-  await getDbReadyPromise()
-  const { rowCount } = await pool.query(
-    `DELETE FROM workspaces WHERE id = $1 AND owner_user_id = $2`,
-    [input.id, input.ownerUserId]
-  )
-  if (!rowCount) throw new Error('Solo el owner puede eliminar el workspace.')
+  const { deleteWorkspace: deleteWorkspaceInModule } = await import('@/lib/db/workspaces')
+  return deleteWorkspaceInModule(input)
 }
 
 // ── Members ──────────────────────────────────────────────────────────────────
 
 export async function listWorkspaceMembers(workspaceId: string): Promise<DbWorkspaceMember[]> {
-  await getDbReadyPromise()
-  const { rows } = await pool.query<DbWorkspaceMemberRow>(
-    `SELECT wm.workspace_id, wm.user_id, wm.role, wm.joined_at,
-            u.name AS user_name, u.email AS user_email
-     FROM workspace_members wm
-     JOIN users u ON u.id = wm.user_id
-     WHERE wm.workspace_id = $1
-     ORDER BY wm.joined_at ASC`,
-    [workspaceId]
+  const { listWorkspaceMembers: listWorkspaceMembersInModule } = await import(
+    '@/lib/db/workspaces'
   )
-  return rows.map(mapWorkspaceMemberRow)
+  return listWorkspaceMembersInModule(workspaceId)
 }
 
 export async function getWorkspaceMemberRole(
   workspaceId: string,
   userId: string
 ): Promise<WorkspaceRole | null> {
-  await getDbReadyPromise()
-  const { rows } = await pool.query<{ role: string }>(
-    `SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`,
-    [workspaceId, userId]
+  const { getWorkspaceMemberRole: getWorkspaceMemberRoleInModule } = await import(
+    '@/lib/db/workspaces'
   )
-  return rows[0] ? normalizeWorkspaceRole(rows[0].role) : null
+  return getWorkspaceMemberRoleInModule(workspaceId, userId)
 }
 
 export async function upsertWorkspaceMember(input: {
@@ -8154,33 +8064,10 @@ export async function upsertWorkspaceMember(input: {
   role: WorkspaceRole
   requestingUserId: string
 }): Promise<DbWorkspaceMember> {
-  await getDbReadyPromise()
-  const reqRole = await getWorkspaceMemberRole(input.workspaceId, input.requestingUserId)
-  if (!reqRole || (reqRole !== 'owner' && reqRole !== 'admin')) {
-    throw new Error('Sin permisos para gestionar miembros.')
-  }
-  // Cannot change owner's role via this function
-  if (input.role === 'owner') throw new Error('No se puede asignar rol owner directamente.')
-
-  const { rows } = await pool.query<DbWorkspaceMemberRow>(
-    `INSERT INTO workspace_members (workspace_id, user_id, role, joined_at)
-     VALUES ($1, $2, $3, NOW())
-     ON CONFLICT (workspace_id, user_id)
-     DO UPDATE SET role = $3
-     RETURNING workspace_id, user_id, role, joined_at`,
-    [input.workspaceId, input.userId, input.role]
+  const { upsertWorkspaceMember: upsertWorkspaceMemberInModule } = await import(
+    '@/lib/db/workspaces'
   )
-  const memberRow = rows[0]
-  // Fetch user info
-  const { rows: uRows } = await pool.query<{ name: string | null; email: string | null }>(
-    `SELECT name, email FROM users WHERE id = $1`,
-    [input.userId]
-  )
-  return mapWorkspaceMemberRow({
-    ...memberRow,
-    user_name: uRows[0]?.name ?? null,
-    user_email: uRows[0]?.email ?? null,
-  })
+  return upsertWorkspaceMemberInModule(input)
 }
 
 export async function removeWorkspaceMember(input: {
@@ -8188,21 +8075,10 @@ export async function removeWorkspaceMember(input: {
   userId: string
   requestingUserId: string
 }): Promise<void> {
-  await getDbReadyPromise()
-  const reqRole = await getWorkspaceMemberRole(input.workspaceId, input.requestingUserId)
-  // Self-removal allowed; admin+ can remove others (but not owner)
-  const isSelf = input.requestingUserId === input.userId
-  if (!isSelf && (!reqRole || (reqRole !== 'owner' && reqRole !== 'admin'))) {
-    throw new Error('Sin permisos para remover miembros.')
-  }
-  // Cannot remove owner
-  const targetRole = await getWorkspaceMemberRole(input.workspaceId, input.userId)
-  if (targetRole === 'owner') throw new Error('No se puede remover al owner del workspace.')
-
-  await pool.query(
-    `DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`,
-    [input.workspaceId, input.userId]
+  const { removeWorkspaceMember: removeWorkspaceMemberInModule } = await import(
+    '@/lib/db/workspaces'
   )
+  return removeWorkspaceMemberInModule(input)
 }
 
 export async function transferWorkspaceOwnership(input: {
@@ -8210,47 +8086,10 @@ export async function transferWorkspaceOwnership(input: {
   currentOwnerId: string
   newOwnerId: string
 }): Promise<void> {
-  await getDbReadyPromise()
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN')
-    // Verify current owner
-    const { rows } = await client.query<{ owner_user_id: string }>(
-      `SELECT owner_user_id FROM workspaces WHERE id = $1`,
-      [input.workspaceId]
-    )
-    if (!rows[0] || rows[0].owner_user_id !== input.currentOwnerId) {
-      throw new Error('Solo el owner puede transferir el workspace.')
-    }
-    // Ensure new owner is a member
-    const { rows: memberRows } = await client.query<{ role: string }>(
-      `SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`,
-      [input.workspaceId, input.newOwnerId]
-    )
-    if (!memberRows[0]) throw new Error('El nuevo owner debe ser miembro del workspace.')
-
-    // Update workspace owner
-    await client.query(
-      `UPDATE workspaces SET owner_user_id = $1, updated_at = NOW() WHERE id = $2`,
-      [input.newOwnerId, input.workspaceId]
-    )
-    // Downgrade old owner to admin
-    await client.query(
-      `UPDATE workspace_members SET role = 'admin' WHERE workspace_id = $1 AND user_id = $2`,
-      [input.workspaceId, input.currentOwnerId]
-    )
-    // Upgrade new owner
-    await client.query(
-      `UPDATE workspace_members SET role = 'owner' WHERE workspace_id = $1 AND user_id = $2`,
-      [input.workspaceId, input.newOwnerId]
-    )
-    await client.query('COMMIT')
-  } catch (err) {
-    await client.query('ROLLBACK')
-    throw err
-  } finally {
-    client.release()
-  }
+  const { transferWorkspaceOwnership: transferWorkspaceOwnershipInModule } = await import(
+    '@/lib/db/workspaces'
+  )
+  return transferWorkspaceOwnershipInModule(input)
 }
 
 // ── Invitations ───────────────────────────────────────────────────────────────
@@ -8261,129 +8100,54 @@ export async function createWorkspaceInvitation(input: {
   email: string
   role: WorkspaceRole
 }): Promise<DbWorkspaceInvitation> {
-  await getDbReadyPromise()
-  const reqRole = await getWorkspaceMemberRole(input.workspaceId, input.invitedByUserId)
-  if (!reqRole || (reqRole !== 'owner' && reqRole !== 'admin')) {
-    throw new Error('Sin permisos para invitar miembros.')
-  }
-
-  const id = randomUUID()
-  const token = randomUUID()
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
-
-  // Upsert: if there's an existing invitation for this workspace+email, replace it
-  const { rows } = await pool.query<DbWorkspaceInvitationRow>(
-    `INSERT INTO workspace_invitations
-       (id, workspace_id, invited_by_user_id, email, role, token, status, expires_at, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, NOW())
-     ON CONFLICT (workspace_id, email) DO UPDATE
-       SET id = $1, invited_by_user_id = $3, role = $5, token = $6, status = 'pending',
-           expires_at = $7, created_at = NOW(), accepted_at = NULL
-     RETURNING *`,
-    [id, input.workspaceId, input.invitedByUserId, input.email.toLowerCase().trim(), input.role, token, expiresAt]
+  const { createWorkspaceInvitation: createWorkspaceInvitationInModule } = await import(
+    '@/lib/db/workspaces'
   )
-  return mapWorkspaceInvitationRow(rows[0])
+  return createWorkspaceInvitationInModule(input)
 }
 
 export async function findWorkspaceInvitationByToken(
   token: string
 ): Promise<DbWorkspaceInvitation | null> {
-  await getDbReadyPromise()
-  const { rows } = await pool.query<DbWorkspaceInvitationRow>(
-    `SELECT wi.*, w.name AS workspace_name, u.name AS invited_by_name
-     FROM workspace_invitations wi
-     JOIN workspaces w ON w.id = wi.workspace_id
-     LEFT JOIN users u ON u.id = wi.invited_by_user_id
-     WHERE wi.token = $1`,
-    [token]
-  )
-  return rows[0] ? mapWorkspaceInvitationRow(rows[0]) : null
+  const { findWorkspaceInvitationByToken: findWorkspaceInvitationByTokenInModule } =
+    await import('@/lib/db/workspaces')
+  return findWorkspaceInvitationByTokenInModule(token)
 }
 
 export async function acceptWorkspaceInvitation(input: {
   token: string
   userId: string
 }): Promise<DbWorkspaceMember> {
-  await getDbReadyPromise()
-  const invitation = await findWorkspaceInvitationByToken(input.token)
-  if (!invitation) throw new Error('Invitación no encontrada.')
-  if (invitation.status !== 'pending') throw new Error('Esta invitación ya fue procesada.')
-  if (new Date(invitation.expires_at) < new Date()) throw new Error('La invitación ha expirado.')
-
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN')
-    // Insert or update member
-    const { rows } = await client.query<DbWorkspaceMemberRow>(
-      `INSERT INTO workspace_members (workspace_id, user_id, role, joined_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = $3
-       RETURNING workspace_id, user_id, role, joined_at`,
-      [invitation.workspace_id, input.userId, invitation.role]
-    )
-    // Mark invitation accepted
-    await client.query(
-      `UPDATE workspace_invitations SET status = 'accepted', accepted_at = NOW() WHERE token = $1`,
-      [input.token]
-    )
-    await client.query('COMMIT')
-    const memberRow = rows[0]
-    const { rows: uRows } = await pool.query<{ name: string | null; email: string | null }>(
-      `SELECT name, email FROM users WHERE id = $1`,
-      [input.userId]
-    )
-    return mapWorkspaceMemberRow({
-      ...memberRow,
-      user_name: uRows[0]?.name ?? null,
-      user_email: uRows[0]?.email ?? null,
-    })
-  } catch (err) {
-    await client.query('ROLLBACK')
-    throw err
-  } finally {
-    client.release()
-  }
+  const { acceptWorkspaceInvitation: acceptWorkspaceInvitationInModule } = await import(
+    '@/lib/db/workspaces'
+  )
+  return acceptWorkspaceInvitationInModule(input)
 }
 
 export async function declineWorkspaceInvitation(token: string): Promise<void> {
-  await getDbReadyPromise()
-  await pool.query(
-    `UPDATE workspace_invitations SET status = 'declined' WHERE token = $1 AND status = 'pending'`,
-    [token]
+  const { declineWorkspaceInvitation: declineWorkspaceInvitationInModule } = await import(
+    '@/lib/db/workspaces'
   )
+  return declineWorkspaceInvitationInModule(token)
 }
 
 export async function listWorkspaceInvitations(
   workspaceId: string
 ): Promise<DbWorkspaceInvitation[]> {
-  await getDbReadyPromise()
-  const { rows } = await pool.query<DbWorkspaceInvitationRow>(
-    `SELECT wi.*, w.name AS workspace_name, u.name AS invited_by_name
-     FROM workspace_invitations wi
-     JOIN workspaces w ON w.id = wi.workspace_id
-     LEFT JOIN users u ON u.id = wi.invited_by_user_id
-     WHERE wi.workspace_id = $1 AND wi.status = 'pending'
-     ORDER BY wi.created_at DESC`,
-    [workspaceId]
+  const { listWorkspaceInvitations: listWorkspaceInvitationsInModule } = await import(
+    '@/lib/db/workspaces'
   )
-  return rows.map(mapWorkspaceInvitationRow)
+  return listWorkspaceInvitationsInModule(workspaceId)
 }
 
 export async function cancelWorkspaceInvitation(input: {
   invitationId: string
   requestingUserId: string
 }): Promise<void> {
-  await getDbReadyPromise()
-  const { rows } = await pool.query<{ workspace_id: string }>(
-    `SELECT workspace_id FROM workspace_invitations WHERE id = $1`,
-    [input.invitationId]
+  const { cancelWorkspaceInvitation: cancelWorkspaceInvitationInModule } = await import(
+    '@/lib/db/workspaces'
   )
-  if (!rows[0]) throw new Error('Invitación no encontrada.')
-  const role = await getWorkspaceMemberRole(rows[0].workspace_id, input.requestingUserId)
-  if (!role || (role !== 'owner' && role !== 'admin')) {
-    throw new Error('Sin permisos para cancelar invitaciones.')
-  }
-  await pool.query(`DELETE FROM workspace_invitations WHERE id = $1`, [input.invitationId])
+  return cancelWorkspaceInvitationInModule(input)
 }
 
 // ── Workspace Extractions ─────────────────────────────────────────────────────

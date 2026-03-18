@@ -5,7 +5,7 @@ import {
   findWorkspaceById,
   getWorkspaceMemberRole,
   listWorkspaceMembers,
-} from '@/lib/db'
+} from '@/lib/db/workspaces'
 import { sendWorkspaceInvitationEmail } from '@/lib/email-notifications'
 import type { WorkspaceRole } from '@/lib/db'
 

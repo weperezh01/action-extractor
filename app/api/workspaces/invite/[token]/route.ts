@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { acceptWorkspaceInvitation, declineWorkspaceInvitation, findWorkspaceInvitationByToken } from '@/lib/db'
+import {
+  acceptWorkspaceInvitation,
+  declineWorkspaceInvitation,
+  findWorkspaceInvitationByToken,
+} from '@/lib/db/workspaces'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

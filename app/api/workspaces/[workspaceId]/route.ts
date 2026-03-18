@@ -5,7 +5,7 @@ import {
   findWorkspaceById,
   getWorkspaceMemberRole,
   updateWorkspace,
-} from '@/lib/db'
+} from '@/lib/db/workspaces'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
