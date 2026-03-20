@@ -8,6 +8,8 @@ import {
   PROVIDER_LABELS,
   PROVIDER_ENV_KEYS,
   MODEL_LABELS,
+  resolveAiModel,
+  resolveAiProvider,
   isValidProviderModel,
 } from '@/lib/ai-client'
 import { type BusinessAssumptions, normalizeBusinessAssumptions } from '@/lib/profitability'
@@ -51,12 +53,18 @@ export async function GET(req: NextRequest) {
     getBusinessAssumptions(),
   ])
 
-  const resolvedExtractionProvider = isValidProvider(extractionProvider)
-    ? extractionProvider
-    : DEFAULT_EXTRACTION_PROVIDER
-  const resolvedChatProvider = isValidProvider(chatProvider)
-    ? chatProvider
-    : DEFAULT_CHAT_PROVIDER
+  const resolvedExtractionProvider = resolveAiProvider(extractionProvider, DEFAULT_EXTRACTION_PROVIDER)
+  const resolvedChatProvider = resolveAiProvider(chatProvider, DEFAULT_CHAT_PROVIDER)
+  const resolvedExtractionModel = resolveAiModel(
+    resolvedExtractionProvider,
+    typeof extractionModel === 'string' ? extractionModel : null,
+    DEFAULT_EXTRACTION_MODEL
+  )
+  const resolvedChatModel = resolveAiModel(
+    resolvedChatProvider,
+    typeof chatModel === 'string' ? chatModel : null,
+    DEFAULT_CHAT_MODEL
+  )
 
   const providers = ALL_PROVIDERS.map((p) => ({
     id: p,
@@ -67,9 +75,9 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     extractionProvider: resolvedExtractionProvider,
-    extractionModel: extractionModel || DEFAULT_EXTRACTION_MODEL,
+    extractionModel: resolvedExtractionModel,
     chatProvider: resolvedChatProvider,
-    chatModel: chatModel || DEFAULT_CHAT_MODEL,
+    chatModel: resolvedChatModel,
     providers,
     defaults: {
       extractionProvider: DEFAULT_EXTRACTION_PROVIDER,
@@ -196,10 +204,18 @@ export async function PATCH(req: NextRequest) {
     ])
 
   return NextResponse.json({
-    extractionProvider: savedExtractionProvider || DEFAULT_EXTRACTION_PROVIDER,
-    extractionModel: savedExtractionModel || DEFAULT_EXTRACTION_MODEL,
-    chatProvider: savedChatProvider || DEFAULT_CHAT_PROVIDER,
-    chatModel: savedChatModel || DEFAULT_CHAT_MODEL,
+    extractionProvider: resolveAiProvider(savedExtractionProvider, DEFAULT_EXTRACTION_PROVIDER),
+    extractionModel: resolveAiModel(
+      resolveAiProvider(savedExtractionProvider, DEFAULT_EXTRACTION_PROVIDER),
+      typeof savedExtractionModel === 'string' ? savedExtractionModel : null,
+      DEFAULT_EXTRACTION_MODEL
+    ),
+    chatProvider: resolveAiProvider(savedChatProvider, DEFAULT_CHAT_PROVIDER),
+    chatModel: resolveAiModel(
+      resolveAiProvider(savedChatProvider, DEFAULT_CHAT_PROVIDER),
+      typeof savedChatModel === 'string' ? savedChatModel : null,
+      DEFAULT_CHAT_MODEL
+    ),
     businessAssumptions: savedBusinessAssumptions,
   })
 }

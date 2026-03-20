@@ -132,6 +132,7 @@ function normalizePersistedPhases(payload: unknown, fallback: Phase[]): Phase[] 
 const CURRENT_PLAYBOOK_PHASE_KEY = '__current__'
 const SHARED_RESOURCES_BACKGROUND_REFRESH_MS = 30000
 const SHARED_RESOURCES_DRAWER_REFRESH_MS = 10000
+const SHARED_RESOURCES_FETCH_TIMEOUT_MS = 20000
 const SHARED_FOLDER_CLIENT_ID_PREFIX = 'ae-shared-folder'
 const COMMUNITY_DRAWER_SWIPE_THRESHOLD_PX = 56
 const COMMUNITY_DRAWER_EDGE_ACTIVATION_PX = 28
@@ -551,6 +552,7 @@ function ActionExtractor() {
     removeHistoryItem,
     clearAllHistory,
   } = useHistory()
+  const sharedResourcesRefreshPromiseRef = useRef<Promise<void> | null>(null)
 
   const loadSharedWithMe = useCallback(async () => {
     setSharedWithMeLoading(true)
@@ -558,7 +560,7 @@ function ActionExtractor() {
     try {
       const res = await fetchWithTimeout('/api/shared-with-me', {
         cache: 'no-store',
-      })
+      }, SHARED_RESOURCES_FETCH_TIMEOUT_MS)
       if (res.status === 401) {
         setSharedWithMe([])
         return
@@ -615,7 +617,7 @@ function ActionExtractor() {
     try {
       const res = await fetchWithTimeout('/api/folders/shared-with-me', {
         cache: 'no-store',
-      })
+      }, SHARED_RESOURCES_FETCH_TIMEOUT_MS)
       if (res.status === 401) {
         setSharedFolders([])
         return
@@ -637,7 +639,19 @@ function ActionExtractor() {
   }, [])
 
   const refreshSharedResources = useCallback(async () => {
-    await Promise.all([loadSharedWithMe(), loadSharedFolders()])
+    if (sharedResourcesRefreshPromiseRef.current) {
+      await sharedResourcesRefreshPromiseRef.current
+      return
+    }
+
+    const pendingRefresh = Promise.all([loadSharedWithMe(), loadSharedFolders()])
+      .then(() => undefined)
+      .finally(() => {
+        sharedResourcesRefreshPromiseRef.current = null
+      })
+
+    sharedResourcesRefreshPromiseRef.current = pendingRefresh
+    await pendingRefresh
   }, [loadSharedFolders, loadSharedWithMe])
 
   const loadCircleMembers = useCallback(async (extractionId: string) => {

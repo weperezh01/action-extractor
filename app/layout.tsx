@@ -27,6 +27,41 @@ const themeBootstrapScript = `
   })();
 `
 
+const serviceWorkerCleanupScript = `
+  (function () {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
+      return;
+    }
+
+    navigator.serviceWorker.getRegistrations()
+      .then(function (registrations) {
+        var staleRegistrations = registrations.filter(function (registration) {
+          var worker = registration.active || registration.waiting || registration.installing;
+          return Boolean(worker && worker.scriptURL && worker.scriptURL.indexOf('/sw.js') !== -1);
+        });
+
+        if (staleRegistrations.length === 0) {
+          return null;
+        }
+
+        return Promise.all(staleRegistrations.map(function (registration) {
+          return registration.unregister();
+        })).then(function () {
+          if (!('caches' in window)) {
+            return null;
+          }
+
+          return caches.keys().then(function (cacheNames) {
+            return Promise.all(cacheNames.map(function (cacheName) {
+              return caches.delete(cacheName);
+            }));
+          });
+        });
+      })
+      .catch(function () {});
+  })();
+`
+
 export default function RootLayout({
   children,
 }: {
@@ -38,6 +73,7 @@ export default function RootLayout({
   return (
     <html lang={lang} suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: serviceWorkerCleanupScript }} />
         <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript }} />
       </head>
       <body className="antialiased bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">

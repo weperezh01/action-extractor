@@ -152,17 +152,26 @@ export async function POST(req: NextRequest) {
             onStatus: (update) => send('status', update),
           })
 
-          const preparedContent = await prepareContentForExtraction({
-            text: resolvedContent.contentText,
-            provider: context.extractionProvider,
-            model: context.extractionModel,
-            userId: user?.id ?? null,
-            sourceType: context.sourceType,
-            onUsage: (usage) => {
-              pendingAiUsageLogs.push(usage)
-            },
-            onProgress: (progress) => send('status', progress),
-          })
+          let preparedContent
+          try {
+            preparedContent = await prepareContentForExtraction({
+              text: resolvedContent.contentText,
+              provider: context.extractionProvider,
+              model: context.extractionModel,
+              userId: user?.id ?? null,
+              sourceType: context.sourceType,
+              onUsage: (usage) => {
+                pendingAiUsageLogs.push(usage)
+              },
+              onProgress: (progress) => send('status', progress),
+            })
+          } catch (error: unknown) {
+            const modelError = classifyModelError(error)
+            send('error', { message: modelError.message })
+            send('done', { ok: false })
+            close()
+            return
+          }
           const finalTranscript = preparedContent.finalText
           const wordCount = resolvedContent.contentText.split(/\s+/).length
           const { originalTime, savedTime } = estimateTime(wordCount)

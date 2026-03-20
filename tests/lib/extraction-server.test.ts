@@ -29,6 +29,23 @@ vi.mock('@/lib/ai-client', () => ({
   callAi: vi.fn(),
   estimateCostUsd: vi.fn(() => 0),
   isProviderAvailable: vi.fn(() => true),
+  resolveAiProvider: vi.fn((value: unknown, fallback: string) =>
+    value === 'anthropic' || value === 'openai' || value === 'google' ? value : fallback
+  ),
+  resolveAiModel: vi.fn((provider: string, ...candidates: Array<string | null | undefined>) => {
+    const modelsByProvider: Record<string, string[]> = {
+      anthropic: ['claude-sonnet-test'],
+      openai: ['gpt-4o', 'gpt-4o-mini'],
+      google: ['gemini-2.0-flash'],
+    }
+    for (const candidate of candidates) {
+      const normalized = typeof candidate === 'string' ? candidate.trim() : ''
+      if (normalized && (modelsByProvider[provider] ?? []).includes(normalized)) {
+        return normalized
+      }
+    }
+    return modelsByProvider[provider]?.[0] ?? 'claude-sonnet-test'
+  }),
 }))
 
 vi.mock('@/lib/extract-core', () => ({
@@ -165,5 +182,29 @@ describe('lib/extraction-server', () => {
     })
     expect(context.extractionProvider).toBe('openai')
     expect(context.extractionModel).toBe('gpt-4o-mini')
+  })
+
+  it('usa un modelo válido por proveedor cuando la configuración guardada no coincide', async () => {
+    dbMocks.getAppSetting.mockImplementation(async (key: string) => {
+      if (key === 'extraction_provider') return 'openai'
+      if (key === 'extraction_model') return 'claude-sonnet-test'
+      return null
+    })
+
+    const input = parseExtractionRequestBody({
+      sourceType: 'youtube',
+      url: 'https://youtube.com/watch?v=valid123',
+      mode: 'summary',
+    })
+
+    const context = await loadExtractionRequestContext(input)
+
+    expect(context.extractionProvider).toBe('openai')
+    expect(context.extractionModel).toBe('gpt-4o')
+    expect(dbMocks.findVideoCacheByVideoId).toHaveBeenCalledWith({
+      videoId: 'valid123',
+      promptVersion: 'prompt-v1',
+      model: 'gpt-4o',
+    })
   })
 })

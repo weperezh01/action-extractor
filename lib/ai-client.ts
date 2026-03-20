@@ -69,6 +69,8 @@ export const PROVIDER_MODELS: Record<AiProvider, string[]> = {
   google: ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 }
 
+const ALL_AI_PROVIDERS: AiProvider[] = ['anthropic', 'openai', 'google']
+
 export const PROVIDER_LABELS: Record<AiProvider, string> = {
   anthropic: 'Anthropic Claude',
   openai: 'OpenAI',
@@ -103,8 +105,38 @@ export function isProviderAvailable(provider: AiProvider): boolean {
   return getProviderApiKey(provider).length > 0
 }
 
+export function isAiProvider(value: unknown): value is AiProvider {
+  return ALL_AI_PROVIDERS.includes(value as AiProvider)
+}
+
 export function isValidProviderModel(provider: AiProvider, model: string): boolean {
   return PROVIDER_MODELS[provider]?.includes(model) ?? false
+}
+
+export function getDefaultProviderModel(provider: AiProvider): string {
+  const fallbackModel = PROVIDER_MODELS[provider]?.[0]
+  if (!fallbackModel) {
+    throw new Error(`No default model is configured for provider: ${provider}`)
+  }
+  return fallbackModel
+}
+
+export function resolveAiProvider(value: unknown, fallback: AiProvider = 'anthropic'): AiProvider {
+  return isAiProvider(value) ? value : fallback
+}
+
+export function resolveAiModel(
+  provider: AiProvider,
+  ...candidates: Array<string | null | undefined>
+): string {
+  for (const candidate of candidates) {
+    const normalized = typeof candidate === 'string' ? candidate.trim() : ''
+    if (normalized && isValidProviderModel(provider, normalized)) {
+      return normalized
+    }
+  }
+
+  return getDefaultProviderModel(provider)
 }
 
 // Non-streaming call — returns text + token usage

@@ -16,7 +16,14 @@ import {
 } from '@/lib/db/extractions'
 import { logAiUsageSafely } from '@/lib/ai-usage-log'
 import { CHAT_SYSTEM_PROMPT_DEFAULT } from '@/lib/extract-core'
-import { type AiProvider, callAi, estimateCostUsd, isProviderAvailable } from '@/lib/ai-client'
+import {
+  type AiProvider,
+  callAi,
+  estimateCostUsd,
+  isProviderAvailable,
+  resolveAiModel,
+  resolveAiProvider,
+} from '@/lib/ai-client'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -214,9 +221,12 @@ export async function POST(req: NextRequest) {
       getAppSetting('chat_provider').catch(() => null),
       getAppSetting('chat_model').catch(() => null),
     ])
-    const resolvedChatProvider: AiProvider =
-      (dbChatProvider as AiProvider | null) ?? 'anthropic'
-    const resolvedChatModel = dbChatModelSetting || CHAT_MODEL_DEFAULT
+    const resolvedChatProvider: AiProvider = resolveAiProvider(dbChatProvider, 'anthropic')
+    const resolvedChatModel = resolveAiModel(
+      resolvedChatProvider,
+      typeof dbChatModelSetting === 'string' ? dbChatModelSetting : null,
+      CHAT_MODEL_DEFAULT
+    )
 
     if (!isProviderAvailable(resolvedChatProvider)) {
       return NextResponse.json(

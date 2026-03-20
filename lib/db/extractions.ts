@@ -3901,14 +3901,16 @@ export async function findExtractionOrderNumberForUser(input: { id: string; user
     `
       SELECT
         1 + COUNT(*) FILTER (
-          WHERE created_at < target.created_at OR (created_at = target.created_at AND id <= target.id)
+          WHERE e.created_at < target.created_at
+             OR (e.created_at = target.created_at AND e.id <= target.id)
         ) AS order_number
-      FROM extractions, (
+      FROM extractions e
+      CROSS JOIN (
         SELECT created_at, id
         FROM extractions
         WHERE id = $1 AND user_id = $2
       ) AS target
-      WHERE user_id = $2
+      WHERE e.user_id = $2
     `,
     [input.id, input.userId]
   )

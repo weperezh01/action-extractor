@@ -88,16 +88,22 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    const preparedContent = await prepareContentForExtraction({
-      text: resolvedContent.contentText,
-      provider: context.extractionProvider,
-      model: context.extractionModel,
-      userId: user.id,
-      sourceType: context.sourceType,
-      onUsage: (usage) => {
-        pendingAiUsageLogs.push(usage)
-      },
-    })
+    let preparedContent
+    try {
+      preparedContent = await prepareContentForExtraction({
+        text: resolvedContent.contentText,
+        provider: context.extractionProvider,
+        model: context.extractionModel,
+        userId: user.id,
+        sourceType: context.sourceType,
+        onUsage: (usage) => {
+          pendingAiUsageLogs.push(usage)
+        },
+      })
+    } catch (error: unknown) {
+      const modelError = classifyModelError(error)
+      return NextResponse.json({ error: modelError.message }, { status: modelError.status })
+    }
     const finalTranscript = preparedContent.finalText
     const wordCount = resolvedContent.contentText.split(/\s+/).length
     const { originalTime, savedTime } = estimateTime(wordCount)

@@ -4,6 +4,8 @@ import {
   callAi,
   estimateCostUsd,
   isProviderAvailable,
+  resolveAiModel,
+  resolveAiProvider,
   type AiProvider,
 } from '@/lib/ai-client'
 import { classifyModelError, retryWithBackoff } from '@/lib/extract-resilience'
@@ -232,8 +234,12 @@ export async function generatePlaybookFromSourceText(input: {
     getPromptOverride(`extraction:${mode}:user`).catch(() => null),
   ])
 
-  const provider = (dbExtractionProvider as AiProvider | null) ?? 'anthropic'
-  const model = dbExtractionModel || EXTRACTION_MODEL_DEFAULT
+  const provider = resolveAiProvider(dbExtractionProvider, 'anthropic')
+  const model = resolveAiModel(
+    provider,
+    typeof dbExtractionModel === 'string' ? dbExtractionModel : null,
+    EXTRACTION_MODEL_DEFAULT
+  )
 
   if (!isProviderAvailable(provider)) {
     const error = new Error('Servicio de IA no configurado. Falta la API key del proveedor seleccionado.')
@@ -241,14 +247,22 @@ export async function generatePlaybookFromSourceText(input: {
     throw error
   }
 
-  const preparedContent = await prepareContentForExtraction({
-    text: transcript,
-    provider,
-    model,
-    userId: input.userId ?? null,
-    sourceType: input.sourceType ?? 'multi_source',
-    onUsage: (usage) => logAiUsageSafely(usage),
-  })
+  let preparedContent
+  try {
+    preparedContent = await prepareContentForExtraction({
+      text: transcript,
+      provider,
+      model,
+      userId: input.userId ?? null,
+      sourceType: input.sourceType ?? 'multi_source',
+      onUsage: (usage) => logAiUsageSafely(usage),
+    })
+  } catch (error: unknown) {
+    const modelError = classifyModelError(error)
+    const wrappedError = new Error(modelError.message)
+    ;(wrappedError as Error & { status?: number }).status = modelError.status
+    throw wrappedError
+  }
   const finalTranscript = preparedContent.finalText
   const wordCount = transcript.split(/\s+/).filter(Boolean).length
   const { originalTime, savedTime } = estimateTime(wordCount)

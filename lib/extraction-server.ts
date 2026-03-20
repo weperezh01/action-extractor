@@ -1,6 +1,14 @@
 import { NextResponse } from 'next/server'
 import { persistAiUsageLogsInBackground, type PendingAiUsageLogInput } from '@/lib/ai-usage-log'
-import { AI_PRICING_VERSION, callAi, estimateCostUsd, isProviderAvailable, type AiProvider } from '@/lib/ai-client'
+import {
+  AI_PRICING_VERSION,
+  callAi,
+  estimateCostUsd,
+  isProviderAvailable,
+  resolveAiModel,
+  resolveAiProvider,
+  type AiProvider,
+} from '@/lib/ai-client'
 import {
   EXTRACTION_MODEL as EXTRACTION_MODEL_DEFAULT,
   extractVideoId,
@@ -302,8 +310,12 @@ export async function loadExtractionRequestContext(
     getPromptOverride(`extraction:${input.mode}:user`).catch(() => null),
   ])
 
-  const extractionProvider = (dbExtractionProvider as AiProvider | null) ?? 'anthropic'
-  const extractionModel = dbExtractionModel || EXTRACTION_MODEL_DEFAULT
+  const extractionProvider = resolveAiProvider(dbExtractionProvider, 'anthropic')
+  const extractionModel = resolveAiModel(
+    extractionProvider,
+    typeof dbExtractionModel === 'string' ? dbExtractionModel : null,
+    EXTRACTION_MODEL_DEFAULT
+  )
   const cachedVideo =
     input.sourceType === 'youtube' && input.videoId
       ? await findVideoCacheByVideoId({
