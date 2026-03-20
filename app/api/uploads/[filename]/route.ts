@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
-import { pool, ensureDbReady } from '@/lib/db'
+import { findReadableUploadFileByUrl } from '@/lib/db/extractions'
 import fs from 'fs'
 import path from 'path'
 
@@ -21,67 +21,12 @@ export async function GET(
     return NextResponse.json({ error: 'Nombre de archivo inválido.' }, { status: 400 })
   }
 
-  // Verify the file belongs to this user
-  await ensureDbReady()
-  const { rows } = await pool.query<{
-    source_file_mime_type: string | null
-    source_file_name: string | null
-    share_visibility: string | null
-  }>(
-    `
-      SELECT source_file_mime_type, source_file_name, share_visibility
-      FROM (
-        SELECT
-          e.source_file_mime_type,
-          e.source_file_name,
-          e.share_visibility
-        FROM extractions e
-        WHERE
-          e.source_file_url = $2
-          AND (
-            e.share_visibility IN ('public', 'unlisted')
-            OR (
-              $1 IS NOT NULL
-              AND (
-                e.user_id = $1
-                OR EXISTS (
-                  SELECT 1
-                  FROM extraction_members m
-                  WHERE m.extraction_id = e.id AND m.user_id = $1
-                )
-              )
-            )
-          )
-        UNION ALL
-        SELECT
-          s.source_file_mime_type,
-          s.source_file_name,
-          e.share_visibility
-        FROM extraction_additional_sources s
-        INNER JOIN extractions e ON e.id = s.extraction_id
-        WHERE
-          s.source_file_url = $2
-          AND (
-            e.share_visibility IN ('public', 'unlisted')
-            OR (
-              $1 IS NOT NULL
-              AND (
-                e.user_id = $1
-                OR EXISTS (
-                  SELECT 1
-                  FROM extraction_members m
-                  WHERE m.extraction_id = e.id AND m.user_id = $1
-                )
-              )
-            )
-          )
-      ) AS files
-      LIMIT 1
-    `,
-    [user?.id ?? null, `/api/uploads/${filename}`]
-  )
+  const fileRecord = await findReadableUploadFileByUrl({
+    fileUrl: `/api/uploads/${filename}`,
+    requestingUserId: user?.id ?? null,
+  })
 
-  if (!rows[0]) {
+  if (!fileRecord) {
     return NextResponse.json({ error: 'Archivo no encontrado.' }, { status: 404 })
   }
 
@@ -91,9 +36,10 @@ export async function GET(
   }
 
   const fileBuffer = fs.readFileSync(filePath)
-  const mimeType = rows[0].source_file_mime_type ?? 'application/octet-stream'
-  const originalName = rows[0].source_file_name ?? filename
-  const isPublicFile = rows[0].share_visibility === 'public' || rows[0].share_visibility === 'unlisted'
+  const mimeType = fileRecord.sourceFileMimeType ?? 'application/octet-stream'
+  const originalName = fileRecord.sourceFileName ?? filename
+  const isPublicFile =
+    fileRecord.shareVisibility === 'public' || fileRecord.shareVisibility === 'unlisted'
 
   return new NextResponse(fileBuffer, {
     status: 200,

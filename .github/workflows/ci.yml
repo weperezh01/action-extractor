@@ -10,6 +10,27 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: action_extractor_db
+          POSTGRES_USER: action_extractor_user
+          POSTGRES_PASSWORD: action_extractor_test_pw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U action_extractor_user -d action_extractor_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ACTION_EXTRACTOR_DB_HOST: 127.0.0.1
+      ACTION_EXTRACTOR_DB_PORT: 5432
+      ACTION_EXTRACTOR_DB_NAME: action_extractor_db
+      ACTION_EXTRACTOR_DB_USER: action_extractor_user
+      ACTION_EXTRACTOR_DB_PASSWORD: action_extractor_test_pw
+      ACTION_EXTRACTOR_RUN_DB_TESTS: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,6 +49,9 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Apply migrations
+        run: npm run db:migrate
 
       - name: Test
         run: npm test

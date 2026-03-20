@@ -146,6 +146,30 @@ interface DbExtractionAccessRow extends DbExtractionRow {
   access_role: string | null
 }
 
+interface DbReadableExtractionSourceRow {
+  id: string
+  user_id: string
+  url: string | null
+  video_id: string | null
+  video_title: string | null
+  thumbnail_url: string | null
+  share_visibility: string | null
+  source_type: string | null
+  source_label: string | null
+  source_text: string | null
+  source_file_url: string | null
+  source_file_name: string | null
+  source_file_size_bytes: number | string | null
+  source_file_mime_type: string | null
+  access_role: string | null
+}
+
+interface DbReadableUploadFileRow {
+  share_visibility: string | null
+  source_file_mime_type: string | null
+  source_file_name: string | null
+}
+
 interface DbExtractionMemberRow {
   extraction_id: string
   user_id: string
@@ -394,6 +418,47 @@ function normalizeExtractionAccessRole(value: unknown): ExtractionAccessRole | n
   if (value === 'editor') return 'editor'
   if (value === 'viewer') return 'viewer'
   return null
+}
+
+function buildExtractionReadAccessRoleSql(input: {
+  extractionAlias: string
+  memberAlias: string
+  userParam: string
+}) {
+  const { extractionAlias, memberAlias, userParam } = input
+  return `
+    CASE
+      WHEN ${userParam} IS NOT NULL AND ${extractionAlias}.user_id = ${userParam} THEN 'owner'
+      WHEN ${userParam} IS NOT NULL AND EXISTS (
+        WITH RECURSIVE folder_ancestors AS (
+          SELECT f.id, f.parent_id
+          FROM extraction_folders f
+          WHERE
+            ${extractionAlias}.folder_id IS NOT NULL
+            AND f.id = ${extractionAlias}.folder_id
+            AND f.user_id = ${extractionAlias}.user_id
+          UNION ALL
+          SELECT parent.id, parent.parent_id
+          FROM extraction_folders parent
+          INNER JOIN folder_ancestors fa
+            ON fa.parent_id = parent.id
+          WHERE parent.user_id = ${extractionAlias}.user_id
+        )
+        SELECT 1
+        FROM extraction_folder_members fm
+        WHERE
+          fm.member_user_id = ${userParam}
+          AND fm.owner_user_id = ${extractionAlias}.user_id
+          AND fm.folder_id IN (SELECT id FROM folder_ancestors)
+        LIMIT 1
+      ) THEN 'viewer'
+      WHEN ${extractionAlias}.share_visibility = 'circle'
+        AND ${userParam} IS NOT NULL
+        AND ${memberAlias}.role IS NOT NULL THEN ${memberAlias}.role
+      WHEN ${extractionAlias}.share_visibility IN ('public', 'unlisted') THEN 'viewer'
+      ELSE NULL
+    END
+  `
 }
 
 function normalizeExtractionFolderMemberRole(value: unknown): ExtractionFolderMemberRole {
@@ -3121,24 +3186,32 @@ export async function getExtractionSourceData(input: {
   shareVisibility: ExtractionShareVisibility
   userId: string
 } | null> {
+  const row = await findReadableExtractionSourceRow(input)
+  if (!row) return null
+
+  return {
+    sourceType: row.source_type ?? 'youtube',
+    sourceLabel: row.source_label ?? null,
+    url: row.url ?? null,
+    videoId: row.video_id ?? null,
+    thumbnailUrl: row.thumbnail_url ?? null,
+    videoTitle: row.video_title ?? null,
+    sourceText: row.source_text ?? null,
+    sourceFileUrl: row.source_file_url ?? null,
+    sourceFileName: row.source_file_name ?? null,
+    sourceFileSizeBytes: row.source_file_size_bytes != null ? Number(row.source_file_size_bytes) : null,
+    sourceFileMimeType: row.source_file_mime_type ?? null,
+    shareVisibility: normalizeExtractionShareVisibility(row.share_visibility),
+    userId: row.user_id,
+  }
+}
+
+async function findReadableExtractionSourceRow(input: {
+  extractionId: string
+  requestingUserId: string | null
+}): Promise<DbReadableExtractionSourceRow | null> {
   await ensureDbReady()
-  const { rows } = await pool.query<{
-    id: string
-    user_id: string
-    url: string | null
-    video_id: string | null
-    video_title: string | null
-    thumbnail_url: string | null
-    share_visibility: string | null
-    source_type: string | null
-    source_label: string | null
-    source_text: string | null
-    source_file_url: string | null
-    source_file_name: string | null
-    source_file_size_bytes: number | null
-    source_file_mime_type: string | null
-    has_access: boolean
-  }>(
+  const { rows } = await pool.query<DbReadableExtractionSourceRow>(
     `
       SELECT
         e.id,
@@ -3155,39 +3228,26 @@ export async function getExtractionSourceData(input: {
         e.source_file_name,
         e.source_file_size_bytes,
         e.source_file_mime_type,
-        (
-          e.user_id = $2
-          OR e.share_visibility IN ('public', 'unlisted')
-          OR EXISTS (
-            SELECT 1 FROM extraction_members m
-            WHERE m.extraction_id = e.id AND m.user_id = $2
-          )
-        ) AS has_access
+        ${buildExtractionReadAccessRoleSql({
+          extractionAlias: 'e',
+          memberAlias: 'm',
+          userParam: '$2',
+        })} AS access_role
       FROM extractions e
+      LEFT JOIN extraction_members m
+        ON m.extraction_id = e.id
+       AND m.user_id = $2
       WHERE e.id = $1
       LIMIT 1
     `,
-    [input.extractionId, input.requestingUserId ?? '']
+    [input.extractionId, input.requestingUserId]
   )
 
-  if (!rows[0] || !rows[0].has_access) return null
-
   const row = rows[0]
-  return {
-    sourceType: row.source_type ?? 'youtube',
-    sourceLabel: row.source_label ?? null,
-    url: row.url ?? null,
-    videoId: row.video_id ?? null,
-    thumbnailUrl: row.thumbnail_url ?? null,
-    videoTitle: row.video_title ?? null,
-    sourceText: row.source_text ?? null,
-    sourceFileUrl: row.source_file_url ?? null,
-    sourceFileName: row.source_file_name ?? null,
-    sourceFileSizeBytes: row.source_file_size_bytes != null ? Number(row.source_file_size_bytes) : null,
-    sourceFileMimeType: row.source_file_mime_type ?? null,
-    shareVisibility: normalizeExtractionShareVisibility(row.share_visibility),
-    userId: row.user_id,
+  if (!row || !normalizeExtractionAccessRole(row.access_role)) {
+    return null
   }
+  return row
 }
 
 export async function getVideoCacheTranscript(videoId: string): Promise<string | null> {
@@ -3927,35 +3987,11 @@ export async function findExtractionAccessForUser(input: { id: string; userId: s
         e.source_type,
         e.source_label,
         e.folder_id,
-        CASE
-          WHEN e.user_id = $2 THEN 'owner'
-          WHEN EXISTS (
-            WITH RECURSIVE folder_ancestors AS (
-              SELECT f.id, f.parent_id
-              FROM extraction_folders f
-              WHERE
-                e.folder_id IS NOT NULL
-                AND f.id = e.folder_id
-                AND f.user_id = e.user_id
-              UNION ALL
-              SELECT parent.id, parent.parent_id
-              FROM extraction_folders parent
-              INNER JOIN folder_ancestors fa
-                ON fa.parent_id = parent.id
-              WHERE parent.user_id = e.user_id
-            )
-            SELECT 1
-            FROM extraction_folder_members fm
-            WHERE
-              fm.member_user_id = $2
-              AND fm.owner_user_id = e.user_id
-              AND fm.folder_id IN (SELECT id FROM folder_ancestors)
-            LIMIT 1
-          ) THEN 'viewer'
-          WHEN e.share_visibility = 'circle' AND m.role IS NOT NULL THEN m.role
-          WHEN e.share_visibility IN ('public', 'unlisted') THEN 'viewer'
-          ELSE NULL
-        END AS access_role
+        ${buildExtractionReadAccessRoleSql({
+          extractionAlias: 'e',
+          memberAlias: 'm',
+          userParam: '$2',
+        })} AS access_role
       FROM extractions e
       LEFT JOIN extraction_members m
         ON m.extraction_id = e.id
@@ -4005,35 +4041,11 @@ export async function findCloneableExtractionAccessForUser(input: { id: string; 
         e.source_file_size_bytes,
         e.source_file_mime_type,
         e.transcript_source,
-        CASE
-          WHEN e.user_id = $2 THEN 'owner'
-          WHEN EXISTS (
-            WITH RECURSIVE folder_ancestors AS (
-              SELECT f.id, f.parent_id
-              FROM extraction_folders f
-              WHERE
-                e.folder_id IS NOT NULL
-                AND f.id = e.folder_id
-                AND f.user_id = e.user_id
-              UNION ALL
-              SELECT parent.id, parent.parent_id
-              FROM extraction_folders parent
-              INNER JOIN folder_ancestors fa
-                ON fa.parent_id = parent.id
-              WHERE parent.user_id = e.user_id
-            )
-            SELECT 1
-            FROM extraction_folder_members fm
-            WHERE
-              fm.member_user_id = $2
-              AND fm.owner_user_id = e.user_id
-              AND fm.folder_id IN (SELECT id FROM folder_ancestors)
-            LIMIT 1
-          ) THEN 'viewer'
-          WHEN e.share_visibility = 'circle' AND m.role IS NOT NULL THEN m.role
-          WHEN e.share_visibility IN ('public', 'unlisted') THEN 'viewer'
-          ELSE NULL
-        END AS access_role
+        ${buildExtractionReadAccessRoleSql({
+          extractionAlias: 'e',
+          memberAlias: 'm',
+          userParam: '$2',
+        })} AS access_role
       FROM extractions e
       LEFT JOIN extraction_members m
         ON m.extraction_id = e.id
@@ -4489,10 +4501,11 @@ export async function listExtractionAdditionalSources(input: {
   extractionId: string
   requestingUserId: string | null
 }): Promise<DbExtractionAdditionalSource[] | null> {
-  await ensureDbReady()
-  const { rows } = await pool.query<
-    DbExtractionAdditionalSourceRow & { has_access: boolean }
-  >(
+  if (!(await findReadableExtractionSourceRow(input))) {
+    return null
+  }
+
+  const { rows } = await pool.query<DbExtractionAdditionalSourceRow>(
     `
       SELECT
         s.id,
@@ -4508,47 +4521,91 @@ export async function listExtractionAdditionalSources(input: {
         s.source_file_mime_type,
         s.analysis_status,
         s.analyzed_at,
-        s.created_at,
-        (
-          e.user_id = $2
-          OR e.share_visibility IN ('public', 'unlisted')
-          OR EXISTS (
-            SELECT 1 FROM extraction_members m
-            WHERE m.extraction_id = e.id AND m.user_id = $2
-          )
-        ) AS has_access
+        s.created_at
       FROM extraction_additional_sources s
-      INNER JOIN extractions e ON e.id = s.extraction_id
       WHERE s.extraction_id = $1
       ORDER BY s.created_at ASC
     `,
-    [input.extractionId, input.requestingUserId ?? '']
+    [input.extractionId]
   )
 
   if (rows.length === 0) {
-    const accessCheck = await pool.query<{ has_access: boolean }>(
-      `
-        SELECT (
-          e.user_id = $2
-          OR e.share_visibility IN ('public', 'unlisted')
-          OR EXISTS (
-            SELECT 1 FROM extraction_members m
-            WHERE m.extraction_id = e.id AND m.user_id = $2
-          )
-        ) AS has_access
-        FROM extractions e
-        WHERE e.id = $1
-        LIMIT 1
-      `,
-      [input.extractionId, input.requestingUserId ?? '']
-    )
-
-    if (!accessCheck.rows[0]?.has_access) return null
     return []
   }
 
-  if (!rows[0].has_access) return null
   return rows.map(mapExtractionAdditionalSourceRow)
+}
+
+export async function findReadableUploadFileByUrl(input: {
+  fileUrl: string
+  requestingUserId: string | null
+}): Promise<{
+  sourceFileMimeType: string | null
+  sourceFileName: string | null
+  shareVisibility: ExtractionShareVisibility
+} | null> {
+  await ensureDbReady()
+  const { rows } = await pool.query<DbReadableUploadFileRow>(
+    `
+      WITH candidate_files AS (
+        SELECT
+          e.id AS extraction_id,
+          e.user_id,
+          e.folder_id,
+          e.share_visibility,
+          e.source_file_mime_type,
+          e.source_file_name
+        FROM extractions e
+        WHERE e.source_file_url = $1
+
+        UNION ALL
+
+        SELECT
+          e.id AS extraction_id,
+          e.user_id,
+          e.folder_id,
+          e.share_visibility,
+          s.source_file_mime_type,
+          s.source_file_name
+        FROM extraction_additional_sources s
+        INNER JOIN extractions e
+          ON e.id = s.extraction_id
+        WHERE s.source_file_url = $1
+      ),
+      accessible_files AS (
+        SELECT
+          candidate_files.share_visibility,
+          candidate_files.source_file_mime_type,
+          candidate_files.source_file_name,
+          ${buildExtractionReadAccessRoleSql({
+            extractionAlias: 'candidate_files',
+            memberAlias: 'm',
+            userParam: '$2',
+          })} AS access_role
+        FROM candidate_files
+        LEFT JOIN extraction_members m
+          ON m.extraction_id = candidate_files.extraction_id
+         AND m.user_id = $2
+      )
+      SELECT
+        share_visibility,
+        source_file_mime_type,
+        source_file_name
+      FROM accessible_files
+      WHERE access_role IS NOT NULL
+      LIMIT 1
+    `,
+    [input.fileUrl, input.requestingUserId]
+  )
+
+  const row = rows[0]
+  if (!row) return null
+
+  return {
+    sourceFileMimeType: row.source_file_mime_type ?? null,
+    sourceFileName: row.source_file_name ?? null,
+    shareVisibility: normalizeExtractionShareVisibility(row.share_visibility),
+  }
 }
 
 export async function createExtractionAdditionalSourceForUser(input: {

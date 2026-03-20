@@ -936,7 +936,12 @@ export async function consumeDailyExtraction(userId: string): Promise<{
         [userId, today]
       )
 
-      const nextUsed = parseDbInteger(updatedCountResult.rows[0]?.count ?? used + 1)
+      const updatedCountRow = updatedCountResult.rows[0]
+      if (!updatedCountRow) {
+        throw new Error('Failed to increment daily extraction count atomically.')
+      }
+
+      const nextUsed = parseDbInteger(updatedCountRow.count)
       await client.query('COMMIT')
       return {
         allowed: true,
@@ -962,25 +967,28 @@ export async function consumeDailyExtraction(userId: string): Promise<{
         [planSnapshot.activePlanId]
       )
 
-      if (updatedCreditsResult.rows[0]) {
-        const remainingCredits = parseDbInteger(updatedCreditsResult.rows[0].extra_credits)
-        await client.query(
-          `INSERT INTO credit_transactions (id, user_id, amount, reason)
-           VALUES ($1, $2, -1, 'consumed')`,
-          [randomUUID(), userId]
-        )
-        await client.query('COMMIT')
-        return {
-          allowed: true,
-          used_credit: true,
-          snapshot: {
-            limit: planSnapshot.limit,
-            used,
-            remaining: 0,
-            extra_credits: remainingCredits,
-            reset_at,
-          },
-        }
+      const updatedCreditsRow = updatedCreditsResult.rows[0]
+      if (!updatedCreditsRow) {
+        throw new Error('Failed to consume extra credit atomically.')
+      }
+
+      const remainingCredits = parseDbInteger(updatedCreditsRow.extra_credits)
+      await client.query(
+        `INSERT INTO credit_transactions (id, user_id, amount, reason)
+         VALUES ($1, $2, -1, 'consumed')`,
+        [randomUUID(), userId]
+      )
+      await client.query('COMMIT')
+      return {
+        allowed: true,
+        used_credit: true,
+        snapshot: {
+          limit: planSnapshot.limit,
+          used,
+          remaining: 0,
+          extra_credits: remainingCredits,
+          reset_at,
+        },
       }
     }
 
